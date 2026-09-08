@@ -19,6 +19,7 @@ import {
   createMobilisationSchema,
   updateMobilisationSchema,
   listMobilisationsSchema,
+  exportMobilisationsSchema,
   mobilisationIdParamSchema,
   mobilisationCoordinatorParamSchema,
   addCoordinatorSchema,
@@ -43,7 +44,17 @@ router.get(
   validate({ query: mobilisationSuggestionQuerySchema }),
   asyncHandler(mobilisationController.suggestions)
 );
+router.get(
+  '/export',
+  validate({ query: exportMobilisationsSchema }),
+  asyncHandler(mobilisationController.exportAll)
+);
 router.get('/:id', validate({ params: mobilisationIdParamSchema }), asyncHandler(mobilisationController.get));
+router.get(
+  '/:id/export',
+  validate({ params: mobilisationIdParamSchema }),
+  asyncHandler(mobilisationController.exportOne)
+);
 router.post('/', validate({ body: createMobilisationSchema }), asyncHandler(mobilisationController.create));
 router.patch(
   '/:id',

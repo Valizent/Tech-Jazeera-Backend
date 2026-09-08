@@ -8,6 +8,7 @@
  * `mobilisationFields.partial()` below).
  */
 import { z } from 'zod';
+import { REJECTION_TARGETS } from './mobilisation.model.js';
 
 const emptyToUndef = (value) =>
   typeof value === 'string' && value.trim() === '' ? undefined : value;
@@ -60,6 +61,12 @@ const mobilisationFields = {
   checkoutDate: optionalDate,
 
   remark: optionalStr(1000),
+
+  // Create-only — an Office Secretary creating this "for" a Coordinator
+  // who's busy must say which one. Ignored by updateMobilisation (nothing
+  // reads it there); required by createMobilisation only when the caller is
+  // Office Secretary — see mobilisation.service.js's createMobilisation.
+  onBehalfOf: z.preprocess(emptyToUndef, id('user').optional()),
 };
 // NOTE: hasSubcontractor, profitPerHour/profitPerMonth, and every ot* field
 // are deliberately absent from this schema — hasSubcontractor is derived
@@ -112,6 +119,18 @@ export const mobilisationIdParamSchema = z.object({
   id: id('mobilisation'),
 });
 
+/** Same filters as listMobilisationsSchema, minus pagination — an export
+ *  fetches every matching record at once (see mobilisation.service.js's
+ *  exportMobilisations / EXPORT_MAX_ROWS). */
+export const exportMobilisationsSchema = z.object({
+  status: z.preprocess(emptyToUndef, z.enum(['Draft', 'PendingReview', 'Approved', 'Rejected', 'Completed']).optional()),
+  client: z.preprocess(emptyToUndef, id('client').optional()),
+  worker: z.preprocess(emptyToUndef, id('worker').optional()),
+  search: optionalStr(100),
+  sortBy: z.enum(['mobilisationDate', 'createdAt']).default('createdAt'),
+  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+});
+
 /** GET /mobilisations/suggestions?field=... — the free-typed worker-identity
  *  fields only (SupplierEmployee/Freelancer have no Employee record to pick
  *  from, so these are typed directly — see mobilisation.model.js). */
@@ -157,16 +176,22 @@ export const commercialDetailsSchema = z.object({
   remark: optionalStr(1000),
 });
 
-/** Rejecting requires a note so the coordinator knows what to fix before
- *  resubmitting; approving does not — same rule as decideClientSchema. */
+/** Rejecting requires a note (so whoever it's sent back to knows what to
+ *  fix) AND a rejectionTarget (who it's sent back to — Coordinator/Office
+ *  Secretary/Both, see mobilisation.service.js's rejectMobilisation);
+ *  approving needs neither — same note rule as decideClientSchema. */
 export const decideMobilisationSchema = z
   .object({
     status: z.enum(['Approved', 'Rejected'], { error: 'Decision must be Approved or Rejected.' }),
     decisionNote: optionalStr(500),
+    rejectionTarget: z.enum(REJECTION_TARGETS).optional(),
   })
   .superRefine((data, ctx) => {
     if (data.status === 'Rejected' && !data.decisionNote) {
       ctx.addIssue({ code: 'custom', path: ['decisionNote'], message: 'Explain what needs fixing before rejecting.' });
+    }
+    if (data.status === 'Rejected' && !data.rejectionTarget) {
+      ctx.addIssue({ code: 'custom', path: ['rejectionTarget'], message: 'Choose who this should go back to.' });
     }
   });
 

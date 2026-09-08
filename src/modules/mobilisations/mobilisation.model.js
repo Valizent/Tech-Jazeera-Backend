@@ -42,11 +42,16 @@
  */
 import mongoose from 'mongoose';
 
+
 // 'Completed' (Milestone 5) is the terminal "placement has ended" state — the
 // minimum needed to ever clear a worker's Employee.coordinator back to
 // standby. Only reachable from 'Approved'; see mobilisation.service.js's
 // completeMobilisation.
 export const MOBILISATION_STATUSES = ['Draft', 'PendingReview', 'Approved', 'Rejected', 'Completed'];
+// Who a final-step rejection sends the mobilisation back to — see
+// mobilisation.service.js's rejectMobilisation/submitMobilisation for what
+// each one actually does differently.
+export const REJECTION_TARGETS = ['Coordinator', 'OfficeSecretary', 'Both'];
 export const MOBILISATION_DOCUMENT_CATEGORIES = ['Contract', 'IDCopy', 'Other'];
 
 // 'Employee' is an existing Employee record (unchanged original behavior).
@@ -163,6 +168,14 @@ const mobilisationSchema = new mongoose.Schema(
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     decidedAt: { type: Date, default: null },
     decisionNote: { type: String, trim: true, maxlength: 500 },
+    // Set only by a final-step rejection targeting 'Coordinator' or 'Both'
+    // (status becomes 'Rejected' either way) — read by submitMobilisation to
+    // decide whether resubmitting restarts the whole workflow or skips
+    // straight back to the step it was rejected from. A rejection targeting
+    // 'OfficeSecretary' never sets this: it never leaves 'PendingReview' in
+    // the first place (see mobilisation.service.js's rejectMobilisation).
+    // Always cleared back to null on a successful resubmit.
+    rejectionTarget: { type: String, enum: REJECTION_TARGETS, default: null },
     workflow: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalWorkflow', default: null },
     workflowName: { type: String, default: null },
     steps: {

@@ -274,8 +274,18 @@ async function assertNoActivePlacement(workerId) {
   );
 }
 
+/** Office Secretary is a hardcoded exception to the Section Access gate
+ *  below (same "deny by default, then an explicit hardcoded allow" pattern
+ *  as requireStaffOrOfficeSecretary) — they aren't a grantable Section
+ *  Access role at all (see sectionAccess.model.js's GRANTABLE_ROLES), and
+ *  the user's own ask was specifically "let Office Secretary create one for
+ *  a Coordinator who's busy," not a general Section Access grant. Building
+ *  it as a real Section Access grant would also let an admin accidentally
+ *  hand Office Secretary a blanket self-mobilise permission never intended
+ *  for them. */
 export async function createMobilisation(data, actor) {
-  const allowed = await canAccessSection('mobilisationsSelfMobilise', actor);
+  const isOfficeSecretary = actor.role === 'Office Secretary';
+  const allowed = isOfficeSecretary || (await canAccessSection('mobilisationsSelfMobilise', actor));
   if (!allowed) {
     throw new ApiError(403, 'You do not have permission to create a mobilisation.');
   }
@@ -286,6 +296,24 @@ export async function createMobilisation(data, actor) {
   if (!clientDoc) throw new ApiError(404, 'Client not found.');
   const subcontractorSnapshot = await resolveSubcontractorSnapshot(data.workerType, data.subcontractor);
 
+  // Office Secretary never coordinates a worker themselves — they're typing
+  // this in ON BEHALF OF a real Coordinator (who's "busy or something"), so
+  // that Coordinator becomes the primary instead, unconfirmed until they
+  // actually look it over — the exact same confirm-before-submit gate M2
+  // already built for a joint coordinator invite, reused here verbatim
+  // rather than inventing a second "please review this" mechanism.
+  let primaryCoordinatorId = actor.userId;
+  let coordinatorEntry = { user: actor.userId, isPrimary: true, confirmed: true, confirmedAt: new Date() };
+  if (isOfficeSecretary) {
+    if (!data.onBehalfOf) throw new ApiError(400, 'Select which coordinator this mobilisation is for.');
+    const onBehalfUser = await User.findById(data.onBehalfOf).select('role').lean();
+    if (!onBehalfUser || onBehalfUser.role !== 'Coordinator') {
+      throw new ApiError(400, 'Select a real Coordinator login.');
+    }
+    primaryCoordinatorId = data.onBehalfOf;
+    coordinatorEntry = { user: data.onBehalfOf, isPrimary: true, confirmed: false, confirmedAt: null };
+  }
+
   const mobilisation = await Mobilisation.create(
     applyProfitFields({
       ...data,
@@ -293,7 +321,7 @@ export async function createMobilisation(data, actor) {
       serialNumber: await newMobilisationSerial(),
       clientName: clientDoc.companyName,
       ...subcontractorSnapshot,
-      coordinators: [{ user: actor.userId, isPrimary: true, confirmed: true, confirmedAt: new Date() }],
+      coordinators: [coordinatorEntry],
       createdBy: actor.userId,
     })
   );
@@ -303,10 +331,13 @@ export async function createMobilisation(data, actor) {
   // manually-picked field. Admin and a self-mobilising role member (BDM/MM/
   // etc, both legal creators per the `allowed` check above) are NOT real
   // coordinators, so they leave it untouched (null, standby) — only a
-  // Coordinator-role primary ever claims one, and only for a real Employee
-  // (SupplierEmployee/Freelancer workers have no Employee record to claim).
-  if (actor.role === 'Coordinator' && data.workerType === 'Employee') {
-    await Employee.findByIdAndUpdate(data.worker, { coordinator: actor.userId });
+  // Coordinator-role primary ever claims one (whether they created it
+  // themselves, or Office Secretary created it on their behalf), and only
+  // for a real Employee (SupplierEmployee/Freelancer workers have no
+  // Employee record to claim).
+  const primaryIsCoordinator = isOfficeSecretary || actor.role === 'Coordinator';
+  if (primaryIsCoordinator && data.workerType === 'Employee') {
+    await Employee.findByIdAndUpdate(data.worker, { coordinator: primaryCoordinatorId });
   }
 
   await logAudit({
@@ -314,7 +345,11 @@ export async function createMobilisation(data, actor) {
     action: 'mobilisation.create',
     targetType: 'Mobilisation',
     targetId: mobilisation._id,
-    meta: { workerName: mobilisation.workerName, clientName: mobilisation.clientName },
+    meta: {
+      workerName: mobilisation.workerName,
+      clientName: mobilisation.clientName,
+      ...(isOfficeSecretary && { createdOnBehalfOf: primaryCoordinatorId }),
+    },
     ip: actor.ip,
   });
   return mobilisation.toObject();
@@ -366,8 +401,14 @@ export async function completeMobilisation(id, actor) {
  * COMMERCIAL_FIELDS (Section 1 — what the coordinator typed themselves) only
  * once Approved.
  */
-export async function listMobilisations(query, actor) {
-  const { page, limit, status, client, worker, search, sortBy, sortOrder } = query;
+/**
+ * Shared by listMobilisations (paginated) and exportMobilisations (every
+ * matching record at once) — same filter-building and per-record
+ * visibility stripping either way, only how many rows come back differs.
+ * `skip`/`limit` omitted means "no pagination, fetch everything matching".
+ */
+async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
+  const { status, client, worker, search, sortBy, sortOrder } = query;
   const conditions = [];
   if (status) conditions.push({ status });
   if (client) conditions.push({ client });
@@ -391,15 +432,15 @@ export async function listMobilisations(query, actor) {
   const filter = conditions.length > 0 ? { $and: conditions } : {};
   const sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1, _id: 1 };
 
-  const [foundItems, total] = await Promise.all([
-    Mobilisation.find(filter).sort(sort).skip((page - 1) * limit).limit(limit).populate(POPULATE).lean(),
-    Mobilisation.countDocuments(filter),
-  ]);
+  let cursor = Mobilisation.find(filter).sort(sort).populate(POPULATE);
+  if (skip != null) cursor = cursor.skip(skip);
+  if (limit != null) cursor = cursor.limit(limit);
+  const [foundItems, total] = await Promise.all([cursor.lean(), Mobilisation.countDocuments(filter)]);
   // Recomputed on every read, never trusting whatever was last stored — see
   // computeProfitFields's own doc comment.
   const rawItems = foundItems.map(applyProfitFields);
 
-  const strippedItems =
+  const items =
     actor.role === 'Admin' || isViewer
       ? rawItems
       : rawItems.map((m) => {
@@ -409,12 +450,34 @@ export async function listMobilisations(query, actor) {
           if (!isStepReviewer && m.status === 'Approved') item = stripFields(item, COMMERCIAL_FIELDS);
           return item;
         });
+  return { items, total };
+}
+
+export async function listMobilisations(query, actor) {
+  const { page, limit } = query;
+  const { items: strippedItems, total } = await findVisibleMobilisations(query, actor, {
+    skip: (page - 1) * limit,
+    limit,
+  });
   const items = await annotateCanDecide(strippedItems, actor, {
     pendingStatus: 'PendingReview',
     legacyAllowedRoles: ['Admin'],
   });
 
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+}
+
+// A sane ceiling, not a real pagination concept — an export this size is
+// already an unusual amount of data for a spreadsheet; if it's ever hit in
+// practice, that's a sign a narrower filter is the actual fix.
+const EXPORT_MAX_ROWS = 5000;
+
+/** Same filters/visibility as listMobilisations, but every matching record
+ *  at once (up to EXPORT_MAX_ROWS) — for the downloadable Excel workbook,
+ *  never a paginated page. */
+export async function exportMobilisations(query, actor) {
+  const { items } = await findVisibleMobilisations(query, actor, { limit: EXPORT_MAX_ROWS });
+  return items;
 }
 
 export async function getMobilisation(id, actor) {
@@ -478,16 +541,32 @@ function assertPrimaryOrAdmin(mobilisation, actor) {
   }
 }
 
-/** Edit Section 1 — Draft/Rejected only, primary coordinator or Admin. Each
+/** Edit Section 1 — Draft/Rejected (primary coordinator or Admin), OR while
+ *  PendingReview at step 0 (the first-step reviewer — Office Secretary
+ *  today — fixing whatever the coordinator typed in wrong, per the user's
+ *  own framing: "have an option for him to edit whatever coordinator
+ *  entered, this should be logged"). The audit log below already captures
+ *  actor.userId on every save, so no separate logging mechanism is needed —
+ *  the existing entry already distinguishes who made the edit. Each
  *  reference (worker/client/subcontractor) is re-resolved and its snapshot
  *  refreshed only if the caller actually sent it. */
 export async function updateMobilisation(id, data, actor) {
   const mobilisation = await Mobilisation.findById(id);
   if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
-  if (!['Draft', 'Rejected'].includes(mobilisation.status)) {
+
+  const isDraftOrRejected = ['Draft', 'Rejected'].includes(mobilisation.status);
+  const isFirstStepTurn = mobilisation.status === 'PendingReview' && mobilisation.currentStep === 0;
+  if (!isDraftOrRejected && !isFirstStepTurn) {
     throw new ApiError(400, 'Only a Draft or Rejected mobilisation can be edited.');
   }
-  assertPrimaryOrAdmin(mobilisation, actor);
+
+  if (isFirstStepTurn) {
+    const stepRoleIds = mobilisation.steps?.[0]?.roles ?? [];
+    const { authorized } = await resolveStepAuthority(actor, stepRoleIds);
+    if (!authorized) throw new ApiError(403, 'You are not authorized to edit this mobilisation right now.');
+  } else {
+    assertPrimaryOrAdmin(mobilisation, actor);
+  }
 
   // workerType changing (or being resent) re-resolves worker identity in
   // full — same "only touch it if the caller sent it" discipline as
@@ -648,7 +727,20 @@ export async function confirmCoordinator(id, userId, actor) {
  *  using their Employee.approvalWorkflow would be semantically wrong;
  *  resolveApprovalWorkflow is reused unchanged, just always falling through
  *  to the company-wide default). A prior rejection's approvalTrail is kept
- *  as history; only the terminal decision fields reset. */
+ *  as history; only the terminal decision fields reset.
+ *
+ *  EXCEPTION — `rejectionTarget === 'Coordinator'`: the final-step reviewer
+ *  (Marketing Manager) rejected specifically because Section 1 (the
+ *  coordinator's own data) was wrong, not because the first-step reviewer's
+ *  (Office Secretary's) work needed redoing. Restarting from step 0 would
+ *  force Office Secretary to re-review data they already signed off on for
+ *  no reason — this resubmit keeps the existing workflow/steps/currentStep
+ *  untouched and lands straight back at the step it was rejected from, so
+ *  it goes directly back to whoever rejected it. Any OTHER rejection
+ *  target ('OfficeSecretary'/'Both'/none) restarts from scratch as before —
+ *  see decideMobilisation's rejectMobilisation for why 'OfficeSecretary'
+ *  never even reaches here (it never leaves PendingReview in the first
+ *  place). */
 export async function submitMobilisation(id, actor) {
   const mobilisation = await Mobilisation.findById(id);
   if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
@@ -662,21 +754,30 @@ export async function submitMobilisation(id, actor) {
     throw new ApiError(400, 'Every coordinator on this mobilisation must confirm before it can be submitted.');
   }
 
-  const workflow = await resolveApprovalWorkflow({ approvalWorkflow: null }, 'Mobilisation');
+  const targetedResubmit = mobilisation.status === 'Rejected' && mobilisation.rejectionTarget === 'Coordinator';
+
   mobilisation.status = 'PendingReview';
   mobilisation.decidedBy = null;
   mobilisation.decidedAt = null;
   mobilisation.decisionNote = null;
-  if (workflow) {
-    mobilisation.workflow = workflow._id;
-    mobilisation.workflowName = workflow.name;
-    mobilisation.steps = workflow.steps;
-  } else {
-    mobilisation.workflow = null;
-    mobilisation.workflowName = null;
-    mobilisation.steps = undefined;
+  mobilisation.rejectionTarget = null;
+
+  let workflow = null;
+  if (!targetedResubmit) {
+    workflow = await resolveApprovalWorkflow({ approvalWorkflow: null }, 'Mobilisation');
+    if (workflow) {
+      mobilisation.workflow = workflow._id;
+      mobilisation.workflowName = workflow.name;
+      mobilisation.steps = workflow.steps;
+    } else {
+      mobilisation.workflow = null;
+      mobilisation.workflowName = null;
+      mobilisation.steps = undefined;
+    }
+    mobilisation.currentStep = 0;
   }
-  mobilisation.currentStep = 0;
+  // targetedResubmit: workflow/steps/currentStep intentionally left as-is —
+  // that's the entire point of this branch.
   mobilisation.currentStepEnteredAt = new Date();
   await mobilisation.save();
 
@@ -685,10 +786,12 @@ export async function submitMobilisation(id, actor) {
     action: 'mobilisation.submit',
     targetType: 'Mobilisation',
     targetId: mobilisation._id,
+    meta: { targetedResubmit },
     ip: actor.ip,
   });
-  if (workflow) {
-    const memberIds = await membersOfRoles(workflow.steps[0]?.roles);
+  const notifyStepRoles = targetedResubmit ? mobilisation.steps?.[mobilisation.currentStep]?.roles : workflow?.steps[0]?.roles;
+  if (notifyStepRoles) {
+    const memberIds = await membersOfRoles(notifyStepRoles);
     await Promise.all(
       memberIds.map((userId) =>
         notifyUser(userId, {
@@ -710,23 +813,34 @@ export async function submitMobilisation(id, actor) {
 // name of this comment block was)
 // ---------------------------------------------------------------------------
 
-/** Section 2 — filled by whoever is authorized for the CURRENT step (Office
- *  Secretary, then Marketing Manager, or Admin), PendingReview only. Does
- *  not touch status — deciding is a separate call, since the shared decide
- *  engine only ever mutates status/decidedBy/approvalTrail (see
- *  approvalEngine.service.js). Every field is individually optional — a
- *  reviewer fills in what they have as it arrives (the client's quotation
- *  today, the actual timesheet hours once the client's timesheet itself
- *  arrives, overtime once that's known). Recomputes profitPerHour/
- *  profitPerMonth/otProfit* on save since clientTimesheetHours and every OT
- *  field feed directly into that formula. */
+/** Section 2 — filled by whoever is authorized for the workflow's FIRST
+ *  step only (Office Secretary today — the one who actually gathers the
+ *  client's quotation/PO/timesheet), or Admin; PendingReview only. Every
+ *  later step (Marketing Manager, etc.) can see this data (it's already in
+ *  the API response by then) and decide on it, but never edit it — "filled
+ *  by office secretary only, manager can view and approve, not change" is
+ *  the user's own framing. Checking against step 0's roles specifically
+ *  (not `steps[currentStep]`) means this locks out edits from EITHER side
+ *  once the record has moved past step 0: the office secretary's own
+ *  window closes too, not just later reviewers'. Does not touch status —
+ *  deciding is a separate call, since the shared decide engine only ever
+ *  mutates status/decidedBy/approvalTrail (see approvalEngine.service.js).
+ *  Every field is individually optional — the step-0 reviewer fills in
+ *  what they have as it arrives (the client's quotation today, the actual
+ *  timesheet hours once the client's timesheet itself arrives, overtime
+ *  once that's known). Recomputes profitPerHour/profitPerMonth/otProfit*
+ *  on save since clientTimesheetHours and every OT field feed directly
+ *  into that formula. */
 export async function saveCommercialDetails(id, data, actor) {
   const mobilisation = await Mobilisation.findById(id);
   if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
   if (mobilisation.status !== 'PendingReview') {
     throw new ApiError(400, 'Commercial details can only be added while a mobilisation is pending review.');
   }
-  const stepRoleIds = mobilisation.steps?.[mobilisation.currentStep]?.roles ?? [];
+  if (mobilisation.currentStep !== 0 && actor.role !== 'Admin') {
+    throw new ApiError(403, 'Only the first-step reviewer can edit these details.');
+  }
+  const stepRoleIds = mobilisation.steps?.[0]?.roles ?? [];
   const { authorized } = await resolveStepAuthority(actor, stepRoleIds);
   if (!authorized) {
     throw new ApiError(403, 'You are not an approver for the current step of this mobilisation.');
@@ -750,22 +864,28 @@ export async function saveCommercialDetails(id, data, actor) {
 }
 
 /**
- * Reuses the shared workflow-decision engine, overriding only how the final
- * decision is delivered: decideApprovalStep's default (`notifyEmployeeUser
- * (doc.employee, ...)`) assumes the request's "subject" is an Employee with
- * a login — Mobilisation's coordinators are Users directly, with no
- * `employee` field on the model at all, so the default would silently
- * resolve nobody (or worse, a query with an undefined filter value).
- * `legacyAllowedRoles: ['Admin']` is a safety net so an Admin can still
- * decide before the org has configured a real 'Mobilisation'
- * ApprovalWorkflow/Marketing-Manager role — mirrors every other request
- * type's legacy fallback.
+ * Approve path only — reuses the shared workflow-decision engine unchanged,
+ * overriding just how the final decision is delivered:
+ * decideApprovalStep's default (`notifyEmployeeUser(doc.employee, ...)`)
+ * assumes the request's "subject" is an Employee with a login —
+ * Mobilisation's coordinators are Users directly, with no `employee` field
+ * on the model at all, so the default would silently resolve nobody (or
+ * worse, a query with an undefined filter value). `legacyAllowedRoles:
+ * ['Admin']` is a safety net so an Admin can still decide before the org
+ * has configured a real 'Mobilisation' ApprovalWorkflow/Marketing-Manager
+ * role — mirrors every other request type's legacy fallback.
+ *
+ * Reject is NOT this path — see rejectMobilisation below. A non-final step
+ * (e.g. Office Secretary) has no reject at all, only Approve-as-"Submit";
+ * only the workflow's final step gets a real Reject, and it needs to record
+ * WHO it's being sent back to (Coordinator/Office Secretary/Both), which
+ * the generic shared engine has no concept of.
  */
-export async function decideMobilisation(id, { status, decisionNote }, actor) {
+async function approveMobilisation(id, decisionNote, actor) {
   const result = await decideApprovalStep({
     Model: Mobilisation,
     id,
-    decision: status,
+    decision: 'Approved',
     note: decisionNote,
     actor,
     pendingStatus: 'PendingReview',
@@ -774,7 +894,7 @@ export async function decideMobilisation(id, { status, decisionNote }, actor) {
     auditAction: 'mobilisation',
     buildFinalNotification: (doc) => ({
       type: 'RequestStatus',
-      title: `Mobilisation for ${doc.workerName} ${doc.status.toLowerCase()}`,
+      title: `Mobilisation for ${doc.workerName} approved`,
       body: doc.decisionNote || undefined,
       url: `/mobilisations/${doc._id}`,
     }),
@@ -796,8 +916,158 @@ export async function decideMobilisation(id, { status, decisionNote }, actor) {
       { $set: { currentStepEnteredAt: new Date() } }
     );
   }
-
   return result;
+}
+
+/**
+ * Reject — final step only ("Only the final step can reject" mirrors
+ * Secretary having no reject at all: rejecting your OWN just-entered data
+ * makes no sense, only someone reviewing the FULL picture, coordinator's
+ * Section 1 and Office Secretary's Section 2 both, can decide whose fault
+ * it is). Bypasses the shared engine entirely — its generic reject always
+ * moves to a real 'Rejected' status, but a rejection targeting
+ * 'OfficeSecretary' deliberately never leaves 'PendingReview' at all (see
+ * below), which the shared engine has no way to express.
+ *
+ * rejectionTarget decides what happens next, and each is a genuinely
+ * different mechanism, not just a label:
+ *  - 'Coordinator': real 'Rejected' status — unlocks the coordinator's
+ *    Section 1 edit (updateMobilisation's Draft/Rejected gate) exactly like
+ *    any other rejection. The special part is entirely in submitMobilisation:
+ *    resubmitting with this target skips step 0, landing straight back at
+ *    the step it was rejected from — Office Secretary's already-approved
+ *    Section 2 work is never touched or re-reviewed.
+ *  - 'OfficeSecretary': status stays 'PendingReview' the whole time — this
+ *    is a "soft" reject, just currentStep rolling back to 0. Office
+ *    Secretary can immediately re-edit their Section 2 data (canEditDetails/
+ *    saveCommercialDetails already key off currentStep === 0 && PendingReview
+ *    — nothing new needed there) and re-"Submit" (approveMobilisation) sends
+ *    it straight back to Marketing Manager. The coordinator is never
+ *    involved and never sees a Rejected state — this IS "let Office
+ *    Secretary resubmit directly," achieved by never actually leaving
+ *    PendingReview rather than by inventing a parallel resubmit endpoint.
+ *  - 'Both': real 'Rejected' status, same as 'Coordinator', but
+ *    submitMobilisation's default (no special rejectionTarget match) full-
+ *    restart-from-step-0 behavior applies — the coordinator fixes Section 1,
+ *    resubmits, lands at step 0, and Office Secretary has to redo their part
+ *    too before it reaches Marketing Manager again. This is exactly today's
+ *    original rejection behavior, just now reachable as an explicit choice
+ *    alongside the other two rather than the only option.
+ */
+async function rejectMobilisation(id, { decisionNote, rejectionTarget }, actor) {
+  if (!rejectionTarget) {
+    throw new ApiError(400, 'Choose who this should go back to.');
+  }
+  const mobilisation = await Mobilisation.findById(id).populate(POPULATE).lean();
+  if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
+  if (mobilisation.status !== 'PendingReview') {
+    throw new ApiError(400, 'Only requests pending review can be decided.');
+  }
+  const stepIndex = mobilisation.currentStep;
+  const isLastStep = stepIndex >= mobilisation.steps.length - 1;
+  if (!isLastStep) {
+    throw new ApiError(400, 'Only the final step can reject.');
+  }
+  const stepRoleIds = mobilisation.steps[stepIndex]?.roles ?? [];
+  const { authorized, roleId, viaAdminOverride } = await resolveStepAuthority(actor, stepRoleIds);
+  if (!authorized) {
+    throw new ApiError(403, 'You are not an approver for the current step of this mobilisation.');
+  }
+
+  const trailEntry = {
+    step: stepIndex,
+    approvalRole: roleId,
+    viaAdminOverride,
+    approvedBy: actor.userId,
+    decision: 'Rejected',
+    note: decisionNote,
+    decidedAt: new Date(),
+  };
+
+  if (rejectionTarget === 'OfficeSecretary') {
+    // Atomic guard on {status, currentStep} matches decideApprovalStep's own
+    // race-safety: the loser of two simultaneous decisions gets a clean 409
+    // instead of silently overwriting the winner's.
+    const updated = await Mobilisation.findOneAndUpdate(
+      { _id: id, status: 'PendingReview', currentStep: stepIndex },
+      { $push: { approvalTrail: trailEntry }, $set: { currentStep: 0, currentStepEnteredAt: new Date() } },
+      { new: true }
+    )
+      .populate(POPULATE)
+      .lean();
+    if (!updated) throw new ApiError(409, 'This mobilisation was already decided by someone else.');
+
+    await logAudit({
+      user: actor.userId,
+      action: 'mobilisation.rejected_to_office_secretary',
+      targetType: 'Mobilisation',
+      targetId: id,
+      meta: { decisionNote, viaAdminOverride },
+      ip: actor.ip,
+    });
+    const memberIds = await membersOfRoles(updated.steps[0]?.roles);
+    await Promise.all(
+      memberIds.map((userId) =>
+        notifyUser(userId, {
+          type: 'RequestStatus',
+          title: `Mobilisation for ${updated.workerName} sent back for rework`,
+          body: decisionNote || undefined,
+          url: `/mobilisations/${id}`,
+        })
+      )
+    );
+    return applyProfitFields(updated);
+  }
+
+  // 'Coordinator' or 'Both' — a real Rejected status; the coordinator
+  // resubmits (submitMobilisation), which branches on rejectionTarget to
+  // decide whether that resubmit restarts from step 0 or skips straight
+  // back here.
+  const updated = await Mobilisation.findOneAndUpdate(
+    { _id: id, status: 'PendingReview', currentStep: stepIndex },
+    {
+      $push: { approvalTrail: trailEntry },
+      $set: {
+        status: 'Rejected',
+        decidedBy: actor.userId,
+        decidedAt: new Date(),
+        decisionNote,
+        rejectionTarget,
+      },
+    },
+    { new: true }
+  )
+    .populate(POPULATE)
+    .lean();
+  if (!updated) throw new ApiError(409, 'This mobilisation was already decided by someone else.');
+
+  await logAudit({
+    user: actor.userId,
+    action: 'mobilisation.rejected',
+    targetType: 'Mobilisation',
+    targetId: id,
+    meta: { decisionNote, rejectionTarget, viaAdminOverride },
+    ip: actor.ip,
+  });
+  const memberIds = updated.coordinators.map((c) => (c.user._id ?? c.user).toString());
+  await Promise.all(
+    memberIds.map((userId) =>
+      notifyUser(userId, {
+        type: 'RequestStatus',
+        title: `Mobilisation for ${updated.workerName} rejected`,
+        body: decisionNote || undefined,
+        url: `/mobilisations/${id}`,
+      })
+    )
+  );
+  return applyProfitFields(updated);
+}
+
+export async function decideMobilisation(id, { status, decisionNote, rejectionTarget }, actor) {
+  if (status === 'Rejected') {
+    return rejectMobilisation(id, { decisionNote, rejectionTarget }, actor);
+  }
+  return approveMobilisation(id, decisionNote, actor);
 }
 
 // ---------------------------------------------------------------------------

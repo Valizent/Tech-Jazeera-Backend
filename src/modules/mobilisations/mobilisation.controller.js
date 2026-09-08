@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import ApiError from '../../utils/ApiError.js';
 import ApiResponse from '../../utils/ApiResponse.js';
 import { contentDisposition } from '../../utils/contentDisposition.js';
+import { buildMobilisationXlsx, buildMobilisationsListXlsx } from './mobilisation.export.js';
 import * as mobilisationService from './mobilisation.service.js';
 
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
@@ -31,10 +32,34 @@ export async function list(req, res) {
   res.json(new ApiResponse('Mobilisations.', data));
 }
 
+/** GET /api/mobilisations/export?... — downloads a .xlsx, one row per
+ *  mobilisation matching the caller's current filters/visibility (same
+ *  rules as `list`). */
+export async function exportAll(req, res) {
+  const mobilisations = await mobilisationService.exportMobilisations(req.query, actor(req));
+  const buffer = await buildMobilisationsListXlsx(mobilisations);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="mobilisations_${new Date().toISOString().slice(0, 10)}.xlsx"`
+  );
+  res.send(buffer);
+}
+
 /** GET /api/mobilisations/:id — 200 → data: mobilisation · 403/404 */
 export async function get(req, res) {
   const mobilisation = await mobilisationService.getMobilisation(req.params.id, actor(req));
   res.json(new ApiResponse('Mobilisation.', mobilisation));
+}
+
+/** GET /api/mobilisations/:id/export — downloads a single-row .xlsx for
+ *  this mobilisation, respecting the exact same access rules as `get`. */
+export async function exportOne(req, res) {
+  const mobilisation = await mobilisationService.getMobilisation(req.params.id, actor(req));
+  const buffer = await buildMobilisationXlsx(mobilisation);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="mobilisation_${mobilisation.serialNumber}.xlsx"`);
+  res.send(buffer);
 }
 
 /** POST /api/mobilisations — 201 → data: mobilisation (Draft) · 403 wrong role */
@@ -97,7 +122,14 @@ export async function saveCommercialDetails(req, res) {
 /** PATCH /api/mobilisations/:id/decide — 200 → data: mobilisation */
 export async function decide(req, res) {
   const mobilisation = await mobilisationService.decideMobilisation(req.params.id, req.body, actor(req));
-  res.json(new ApiResponse(`Mobilisation ${mobilisation.status.toLowerCase()}.`, mobilisation));
+  // A rejection targeting 'OfficeSecretary' never leaves 'PendingReview' —
+  // status alone can't tell that apart from an ordinary in-progress record,
+  // so the request's own intent (req.body.status) picks the message instead.
+  const message =
+    req.body.status === 'Rejected' && mobilisation.status === 'PendingReview'
+      ? 'Mobilisation sent back to Office Secretary for rework.'
+      : `Mobilisation ${mobilisation.status.toLowerCase()}.`;
+  res.json(new ApiResponse(message, mobilisation));
 }
 
 // ---------------------------------------------------------------------------
