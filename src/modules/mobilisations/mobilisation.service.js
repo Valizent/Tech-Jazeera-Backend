@@ -396,7 +396,12 @@ export async function createMobilisation(data, actor) {
  *    COO/GM circle after approval — one mechanism for both),
  *  - they hold a role in the CURRENT step's pool while it's PendingReview
  *    (so the Marketing Manager can find their review queue even before an
- *    Admin has also granted them 'mobilisationsViewer' Section Access).
+ *    Admin has also granted them 'mobilisationsViewer' Section Access),
+ *  - they hold a role in STEP 0's pool specifically while it's PendingReview
+ *    (Office Secretary's standing Section-1-edit right, which survives the
+ *    record moving past their own step — same canEditSection1 right
+ *    getMobilisation computes for a single record; without this list-side
+ *    match, that edit right would be unreachable — nothing to click into).
  * REVIEW_FIELDS (Section 2 — the current-step reviewer's own quotation/PO/
  * OT/timesheet work) is stripped for a plain coordinator unconditionally;
  * COMMERCIAL_FIELDS (Section 1 — what the coordinator typed themselves) only
@@ -427,7 +432,59 @@ async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
 
     const visibility = [{ 'coordinators.user': actor.userId }];
     if (isViewer) visibility.push({ status: { $ne: 'Draft' } });
-    if (roleIds.length) visibility.push({ status: 'PendingReview', 'steps.roles': { $in: roleIds } });
+    // Bug fixed 2026-09-08: this used to be `'steps.roles': { $in: roleIds }`
+    // — matching membership in ANY step's role pool, not just the CURRENT
+    // one. That let a first-step reviewer (e.g. Office Secretary) keep
+    // seeing a mobilisation in their list long after it moved on to a later
+    // step, only to hit a 403 ("not found" on the client) the moment they
+    // clicked in — getMobilisation's single-record check was always
+    // correctly current-step-only; this query just didn't match it. `$expr`
+    // + `$arrayElemAt` picks out `steps[currentStep].roles` specifically
+    // (defaulting to `[]` via `$ifNull` for a legacy record with no
+    // workflow/steps at all) and intersects that against the actor's own
+    // role memberships.
+    if (roleIds.length) {
+      visibility.push({
+        status: 'PendingReview',
+        $expr: {
+          $gt: [
+            {
+              $size: {
+                $setIntersection: [
+                  { $ifNull: [{ $arrayElemAt: ['$steps.roles', '$currentStep'] }, []] },
+                  roleIds,
+                ],
+              },
+            },
+            0,
+          ],
+        },
+      });
+      // A separate OR arm, not merged into the one above: whoever holds
+      // STEP 0's role pool (Office Secretary today) keeps a standing right
+      // to find the record throughout PendingReview, even once currentStep
+      // has moved on — the list-side half of getMobilisation's
+      // canEditSection1 right (see that function's doc comment). Without
+      // this she loses ALL access, list included, the moment her own step
+      // passes, which would make the edit right just added there
+      // unreachable — there'd be nothing in her list to click into.
+      visibility.push({
+        status: 'PendingReview',
+        $expr: {
+          $gt: [
+            {
+              $size: {
+                $setIntersection: [
+                  { $ifNull: [{ $arrayElemAt: ['$steps.roles', 0] }, []] },
+                  roleIds,
+                ],
+              },
+            },
+            0,
+          ],
+        },
+      });
+    }
     conditions.push({ $or: visibility });
   }
   const filter = conditions.length > 0 ? { $and: conditions } : {};
@@ -487,6 +544,12 @@ export async function getMobilisation(id, actor) {
   const mobilisation = applyProfitFields(found);
 
   let visible = mobilisation;
+  // Section 1 edit right (see updateMobilisation's own doc comment): Admin
+  // always; otherwise a genuine member of STEP 0's role pool specifically
+  // (not "whoever's turn it is now"), for as long as the record is still
+  // PendingReview. Computed unconditionally (not just inside the non-Admin
+  // branch below) so Admin gets `true` without duplicating the check.
+  let canEditSection1 = actor.role === 'Admin';
   if (actor.role !== 'Admin') {
     const isCoordinator = mobilisation.coordinators.some((c) => c.user._id.toString() === actor.userId);
     const isViewer = await isMobilisationViewer(actor);
@@ -497,8 +560,12 @@ export async function getMobilisation(id, actor) {
       const stepRoleIds = (mobilisation.steps?.[mobilisation.currentStep]?.roles ?? []).map((r) => r._id ?? r);
       isStepReviewer = await isMemberOfAnyRole(actor.userId, stepRoleIds);
     }
+    if (mobilisation.status === 'PendingReview') {
+      const stepZeroRoleIds = (mobilisation.steps?.[0]?.roles ?? []).map((r) => r._id ?? r);
+      canEditSection1 = stepZeroRoleIds.length > 0 && (await isMemberOfAnyRole(actor.userId, stepZeroRoleIds));
+    }
 
-    if (!isCoordinator && !isViewerAllowed && !isStepReviewer) {
+    if (!isCoordinator && !isViewerAllowed && !isStepReviewer && !canEditSection1) {
       throw new ApiError(403, 'You do not have access to this mobilisation.');
     }
     // Section 2 (the current-step reviewer's own work) is never a plain
@@ -516,6 +583,7 @@ export async function getMobilisation(id, actor) {
     pendingStatus: 'PendingReview',
     legacyAllowedRoles: ['Admin'],
   });
+  annotated.canEditSection1 = canEditSection1;
 
   // Approved (or later, Completed) always has exactly one Deployment, born
   // automatically at approval — surfaced here so the detail page can link
@@ -551,28 +619,38 @@ function assertPrimaryOrAdmin(mobilisation, actor) {
   }
 }
 
-/** Edit Section 1 — Draft/Rejected (primary coordinator or Admin), OR while
- *  PendingReview at step 0 (the first-step reviewer — Office Secretary
- *  today — fixing whatever the coordinator typed in wrong, per the user's
- *  own framing: "have an option for him to edit whatever coordinator
- *  entered, this should be logged"). The audit log below already captures
- *  actor.userId on every save, so no separate logging mechanism is needed —
- *  the existing entry already distinguishes who made the edit. Each
- *  reference (worker/client/subcontractor) is re-resolved and its snapshot
- *  refreshed only if the caller actually sent it. */
+/** Edit Section 1 — Draft/Rejected (primary coordinator or Admin), OR
+ *  throughout PendingReview for whoever holds STEP 0 in the configured
+ *  workflow (Office Secretary today — fixing whatever the coordinator
+ *  typed in wrong, per the user's own framing: "have an option for him to
+ *  edit whatever coordinator entered"). Deliberately checks step 0's role
+ *  pool specifically, not "whoever's turn it currently is" — the record may
+ *  have already moved on to a later step (e.g. MM Approval), but the
+ *  step-0 reviewer's right to go back and fix Section 1 doesn't expire
+ *  until the whole thing is Approved or Rejected. Bug fixed 2026-09-08:
+ *  this used to require `currentStep === 0` too, so the edit right silently
+ *  disappeared the moment the record advanced — not what was asked for.
+ *  Granting this to someone else is the same Approval Hierarchy mechanism
+ *  as everything else here: whoever an Admin puts in step 0's ApprovalRole
+ *  (e.g. "Office Secretary") gets it, nothing new to configure. The audit
+ *  log below already captures actor.userId on every save, so no separate
+ *  logging mechanism is needed — the existing entry already distinguishes
+ *  who made the edit. Each reference (worker/client/subcontractor) is
+ *  re-resolved and its snapshot refreshed only if the caller actually sent
+ *  it. */
 export async function updateMobilisation(id, data, actor) {
   const mobilisation = await Mobilisation.findById(id);
   if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
 
   const isDraftOrRejected = ['Draft', 'Rejected'].includes(mobilisation.status);
-  const isFirstStepTurn = mobilisation.status === 'PendingReview' && mobilisation.currentStep === 0;
-  if (!isDraftOrRejected && !isFirstStepTurn) {
-    throw new ApiError(400, 'Only a Draft or Rejected mobilisation can be edited.');
+  const isPendingReview = mobilisation.status === 'PendingReview';
+  if (!isDraftOrRejected && !isPendingReview) {
+    throw new ApiError(400, 'Only a Draft, Rejected, or still-pending mobilisation can be edited.');
   }
 
-  if (isFirstStepTurn) {
-    const stepRoleIds = mobilisation.steps?.[0]?.roles ?? [];
-    const { authorized } = await resolveStepAuthority(actor, stepRoleIds);
+  if (isPendingReview) {
+    const stepZeroRoleIds = mobilisation.steps?.[0]?.roles ?? [];
+    const { authorized } = await resolveStepAuthority(actor, stepZeroRoleIds);
     if (!authorized) throw new ApiError(403, 'You are not authorized to edit this mobilisation right now.');
   } else {
     assertPrimaryOrAdmin(mobilisation, actor);
