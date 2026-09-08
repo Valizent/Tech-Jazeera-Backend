@@ -101,6 +101,17 @@ export async function decide(req, res) {
 }
 
 // ---------------------------------------------------------------------------
+// TEMPORARY — pre-production cleanup only. Remove alongside the service
+// function and route — see the note in mobilisation.service.js.
+// ---------------------------------------------------------------------------
+
+/** DELETE /api/mobilisations/:id — Admin only, hard delete. */
+export async function remove(req, res) {
+  await mobilisationService.deleteMobilisation(req.params.id, actor(req));
+  res.json(new ApiResponse('Mobilisation deleted.'));
+}
+
+// ---------------------------------------------------------------------------
 // M5 — documents
 // ---------------------------------------------------------------------------
 

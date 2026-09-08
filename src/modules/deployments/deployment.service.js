@@ -185,6 +185,48 @@ export async function endDeployment(deploymentId, actor) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// TEMPORARY — pre-production cleanup only. Remove this whole function, its
+// route (deployment.routes.js), and its controller (deployment.
+// controller.js's `remove`) before going live — the user asked for an
+// Admin-only way to clear out dummy/test deployments while building.
+// Deployments otherwise have no delete on purpose (see this file's own
+// module comment: they're immutable history, and `end` is the real
+// lifecycle action) — this bypasses that intentionally, temporarily.
+// ---------------------------------------------------------------------------
+
+/** Hard-deletes a Deployment outright. If it was Active, frees the worker
+ *  the same way endDeployment does. Router-gated to Admin only. */
+export async function deleteDeployment(id, actor) {
+  const deployment = await Deployment.findById(id).lean();
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      if (deployment.status === 'Active') {
+        await Employee.updateOne(
+          { _id: deployment.worker },
+          { currentClient: null, currentSite: null },
+          { session }
+        );
+      }
+      await Deployment.deleteOne({ _id: deployment._id }, { session });
+    });
+  } finally {
+    session.endSession();
+  }
+
+  await logAudit({
+    user: actor.userId,
+    action: 'deployment.delete',
+    targetType: 'Deployment',
+    targetId: id,
+    meta: { client: deployment.clientName, site: deployment.site },
+    ip: actor.ip,
+  });
+}
+
 /**
  * List deployments (the register / a worker's history / a client's placements).
  * Filters: worker, client, status. Worker is populated for display.

@@ -35,3 +35,12 @@ export async function end(req, res) {
   await deploymentService.endDeployment(req.params.id, actor(req));
   res.json(new ApiResponse('Deployment ended.'));
 }
+
+// TEMPORARY — pre-production cleanup only. Remove alongside the service
+// function and route — see the note in deployment.service.js.
+
+/** DELETE /api/deployments/:id — Admin only, hard delete. */
+export async function remove(req, res) {
+  await deploymentService.deleteDeployment(req.params.id, actor(req));
+  res.json(new ApiResponse('Deployment deleted.'));
+}

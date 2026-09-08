@@ -17,6 +17,20 @@ const id = (label) => z.string().regex(/^[a-f0-9]{24}$/i, `Invalid ${label} id.`
 const optionalNonNegNumber = z.preprocess(emptyToUndef, z.coerce.number().min(0).optional());
 const optionalDate = z.preprocess(emptyToUndef, z.coerce.date().optional());
 
+// Saudi mobile only (this company operates in Saudi Arabia) — local
+// 05XXXXXXXX (10 digits) or international +9665XXXXXXXX/9665XXXXXXXX (966 +
+// 9 digits starting with 5). Scoped to Mobilisation's own phone field only —
+// Employee's phone regex is deliberately looser (covers non-Saudi contacts).
+const saudiPhoneRegex = /^(?:\+?9665\d{8}|05\d{8})$/;
+const optionalSaudiPhone = z.preprocess(
+  emptyToUndef,
+  z
+    .string()
+    .trim()
+    .regex(saudiPhoneRegex, 'Enter a valid Saudi mobile number (e.g. 05XXXXXXXX or +9665XXXXXXXX).')
+    .optional()
+);
+
 const workerType = z.enum(['Employee', 'SupplierEmployee', 'Freelancer']);
 
 const mobilisationFields = {
@@ -28,7 +42,7 @@ const mobilisationFields = {
   workerName: optionalStr(150),
   iqamaNumber: optionalStr(50),
   nationality: optionalStr(80),
-  phone: optionalStr(30),
+  phone: optionalSaudiPhone,
   jobTitle: z.string().trim().min(1, 'Job title is required.').max(150),
 
   client: id('client'),
@@ -118,11 +132,14 @@ export const addCoordinatorSchema = z.object({
  *  Secretary, then Marketing Manager, once configured), during review.
  *  Every field is optional individually: a reviewer fills in what they have
  *  as it arrives — the client side today, the subcontractor side once that
- *  quote arrives, overtime/timesheet hours once the client's timesheet
- *  itself arrives. `otSubcontractorRate`/`otSubcontractorCommission` are
- *  only meaningful for a SupplierEmployee mobilisation, but left optional
- *  here rather than workerType-conditional — an out-of-scope value for an
- *  Employee/Freelancer record is simply never read by computeProfitFields. */
+ *  quote arrives, the client's actual timesheet hours once that timesheet
+ *  itself arrives. `otHours` is NOT here — it's server-derived (see
+ *  computeProfitFields in mobilisation.service.js: max(0, clientTimesheetHours
+ *  - requiredTimesheetHours)), never a value a reviewer types in.
+ *  `otSubcontractorRate`/`otSubcontractorCommission` are only meaningful for
+ *  a SupplierEmployee mobilisation, but left optional here rather than
+ *  workerType-conditional — an out-of-scope value for an Employee/Freelancer
+ *  record is simply never read by computeProfitFields. */
 export const commercialDetailsSchema = z.object({
   clientQuotation: optionalStr(100),
   clientQuotationDate: optionalDate,
@@ -133,7 +150,6 @@ export const commercialDetailsSchema = z.object({
   subPO: optionalStr(100),
   subPODate: optionalDate,
   clientTimesheetHours: optionalNonNegNumber,
-  otHours: optionalNonNegNumber,
   otClientRate: optionalNonNegNumber,
   otClientCommission: optionalNonNegNumber,
   otSubcontractorRate: optionalNonNegNumber,

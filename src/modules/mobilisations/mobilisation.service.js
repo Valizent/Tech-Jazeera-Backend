@@ -41,7 +41,14 @@ const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
  *   profitPerHour = SupplierEmployee: (clientRate - clientCommission) - (subcontractorRate + subcontractorCommission)
  *                   Employee/Freelancer: clientRate - clientCommission
  *   otProfitPerHour = the same split, using the ot*-prefixed fields
- *   profitPerMonth = (profitPerHour * clientTimesheetHours) - fta - allowance + otProfitTotal
+ *   otHours = max(0, clientTimesheetHours - requiredTimesheetHours) — never a
+ *             manually-typed value (see docs/MOBILISATION-notes.md's own
+ *             "never trust a client-submitted financial value" convention);
+ *             0 until clientTimesheetHours is actually filled in
+ *   profitPerMonth = (profitPerHour * requiredTimesheetHours) - fta - allowance + otProfitTotal
+ *             — the base rate only ever applies to the required hours; hours
+ *             beyond that are otHours, priced at the OT rate instead
+ *             (otProfitTotal), never both.
  * `profitPerMonth` stays null until clientTimesheetHours is actually filled
  * in (usually by the current-step reviewer, once the client's real
  * timesheet arrives) — there's nothing meaningful to compute before then.
@@ -52,17 +59,20 @@ function computeProfitFields(m) {
   const subSide = isSupplier ? (m.subcontractorRate ?? 0) + (m.subcontractorCommission ?? 0) : 0;
   const profitPerHour = money(clientSide - subSide);
 
+  const otHours =
+    m.clientTimesheetHours == null ? 0 : Math.max(0, m.clientTimesheetHours - (m.requiredTimesheetHours ?? 0));
+
   const otClientSide = (m.otClientRate ?? 0) - (m.otClientCommission ?? 0);
   const otSubSide = isSupplier ? (m.otSubcontractorRate ?? 0) + (m.otSubcontractorCommission ?? 0) : 0;
   const otProfitPerHour = money(otClientSide - otSubSide);
-  const otProfitTotal = money(otProfitPerHour * (m.otHours ?? 0));
+  const otProfitTotal = money(otProfitPerHour * otHours);
 
   const profitPerMonth =
     m.clientTimesheetHours == null
       ? null
-      : money(profitPerHour * m.clientTimesheetHours - (m.fta ?? 0) - (m.allowance ?? 0) + otProfitTotal);
+      : money(profitPerHour * (m.requiredTimesheetHours ?? 0) - (m.fta ?? 0) - (m.allowance ?? 0) + otProfitTotal);
 
-  return { profitPerHour, otProfitPerHour, otProfitTotal, profitPerMonth };
+  return { profitPerHour, otHours, otProfitPerHour, otProfitTotal, profitPerMonth };
 }
 
 /** Applied right before every `.save()` (create/update/commercial-details)
@@ -100,6 +110,7 @@ const COMMERCIAL_FIELDS = [
   'subcontractorCommission',
   'profitPerHour',
   'profitPerMonth',
+  'otHours',
   'otProfitPerHour',
   'otProfitTotal',
 ];
@@ -114,7 +125,6 @@ const COMMERCIAL_FIELDS = [
 // saveCommercialDetails below, which writes exactly this field list.
 const REVIEW_FIELDS = [
   'clientTimesheetHours',
-  'otHours',
   'otClientRate',
   'otClientCommission',
   'otSubcontractorRate',
@@ -788,6 +798,48 @@ export async function decideMobilisation(id, { status, decisionNote }, actor) {
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// TEMPORARY — pre-production cleanup only. Remove this whole function, its
+// route (mobilisation.routes.js), and its controller (mobilisation.
+// controller.js's `remove`) before going live — the user asked for an
+// Admin-only way to clear out dummy/test mobilisations while building, not
+// a permanent feature (Mobilisation otherwise has no delete path on
+// purpose: Completed is the real terminal state).
+// ---------------------------------------------------------------------------
+
+/** Hard-deletes a Mobilisation outright, bypassing the normal lifecycle.
+ *  Releases a worker this record was actively holding (same cleanup
+ *  completeMobilisation does) and best-effort destroys any uploaded
+ *  document files so nothing is orphaned in Cloudinary. Router-gated to
+ *  Admin only. */
+export async function deleteMobilisation(id, actor) {
+  const mobilisation = await Mobilisation.findById(id);
+  if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
+
+  if (
+    mobilisation.workerType === 'Employee' &&
+    mobilisation.worker &&
+    ['Draft', 'PendingReview', 'Approved'].includes(mobilisation.status)
+  ) {
+    await Employee.findByIdAndUpdate(mobilisation.worker, { coordinator: null });
+  }
+
+  for (const doc of mobilisation.documents) {
+    await destroyDocumentFile(doc.fileName, doc.resourceType).catch(() => {});
+  }
+
+  await mobilisation.deleteOne();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'mobilisation.delete',
+    targetType: 'Mobilisation',
+    targetId: id,
+    meta: { serialNumber: mobilisation.serialNumber, workerName: mobilisation.workerName },
+    ip: actor.ip,
+  });
 }
 
 // ---------------------------------------------------------------------------
