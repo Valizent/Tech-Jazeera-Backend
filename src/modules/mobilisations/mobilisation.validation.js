@@ -47,6 +47,7 @@ const mobilisationFields = {
   jobTitle: z.string().trim().min(1, 'Job title is required.').max(150),
 
   client: id('client'),
+  site: optionalStr(150),
   clientRate: optionalNonNegNumber,
   clientCommission: optionalNonNegNumber,
   fta: optionalNonNegNumber,
@@ -131,11 +132,12 @@ export const exportMobilisationsSchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
-/** GET /mobilisations/suggestions?field=... — the free-typed worker-identity
- *  fields only (SupplierEmployee/Freelancer have no Employee record to pick
- *  from, so these are typed directly — see mobilisation.model.js). */
+/** GET /mobilisations/suggestions?field=... — free-typed fields only:
+ *  worker-identity (SupplierEmployee/Freelancer have no Employee record to
+ *  pick from, so these are typed directly — see mobilisation.model.js) plus
+ *  `site`, which is never validated against a picklist either. */
 export const mobilisationSuggestionQuerySchema = z.object({
-  field: z.enum(['workerName', 'iqamaNumber', 'nationality']),
+  field: z.enum(['workerName', 'iqamaNumber', 'nationality', 'site']),
 });
 
 export const mobilisationCoordinatorParamSchema = z.object({

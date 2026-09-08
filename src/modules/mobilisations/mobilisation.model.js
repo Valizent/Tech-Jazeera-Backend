@@ -1,9 +1,11 @@
 /**
  * Mobilisation — the commercial+staffing record of placing a worker with a
  * client (optionally routed through a subcontractor), including billing
- * rates/commissions and the profit on the deal. Distinct from Deployment
- * (worker↔client↔site only, no commercial data) — see
- * docs/MOBILISATION-notes.md.
+ * rates/commissions and the profit on the deal. Once this reaches
+ * 'Approved', a Deployment (worker actually at work, monthly client hours/OT,
+ * Release) is created automatically from it — see
+ * deployment.service.js's createDeploymentFromMobilisation, called from this
+ * module's approveMobilisation. See docs/MOBILISATION-notes.md.
  *
  * Section 1 is filled by whoever creates it (a Coordinator, or — from M4 —
  * a BDM/Marketing Manager self-mobilising); Section 2 (client/sub quotation
@@ -43,10 +45,10 @@
 import mongoose from 'mongoose';
 
 
-// 'Completed' (Milestone 5) is the terminal "placement has ended" state — the
-// minimum needed to ever clear a worker's Employee.coordinator back to
-// standby. Only reachable from 'Approved'; see mobilisation.service.js's
-// completeMobilisation.
+// 'Completed' is the terminal "placement has ended" state — set automatically
+// when the Deployment this mobilisation produced is Released (see
+// deployment.service.js's releaseDeployment), never by a direct action on
+// the Mobilisation itself. Only reachable from 'Approved'.
 export const MOBILISATION_STATUSES = ['Draft', 'PendingReview', 'Approved', 'Rejected', 'Completed'];
 // Who a final-step rejection sends the mobilisation back to — see
 // mobilisation.service.js's rejectMobilisation/submitMobilisation for what
@@ -108,6 +110,13 @@ const mobilisationSchema = new mongoose.Schema(
     // --- Section 1: client & billing ---
     client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', required: true },
     clientName: { type: String, required: true }, // snapshot of Client.companyName
+    // Free-typed, not validated against Client.sites — same "suggestion aid,
+    // not a strict picklist" convention as workerName (see
+    // getFieldSuggestions). Optional: many mobilisations won't name a
+    // specific site, and this shouldn't block an otherwise-complete Draft.
+    // Snapshotted onto the auto-created Deployment once Approved — see
+    // deployment.service.js's createDeploymentFromMobilisation.
+    site: { type: String, trim: true, default: null },
     clientRate: { type: Number, default: 0, min: 0 }, // per hour
     clientCommission: { type: Number, default: 0, min: 0 }, // per hour
     fta: { type: Number, default: 0, min: 0 }, // per month — Food/Travel/Accommodation, company-paid

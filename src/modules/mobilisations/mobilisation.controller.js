@@ -102,13 +102,6 @@ export async function submit(req, res) {
   res.json(new ApiResponse('Mobilisation submitted for review.', mobilisation));
 }
 
-/** PATCH /api/mobilisations/:id/complete — 200 → data: mobilisation (Completed) ·
- *  400 not Approved · 403 not the primary coordinator */
-export async function complete(req, res) {
-  const mobilisation = await mobilisationService.completeMobilisation(req.params.id, actor(req));
-  res.json(new ApiResponse('Mobilisation marked complete.', mobilisation));
-}
-
 // ---------------------------------------------------------------------------
 // M3 — Marketing Manager review
 // ---------------------------------------------------------------------------

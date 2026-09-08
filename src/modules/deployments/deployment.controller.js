@@ -4,7 +4,7 @@
 import ApiResponse from '../../utils/ApiResponse.js';
 import * as deploymentService from './deployment.service.js';
 
-const actor = (req) => ({ userId: req.user.id, ip: req.ip });
+const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
 
 /** GET /api/deployments — 200 → data: { items, total, page, pages } */
 export async function list(req, res) {
@@ -18,22 +18,22 @@ export async function get(req, res) {
   res.json(new ApiResponse('Deployment.', deployment));
 }
 
-/** POST /api/deployments — 201 → data: deployment · 409 double-assignment */
-export async function assign(req, res) {
-  const deployment = await deploymentService.assignWorker(req.body, actor(req));
-  res.status(201).json(new ApiResponse('Worker deployed.', deployment));
+/** POST /api/deployments/:id/monthly-hours — 201 → data: deployment */
+export async function addMonthlyHours(req, res) {
+  const deployment = await deploymentService.addMonthlyHours(req.params.id, req.body, actor(req));
+  res.status(201).json(new ApiResponse('Monthly hours recorded.', deployment));
 }
 
-/** POST /api/deployments/:id/transfer — 200 → data: new deployment */
-export async function transfer(req, res) {
-  const deployment = await deploymentService.transferDeployment(req.params.id, req.body, actor(req));
-  res.json(new ApiResponse('Worker transferred.', deployment));
+/** PATCH /api/deployments/:id/monthly-hours/:entryId — 200 → data: deployment */
+export async function updateMonthlyHours(req, res) {
+  const deployment = await deploymentService.updateMonthlyHours(req.params.id, req.params.entryId, req.body, actor(req));
+  res.json(new ApiResponse('Monthly hours updated.', deployment));
 }
 
-/** POST /api/deployments/:id/end — 200 → data: null (worker unassigned) */
-export async function end(req, res) {
-  await deploymentService.endDeployment(req.params.id, actor(req));
-  res.json(new ApiResponse('Deployment ended.'));
+/** POST /api/deployments/:id/release — 200 → data: null (worker released to standby) */
+export async function release(req, res) {
+  await deploymentService.releaseDeployment(req.params.id, req.body, actor(req));
+  res.json(new ApiResponse('Worker released.'));
 }
 
 // TEMPORARY — pre-production cleanup only. Remove alongside the service

@@ -1,146 +1,83 @@
 /**
- * Deployment service — assign / transfer / end / list, plus the integrity
- * rules the whole feature rests on.
+ * Deployment service — auto-create (from an Approved Mobilisation), monthly
+ * client-hours/OT entry, and Release, plus the integrity rules this feature
+ * rests on.
  *
- * Every operation that touches TWO documents (the Deployment and the
- * Employee's current* fields) runs inside a MongoDB transaction, so the two
- * can never drift apart: either both writes land or neither does. Atlas is a
- * replica set, so transactions are available.
+ * Deployment depends on Mobilisation's MODEL directly (never its service) —
+ * mobilisation.service.js is the one calling INTO this file (on approval),
+ * so a dependency the other way would be a circular import between the two
+ * service modules. Releasing a deployment folds in everything the old
+ * Mobilisation-side `completeMobilisation` used to do (mark the source
+ * Mobilisation Completed, free the worker back to standby) in one
+ * transaction, for exactly this reason — see releaseDeployment below.
+ *
+ * Every operation that touches more than one document runs inside a MongoDB
+ * transaction, so writes can never drift apart: either all land or none do.
  */
 import mongoose from 'mongoose';
 import Deployment from './deployment.model.js';
 import Employee from '../employees/employee.model.js';
-import Client from '../clients/client.model.js';
+import Mobilisation from '../mobilisations/mobilisation.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
-/**
- * Validate the placement target: the client must exist, be Active, and the
- * given site must be one of that client's registered sites. Returns the
- * client so callers can snapshot its name.
- */
-async function resolveClientSite(clientId, site) {
-  const client = await Client.findById(clientId).lean();
-  if (!client) throw new ApiError(404, 'Client not found.');
-  if (client.status !== 'Active') {
-    throw new ApiError(400, `${client.companyName} is inactive — reactivate it before deploying workers.`);
-  }
-  const known = (client.sites ?? []).some((s) => s.name === site);
-  if (!known) {
-    throw new ApiError(400, `"${site}" is not a registered site for ${client.companyName}.`);
-  }
-  return client;
+function currentMonthStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
-
-/** The one active deployment for a worker, or null. */
-function findActive(workerId, session) {
-  return Deployment.findOne({ worker: workerId, status: 'Active' }).session(session ?? null);
+function monthStrOf(date) {
+  const d = new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
 /**
- * Assign an unassigned worker to a client site.
- * Errors: 404 worker/client · 400 exited worker / inactive client / bad site
- *         · 409 worker already has an active deployment (double-assignment).
+ * Called once by mobilisation.service.js's approveMobilisation, the moment a
+ * mobilisation reaches its terminal 'Approved' state — never a route of its
+ * own. `mobilisation` is the lean, already-updated Mobilisation document.
+ * SupplierEmployee/Freelancer mobilisations get a Deployment too (worker
+ * stays null) — this is now the universal "worker is actually placed and
+ * working" record, matching Mobilisation's own worker-type scope.
  */
-export async function assignWorker(data, actor) {
-  const employee = await Employee.findById(data.worker).lean();
-  if (!employee) throw new ApiError(404, 'Employee not found.');
-  if (employee.status === 'Exited') {
-    throw new ApiError(400, 'This employee has exited the company and cannot be deployed.');
-  }
-  const existing = await findActive(data.worker);
-  if (existing) {
-    throw new ApiError(
-      409,
-      `${employee.fullName} is already deployed. Transfer or end the current deployment first.`
-    );
-  }
-  const client = await resolveClientSite(data.client, data.site);
-
+export async function createDeploymentFromMobilisation(mobilisation, actor) {
   const session = await mongoose.startSession();
   try {
     let deployment;
     await session.withTransaction(async () => {
-      const [created] = await Deployment.create(
-        [{ ...data, clientName: client.companyName, status: 'Active' }],
-        { session }
-      );
-      await Employee.updateOne(
-        { _id: data.worker },
-        { currentClient: data.client, currentSite: data.site },
-        { session }
-      );
-      deployment = created;
-    });
-    await logAudit({
-      user: actor.userId,
-      action: 'deployment.assign',
-      targetType: 'Deployment',
-      targetId: deployment._id,
-      meta: { worker: employee.fullName, client: client.companyName, site: data.site },
-      ip: actor.ip,
-    });
-    return deployment.toObject();
-  } finally {
-    session.endSession();
-  }
-}
-
-/**
- * Transfer the worker of an active deployment to a new client site: the old
- * deployment is Ended (reason Transferred) and a new Active one is created,
- * atomically.
- * Errors: 404 deployment/client · 400 not-active / inactive client / bad site.
- */
-export async function transferDeployment(deploymentId, data, actor) {
-  const current = await Deployment.findById(deploymentId).lean();
-  if (!current) throw new ApiError(404, 'Deployment not found.');
-  if (current.status !== 'Active') {
-    throw new ApiError(400, 'Only an active deployment can be transferred.');
-  }
-  const client = await resolveClientSite(data.client, data.site);
-
-  const session = await mongoose.startSession();
-  try {
-    let deployment;
-    await session.withTransaction(async () => {
-      // End the old one FIRST so the partial-unique "one active per worker"
-      // index is satisfied when the new Active deployment is inserted.
-      await Deployment.updateOne(
-        { _id: current._id },
-        { status: 'Ended', endDate: new Date(), endReason: 'Transferred' },
-        { session }
-      );
       const [created] = await Deployment.create(
         [
           {
-            worker: current.worker,
-            client: data.client,
-            clientName: client.companyName,
-            site: data.site,
-            vehicle: data.vehicle,
-            driver: data.driver,
-            shift: data.shift,
-            startDate: data.startDate,
-            notes: data.notes,
+            mobilisation: mobilisation._id,
+            workerType: mobilisation.workerType,
+            worker: mobilisation.workerType === 'Employee' ? mobilisation.worker : null,
+            workerName: mobilisation.workerName,
+            client: mobilisation.client,
+            clientName: mobilisation.clientName,
+            site: mobilisation.site ?? null,
+            subcontractor: mobilisation.subcontractor ?? null,
+            subcontractorName: mobilisation.subcontractorName ?? null,
+            requiredTimesheetHours: mobilisation.requiredTimesheetHours ?? null,
+            startDate: mobilisation.mobilisationDate,
             status: 'Active',
           },
         ],
         { session }
       );
-      await Employee.updateOne(
-        { _id: current.worker },
-        { currentClient: data.client, currentSite: data.site },
-        { session }
-      );
+      if (mobilisation.workerType === 'Employee') {
+        await Employee.updateOne(
+          { _id: mobilisation.worker },
+          { currentClient: mobilisation.client, currentSite: mobilisation.site ?? null },
+          { session }
+        );
+      }
       deployment = created;
     });
     await logAudit({
       user: actor.userId,
-      action: 'deployment.transfer',
+      action: 'deployment.create',
       targetType: 'Deployment',
       targetId: deployment._id,
-      meta: { from: current.clientName, to: client.companyName, site: data.site },
+      meta: { worker: mobilisation.workerName, client: mobilisation.clientName, mobilisation: mobilisation._id },
       ip: actor.ip,
     });
     return deployment.toObject();
@@ -150,39 +87,175 @@ export async function transferDeployment(deploymentId, data, actor) {
 }
 
 /**
- * End an active deployment and free the worker (unassign).
- * Errors: 404 deployment · 400 already ended.
+ * Add this month's actual client-timesheet hours — only for a month that has
+ * fully ended (so "mobilised in September" unlocks September's entry on
+ * October 1st) and no earlier than the deployment's own start month. Office
+ * Secretary is a hardcoded exception to the Section Access gate (same
+ * pattern as mobilisation.service.js's createMobilisation) — they aren't a
+ * grantable Section Access role at all.
  */
-export async function endDeployment(deploymentId, actor) {
-  const current = await Deployment.findById(deploymentId).lean();
-  if (!current) throw new ApiError(404, 'Deployment not found.');
-  if (current.status !== 'Active') throw new ApiError(400, 'This deployment has already ended.');
+export async function addMonthlyHours(deploymentId, data, actor) {
+  const isOfficeSecretary = actor.role === 'Office Secretary';
+  const allowed = isOfficeSecretary || (await canAccessSection('deploymentsHours', actor));
+  if (!allowed) throw new ApiError(403, 'You do not have permission to enter monthly hours.');
+
+  const deployment = await Deployment.findById(deploymentId);
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  if (deployment.status !== 'Active') {
+    throw new ApiError(400, 'Only an active deployment can have hours entered.');
+  }
+  if (data.month >= currentMonthStr()) {
+    throw new ApiError(400, 'You can only enter hours for a month that has already ended.');
+  }
+  if (data.month < monthStrOf(deployment.startDate)) {
+    throw new ApiError(400, 'This deployment had not started yet in that month.');
+  }
+  if (deployment.monthlyHours.some((m) => m.month === data.month)) {
+    throw new ApiError(409, 'Hours for this month have already been entered — edit that entry instead.');
+  }
+
+  const contractHours = deployment.requiredTimesheetHours ?? 0;
+  const otHours = Math.max(0, data.actualHours - contractHours);
+  deployment.monthlyHours.push({
+    month: data.month,
+    contractHours,
+    actualHours: data.actualHours,
+    otHours,
+    otAmount: data.otAmount ?? 0,
+    notes: data.notes,
+    enteredBy: actor.userId,
+  });
+  await deployment.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'deployment.monthlyHours.add',
+    targetType: 'Deployment',
+    targetId: deployment._id,
+    meta: { month: data.month, actualHours: data.actualHours, otHours, otAmount: data.otAmount ?? 0 },
+    ip: actor.ip,
+  });
+  return deployment.toObject();
+}
+
+/** Correct an already-entered month (actualHours/otAmount/notes) — recomputes
+ *  otHours from the same snapshot contractHours. Same access circle as adding. */
+export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
+  const isOfficeSecretary = actor.role === 'Office Secretary';
+  const allowed = isOfficeSecretary || (await canAccessSection('deploymentsHours', actor));
+  if (!allowed) throw new ApiError(403, 'You do not have permission to edit monthly hours.');
+
+  const deployment = await Deployment.findById(deploymentId);
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  const entry = deployment.monthlyHours.id(entryId);
+  if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
+
+  entry.actualHours = data.actualHours;
+  entry.otHours = Math.max(0, data.actualHours - entry.contractHours);
+  entry.otAmount = data.otAmount ?? 0;
+  entry.notes = data.notes;
+  entry.enteredBy = actor.userId;
+  entry.enteredAt = new Date();
+  await deployment.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'deployment.monthlyHours.update',
+    targetType: 'Deployment',
+    targetId: deployment._id,
+    meta: { month: entry.month, actualHours: data.actualHours, otHours: entry.otHours, otAmount: entry.otAmount },
+    ip: actor.ip,
+  });
+  return deployment.toObject();
+}
+
+/**
+ * Release: the worker is pulled off this client and goes back to standby.
+ * Ends the Deployment AND completes the source Mobilisation in one
+ * transaction (see this file's own module comment for why that logic lives
+ * here rather than being called back into mobilisation.service.js) — the
+ * worker is immediately eligible for a brand new Mobilisation afterward
+ * (Mobilisation.assertNoActivePlacement only blocks Draft/PendingReview/
+ * Approved, never Completed).
+ */
+export async function releaseDeployment(deploymentId, data, actor) {
+  const deployment = await Deployment.findById(deploymentId).lean();
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  if (deployment.status !== 'Active') throw new ApiError(400, 'This deployment has already ended.');
 
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
       await Deployment.updateOne(
-        { _id: current._id },
-        { status: 'Ended', endDate: new Date(), endReason: 'Unassigned' },
+        { _id: deployment._id },
+        {
+          status: 'Ended',
+          endDate: data.releaseDate,
+          endReason: 'Released',
+          releaseNote: data.releaseNote,
+        },
         { session }
       );
-      await Employee.updateOne(
-        { _id: current.worker },
-        { currentClient: null, currentSite: null },
+      if (deployment.workerType === 'Employee' && deployment.worker) {
+        await Employee.updateOne(
+          { _id: deployment.worker },
+          { currentClient: null, currentSite: null, coordinator: null },
+          { session }
+        );
+      }
+      const updatedMobilisation = await Mobilisation.findOneAndUpdate(
+        { _id: deployment.mobilisation, status: 'Approved' },
+        { status: 'Completed' },
         { session }
       );
+      if (!updatedMobilisation) {
+        throw new ApiError(409, 'The source mobilisation is no longer Approved — cannot release.');
+      }
     });
     await logAudit({
       user: actor.userId,
-      action: 'deployment.end',
+      action: 'deployment.release',
       targetType: 'Deployment',
-      targetId: current._id,
-      meta: { client: current.clientName, site: current.site },
+      targetId: deployment._id,
+      meta: { worker: deployment.workerName, client: deployment.clientName, releaseDate: data.releaseDate },
       ip: actor.ip,
     });
   } finally {
     session.endSession();
   }
+}
+
+/**
+ * List deployments (the register / a worker's history / a client's placements).
+ * Filters: worker, client, status. Worker/mobilisation are populated for display.
+ */
+export async function listDeployments({ page, limit, worker, client, status, sortOrder }) {
+  const filter = {};
+  if (worker) filter.worker = worker;
+  if (client) filter.client = client;
+  if (status) filter.status = status;
+
+  const sort = { startDate: sortOrder === 'asc' ? 1 : -1, _id: -1 };
+  const [items, total] = await Promise.all([
+    Deployment.find(filter)
+      .sort(sort)
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate('worker', 'fullName employeeId')
+      .populate('mobilisation', 'serialNumber')
+      .lean(),
+    Deployment.countDocuments(filter),
+  ]);
+  return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+}
+
+export async function getDeployment(id) {
+  const deployment = await Deployment.findById(id)
+    .populate('worker', 'fullName employeeId')
+    .populate('mobilisation', 'serialNumber')
+    .lean();
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  return deployment;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,12 +264,14 @@ export async function endDeployment(deploymentId, actor) {
 // controller.js's `remove`) before going live — the user asked for an
 // Admin-only way to clear out dummy/test deployments while building.
 // Deployments otherwise have no delete on purpose (see this file's own
-// module comment: they're immutable history, and `end` is the real
+// module comment: they're immutable history, and Release is the real
 // lifecycle action) — this bypasses that intentionally, temporarily.
 // ---------------------------------------------------------------------------
 
 /** Hard-deletes a Deployment outright. If it was Active, frees the worker
- *  the same way endDeployment does. Router-gated to Admin only. */
+ *  the same way a Release does (but does NOT touch the source Mobilisation —
+ *  this is dummy-data cleanup, not a real lifecycle action). Router-gated to
+ *  Admin only. */
 export async function deleteDeployment(id, actor) {
   const deployment = await Deployment.findById(id).lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
@@ -204,7 +279,7 @@ export async function deleteDeployment(id, actor) {
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      if (deployment.status === 'Active') {
+      if (deployment.status === 'Active' && deployment.workerType === 'Employee' && deployment.worker) {
         await Employee.updateOne(
           { _id: deployment.worker },
           { currentClient: null, currentSite: null },
@@ -222,38 +297,7 @@ export async function deleteDeployment(id, actor) {
     action: 'deployment.delete',
     targetType: 'Deployment',
     targetId: id,
-    meta: { client: deployment.clientName, site: deployment.site },
+    meta: { client: deployment.clientName },
     ip: actor.ip,
   });
-}
-
-/**
- * List deployments (the register / a worker's history / a client's placements).
- * Filters: worker, client, status. Worker is populated for display.
- */
-export async function listDeployments({ page, limit, worker, client, status, sortOrder }) {
-  const filter = {};
-  if (worker) filter.worker = worker;
-  if (client) filter.client = client;
-  if (status) filter.status = status;
-
-  const sort = { startDate: sortOrder === 'asc' ? 1 : -1, _id: -1 };
-  const [items, total] = await Promise.all([
-    Deployment.find(filter)
-      .sort(sort)
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .populate('worker', 'fullName employeeId')
-      .lean(),
-    Deployment.countDocuments(filter),
-  ]);
-  return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
-}
-
-export async function getDeployment(id) {
-  const deployment = await Deployment.findById(id)
-    .populate('worker', 'fullName employeeId')
-    .lean();
-  if (!deployment) throw new ApiError(404, 'Deployment not found.');
-  return deployment;
 }

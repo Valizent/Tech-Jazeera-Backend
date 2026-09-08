@@ -48,7 +48,7 @@ function escapeRegex(text) {
  * script) can still list company-wide; every HTTP call supplies it.
  */
 export async function listEmployees(
-  { page, limit, search, status, type, alerts, thresholdDays, client, unassigned, team, createdByRole, sortBy, sortOrder },
+  { page, limit, search, status, type, alerts, thresholdDays, client, team, createdByRole, sortBy, sortOrder },
   actor
 ) {
   // Each condition is AND-ed; search and alerts are each internally OR-ed.
@@ -62,7 +62,6 @@ export async function listEmployees(
   if (status) conditions.push({ status });
   if (type) conditions.push({ type });
   if (client) conditions.push({ currentClient: client });
-  if (unassigned === 'true') conditions.push({ currentClient: null });
   if (alerts === 'true') {
     const days = thresholdDays ?? EXPIRY_WARNING_DAYS;
     const threshold = new Date(Date.now() + days * 24 * 60 * 60 * 1000);

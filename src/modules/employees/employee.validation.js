@@ -194,9 +194,6 @@ export const listEmployeesSchema = z.object({
     emptyToUndef,
     z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid client id.').optional()
   ),
-  // 'true' → only workers with no current client (assignable). Powers the
-  // deployment assign form's worker picker (M6).
-  unassigned: z.preprocess(emptyToUndef, z.enum(['true', 'false']).optional()),
   // P2-M2: a Manager passes 'mine' to see only their coordinators' employees.
   // A Coordinator is scoped to their own team automatically — no param needed.
   team: z.preprocess(emptyToUndef, z.enum(['mine']).optional()),

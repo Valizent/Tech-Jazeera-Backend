@@ -1,34 +1,45 @@
 /**
  * Deployment routes.
  *
- * Roles: everyone authenticated may READ the register/history. Assigning,
- * transferring and ending are Section Access key 'deploymentsManage',
- * default ['Manager'] — matches today's Admin/Manager circle exactly.
- * Deployments are otherwise immutable history — the "end" action is how an
- * active placement is closed — EXCEPT for a TEMPORARY Admin-only DELETE
- * added for pre-production cleanup; remove it before going live (see the
- * note on that route below).
+ * Router-level `requireStaffOrOfficeSecretary` (not plain `requireStaff`) so
+ * Office Secretary can reach the monthly-hours endpoint at all — Office
+ * Secretary is otherwise deny-by-default (see rbac.js), and is a hardcoded
+ * exception INSIDE addMonthlyHours/updateMonthlyHours rather than a Section
+ * Access grant (same pattern mobilisation.service.js's createMobilisation
+ * uses — Office Secretary isn't a grantable Section Access role at all).
+ *
+ * Roles: everyone (staff or Office Secretary) may READ the register/history.
+ * Monthly hours entry is gated inside the service (Office Secretary, or
+ * Section Access key 'deploymentsHours'). Release is Section Access key
+ * 'deploymentsRelease', default ['Coordinator', 'Manager'] — Office
+ * Secretary never releases. Deployments have no create/edit route at all —
+ * they're born automatically from an Approved Mobilisation (see
+ * mobilisation.service.js's approveMobilisation) — EXCEPT for a TEMPORARY
+ * Admin-only DELETE added for pre-production cleanup; remove it before
+ * going live (see the note on that route below).
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff, requireRoles } from '../../middleware/rbac.js';
+import { requireStaffOrOfficeSecretary, requireRoles } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
-  assignSchema,
-  transferSchema,
   listDeploymentsSchema,
   deploymentIdParamSchema,
+  monthlyHoursEntryParamSchema,
+  addMonthlyHoursSchema,
+  updateMonthlyHoursSchema,
+  releaseDeploymentSchema,
 } from './deployment.validation.js';
 import * as deploymentController from './deployment.controller.js';
 
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaff); // staff-only module; Workers use the ESS portal (P2-M2)
+router.use(requireStaffOrOfficeSecretary);
 
-const canWrite = requireSectionAccess('deploymentsManage');
+const canRelease = requireSectionAccess('deploymentsRelease');
 
 router.get('/', validate({ query: listDeploymentsSchema }), asyncHandler(deploymentController.list));
 router.get(
@@ -36,18 +47,21 @@ router.get(
   validate({ params: deploymentIdParamSchema }),
   asyncHandler(deploymentController.get)
 );
-router.post('/', canWrite, validate({ body: assignSchema }), asyncHandler(deploymentController.assign));
 router.post(
-  '/:id/transfer',
-  canWrite,
-  validate({ params: deploymentIdParamSchema, body: transferSchema }),
-  asyncHandler(deploymentController.transfer)
+  '/:id/monthly-hours',
+  validate({ params: deploymentIdParamSchema, body: addMonthlyHoursSchema }),
+  asyncHandler(deploymentController.addMonthlyHours)
+);
+router.patch(
+  '/:id/monthly-hours/:entryId',
+  validate({ params: monthlyHoursEntryParamSchema, body: updateMonthlyHoursSchema }),
+  asyncHandler(deploymentController.updateMonthlyHours)
 );
 router.post(
-  '/:id/end',
-  canWrite,
-  validate({ params: deploymentIdParamSchema }),
-  asyncHandler(deploymentController.end)
+  '/:id/release',
+  canRelease,
+  validate({ params: deploymentIdParamSchema, body: releaseDeploymentSchema }),
+  asyncHandler(deploymentController.release)
 );
 // TEMPORARY — pre-production cleanup only, Admin-only hard delete. Remove
 // this route (and deployment.controller.js's `remove` / deployment.

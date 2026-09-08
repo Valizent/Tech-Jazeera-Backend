@@ -27,6 +27,8 @@ import {
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
 import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.js';
 import { nextSequence } from '../quotations/counter.model.js';
+import Deployment from '../deployments/deployment.model.js';
+import { createDeploymentFromMobilisation } from '../deployments/deployment.service.js';
 
 function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -355,37 +357,6 @@ export async function createMobilisation(data, actor) {
   return mobilisation.toObject();
 }
 
-/** Approved → Completed — the terminal "placement has ended" state
- *  (Milestone 5). Releases the worker back to standby (Employee.coordinator
- *  → null) so any Coordinator can pick them up for a new Mobilisation.
- *  Unconditional clear is safe: assertNoActivePlacement above guarantees at
- *  most one Draft/PendingReview/Approved mobilisation exists per worker at a
- *  time, so this one's coordinator IS whatever Employee.coordinator
- *  currently holds (if anything — Admin/self-mobilised placements never set
- *  it in the first place, making this a harmless no-op for those). */
-export async function completeMobilisation(id, actor) {
-  const mobilisation = await Mobilisation.findById(id);
-  if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
-  if (mobilisation.status !== 'Approved') {
-    throw new ApiError(400, 'Only an Approved mobilisation can be marked complete.');
-  }
-  assertPrimaryOrAdmin(mobilisation, actor);
-
-  mobilisation.status = 'Completed';
-  await mobilisation.save();
-  await Employee.findByIdAndUpdate(mobilisation.worker, { coordinator: null });
-
-  await logAudit({
-    user: actor.userId,
-    action: 'mobilisation.complete',
-    targetType: 'Mobilisation',
-    targetId: mobilisation._id,
-    meta: { workerName: mobilisation.workerName },
-    ip: actor.ip,
-  });
-  return mobilisation.toObject();
-}
-
 /**
  * Visibility (M4): Admin sees everything. Everyone else sees a mobilisation
  * if ANY of —
@@ -515,11 +486,20 @@ export async function getMobilisation(id, actor) {
     pendingStatus: 'PendingReview',
     legacyAllowedRoles: ['Admin'],
   });
+
+  // Approved (or later, Completed) always has exactly one Deployment, born
+  // automatically at approval — surfaced here so the detail page can link
+  // straight to it instead of duplicating deployment state on this record.
+  if (['Approved', 'Completed'].includes(mobilisation.status)) {
+    const deployment = await Deployment.findOne({ mobilisation: id }).select('_id status').lean();
+    annotated.deployment = deployment ?? null;
+  }
   return annotated;
 }
 
 const DIRECT_FIELDS = [
   'jobTitle',
+  'site',
   'clientRate',
   'clientCommission',
   'fta',
@@ -915,6 +895,13 @@ async function approveMobilisation(id, decisionNote, actor) {
       { _id: id, currentStep: result.currentStep },
       { $set: { currentStepEnteredAt: new Date() } }
     );
+  }
+  // Final approval — the worker is now actually placed and working. Create
+  // the Deployment this mobilisation drives from here on (monthly client
+  // hours/OT, Release) — see deployment.service.js's
+  // createDeploymentFromMobilisation.
+  if (result.status === 'Approved') {
+    await createDeploymentFromMobilisation(result, actor);
   }
   return result;
 }

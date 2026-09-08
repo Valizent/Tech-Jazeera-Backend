@@ -41,7 +41,12 @@ const DEFAULT_ALLOWED_ROLES = {
   timesheetProcessor: [],
   nfc: [],
   clientsManage: ['Manager', 'Coordinator'],
-  deploymentsManage: ['Manager'],
+  // Office Secretary is a hardcoded exception INSIDE addMonthlyHours/
+  // updateMonthlyHours (deployment.service.js), same pattern as
+  // mobilisation.service.js's createMobilisation — not expressible here
+  // since Office Secretary is deliberately excluded from GRANTABLE_ROLES.
+  deploymentsHours: [],
+  deploymentsRelease: ['Coordinator', 'Manager'],
   subcontractorsManage: ['Manager'],
   attendanceManage: ['Manager', 'HR'],
   documentsManage: ['Manager', 'HR'],
@@ -74,7 +79,8 @@ const SECTION_LABELS = {
   timesheetProcessor: 'Timesheet Processor',
   nfc: 'NFC Customers',
   clientsManage: 'Clients — create/edit/decide',
-  deploymentsManage: 'Deployments — assign/transfer/end',
+  deploymentsHours: 'Deployments — enter monthly client hours & OT',
+  deploymentsRelease: 'Deployments — release a worker',
   subcontractorsManage: 'Subcontractors — create/edit/delete',
   attendanceManage: 'Attendance — bulk mark/adjust',
   documentsManage: 'Documents — upload/version/delete',
@@ -104,7 +110,8 @@ const SECTION_DESCRIPTIONS = {
   timesheetProcessor: 'Bulk-importing attendance-device exports.',
   nfc: 'The NFC business-card program — companies, cards, and batches.',
   clientsManage: 'Creating/editing a client, and deciding one a Coordinator submitted. Everyone can still read the list; deleting stays Admin/Manager only.',
-  deploymentsManage: 'Assigning, transferring, or ending a deployment. Everyone can still read the register.',
+  deploymentsHours: "Entering or correcting a month's actual client-timesheet hours and OT amount. Office Secretary always has this, regardless of this setting. Everyone can still read the register.",
+  deploymentsRelease: 'Releasing a worker off a deployment (ends it and frees them for a new mobilisation). Everyone can still read the register.',
   subcontractorsManage: 'Creating, editing, or deleting a subcontractor. Everyone can still read the list.',
   attendanceManage: 'Bulk-marking or adjusting attendance records. Everyone can still read/export the register.',
   documentsManage: 'Uploading, versioning, or deleting a document. Everyone can still read/download.',
