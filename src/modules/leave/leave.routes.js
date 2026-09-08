@@ -61,10 +61,11 @@ router.patch(
 // wide). An Executive (GM/COO) needs to see the queue, submit their own
 // request, and decide whatever step they're a real ApprovalRole member of —
 // the engine re-checks that membership itself.
-const canAccessLeaveRequests = requireSectionAccess('leaveRequests');
+const canReadLeaveRequests = requireSectionAccess('leaveRequests', 'read');
+const canWriteLeaveRequests = requireSectionAccess('leaveRequests', 'write');
 router.get(
   '/leave',
-  canAccessLeaveRequests,
+  canReadLeaveRequests,
   validate({ query: listLeaveRequestsSchema }),
   asyncHandler(leaveController.list)
 );
@@ -73,14 +74,14 @@ router.get(
 // Admin has no Employee record and gets a clear 400 from the controller.
 router.post(
   '/leave',
-  canAccessLeaveRequests,
+  canWriteLeaveRequests,
   uploadSingle,
   validate({ body: submitLeaveRequestSchema }),
   asyncHandler(leaveController.submit)
 );
 router.get(
   '/leave/:id/attachment',
-  canAccessLeaveRequests,
+  canReadLeaveRequests,
   validate({ params: leaveRequestIdParamSchema }),
   asyncHandler(leaveController.attachment)
 );
@@ -94,7 +95,7 @@ router.get(
 // anything on it.
 router.patch(
   '/leave/:id/decide',
-  canAccessLeaveRequests,
+  canWriteLeaveRequests,
   validate({ params: leaveRequestIdParamSchema, body: decideLeaveRequestSchema }),
   asyncHandler(leaveController.decide)
 );

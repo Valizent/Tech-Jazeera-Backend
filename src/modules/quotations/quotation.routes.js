@@ -1,10 +1,11 @@
 /**
  * Quotation routes.
  *
- * Roles: quotations are commercial documents. Read/PDF for any authenticated
- * user; create/update/duplicate is Section Access key 'quotationsManage',
- * default ['Manager','Accounts'] — matches today's circle exactly; delete
- * stays hardcoded Admin/Manager only, an extra safety rail.
+ * Roles: quotations are commercial documents. Read/PDF is Section Access key
+ * 'quotationsManage' at the 'read' level (default mirrors write — see
+ * sectionAccess.service.js); create/update/duplicate is the same key at
+ * 'write', default ['Manager','Accounts'] — matches today's circle exactly;
+ * delete stays hardcoded Admin/Manager only, an extra safety rail.
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
@@ -25,13 +26,15 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireStaff); // staff-only module; Workers use the ESS portal (P2-M2)
 
-const canWrite = requireSectionAccess('quotationsManage');
+const canRead = requireSectionAccess('quotationsManage', 'read');
+const canWrite = requireSectionAccess('quotationsManage', 'write');
 const canDelete = requireRoles('Admin', 'Manager');
 
-router.get('/', validate({ query: listQuotationsSchema }), asyncHandler(quotationController.list));
-router.get('/:id', validate({ params: quotationIdParamSchema }), asyncHandler(quotationController.get));
+router.get('/', canRead, validate({ query: listQuotationsSchema }), asyncHandler(quotationController.list));
+router.get('/:id', canRead, validate({ params: quotationIdParamSchema }), asyncHandler(quotationController.get));
 router.get(
   '/:id/pdf',
+  canRead,
   validate({ params: quotationIdParamSchema }),
   asyncHandler(quotationController.pdf)
 );

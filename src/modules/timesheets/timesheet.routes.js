@@ -31,24 +31,29 @@ import * as timesheetController from './timesheet.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireSectionAccess('timesheetRequests'));
 
-router.get('/', validate({ query: listTimesheetsSchema }), asyncHandler(timesheetController.list));
-router.post('/', validate({ body: submitTimesheetSchema }), asyncHandler(timesheetController.submit));
+const canRead = requireSectionAccess('timesheetRequests', 'read');
+const canWrite = requireSectionAccess('timesheetRequests', 'write');
+
+router.get('/', canRead, validate({ query: listTimesheetsSchema }), asyncHandler(timesheetController.list));
+router.post('/', canWrite, validate({ body: submitTimesheetSchema }), asyncHandler(timesheetController.submit));
 router.patch(
   '/:id/decide',
+  canWrite,
   validate({ params: timesheetIdParamSchema, body: decideTimesheetSchema }),
   asyncHandler(timesheetController.decide)
 );
 router.post(
   '/bulk-approve',
+  canWrite,
   validate({ body: bulkApproveTimesheetSchema }),
   asyncHandler(timesheetController.bulkApprove)
 );
-// Beyond the router-wide floor above, the controller itself checks "Admin
+// Beyond the read floor above, the controller itself checks "Admin
 // or a real Approval Role member" — see generateMonthlyReport's doc comment.
 router.post(
   '/monthly-report',
+  canRead,
   validate({ body: generateMonthlyReportSchema }),
   asyncHandler(timesheetController.generateMonthlyReport)
 );

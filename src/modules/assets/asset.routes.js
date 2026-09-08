@@ -2,8 +2,9 @@
  * Asset routes (P3-D). Staff-only module — a Worker's own assigned assets
  * are read through /api/me/assets instead (see the `me` module).
  *
- * Roles: create/update/status/assign/return is Section Access key
- * 'assetsManage', default ['Manager','HR'] — matches today's
+ * Roles: read is Section Access key 'assetsManage' at the 'read' level
+ * (default mirrors write). Create/update/status/assign/return is the same
+ * key at 'write', default ['Manager','HR'] — matches today's
  * Admin/Manager/HR circle exactly. Delete stays hardcoded Admin/HR only —
  * a stricter, pre-existing circle that excludes Manager, kept as an extra
  * safety rail on the single most destructive action.
@@ -31,17 +32,19 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireStaff);
 
-const canWrite = requireSectionAccess('assetsManage');
+const canRead = requireSectionAccess('assetsManage', 'read');
+const canWrite = requireSectionAccess('assetsManage', 'write');
 const canDelete = requireRoles('Admin', 'HR');
 
-router.get('/', validate({ query: listAssetsSchema }), asyncHandler(assetController.list));
+router.get('/', canRead, validate({ query: listAssetsSchema }), asyncHandler(assetController.list));
 // Before the /:id catch-all, or "by-employee" is read as an asset id.
 router.get(
   '/by-employee/:employeeId',
+  canRead,
   validate({ params: employeeIdParamSchema }),
   asyncHandler(assetController.listByEmployee)
 );
-router.get('/:id', validate({ params: assetIdParamSchema }), asyncHandler(assetController.get));
+router.get('/:id', canRead, validate({ params: assetIdParamSchema }), asyncHandler(assetController.get));
 router.post('/', canWrite, validate({ body: createAssetSchema }), asyncHandler(assetController.create));
 router.patch(
   '/:id',

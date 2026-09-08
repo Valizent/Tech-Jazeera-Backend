@@ -12,6 +12,7 @@
     "migrate:unify-employees": "node src/scripts/migrate-unify-employees.js",
     "migrate:rename-outsourced": "node src/scripts/migrate-rename-outsourced-employees.js",
     "migrate:mobilisation-phase4": "node src/scripts/migrate-mobilisation-phase4.js",
+    "migrate:section-access-tiers": "node src/scripts/migrate-section-access-tiers.js",
     "generate:vapid": "node src/scripts/generate-vapid-keys.js"
   },
   "engines": {

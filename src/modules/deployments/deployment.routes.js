@@ -8,11 +8,18 @@
  * Access grant (same pattern mobilisation.service.js's createMobilisation
  * uses — Office Secretary isn't a grantable Section Access role at all).
  *
- * Roles: everyone (staff or Office Secretary) may READ the register/history.
- * Monthly hours entry is gated inside the service (Office Secretary, or
- * Section Access key 'deploymentsHours'). Release is Section Access key
- * 'deploymentsRelease', default ['Coordinator', 'Manager'] — Office
- * Secretary never releases. Deployments have no create/edit route at all —
+ * Roles: READ (the register/history) is Section Access key
+ * 'deploymentsRelease' at the 'read' level (default mirrors write) — chosen
+ * as the canonical "can view this section" key since it's the more general
+ * of the two deployment keys; 'deploymentsHours' stays write-only, no
+ * separate read check of its own. Office Secretary is a hardcoded exception
+ * to this read gate too (same reasoning as the monthly-hours write bypass
+ * below — they need to find the deployment they're about to enter hours
+ * against). Monthly hours entry is gated inside the service (Office
+ * Secretary, or Section Access key 'deploymentsHours' at 'write'). Release
+ * is 'deploymentsRelease' at 'write', default ['Coordinator', 'Manager'] —
+ * Office Secretary never releases. Deployments have no create/edit route at
+ * all —
  * they're born automatically from an Approved Mobilisation (see
  * mobilisation.service.js's approveMobilisation) — EXCEPT for a TEMPORARY
  * Admin-only DELETE added for pre-production cleanup; remove it before
@@ -39,11 +46,20 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireStaffOrOfficeSecretary);
 
-const canRelease = requireSectionAccess('deploymentsRelease');
+const canRelease = requireSectionAccess('deploymentsRelease', 'write');
+const canReadDeploymentsGate = requireSectionAccess('deploymentsRelease', 'read');
+// Office Secretary is deny-by-default for Section Access entirely (see
+// canAccessSection's floor) — hardcoded through here too, same as the
+// write-side bypass in deployment.service.js's addMonthlyHours.
+const canReadDeployments = asyncHandler(async (req, res, next) => {
+  if (req.user.role === 'Office Secretary') return next();
+  return canReadDeploymentsGate(req, res, next);
+});
 
-router.get('/', validate({ query: listDeploymentsSchema }), asyncHandler(deploymentController.list));
+router.get('/', canReadDeployments, validate({ query: listDeploymentsSchema }), asyncHandler(deploymentController.list));
 router.get(
   '/:id',
+  canReadDeployments,
   validate({ params: deploymentIdParamSchema }),
   asyncHandler(deploymentController.get)
 );

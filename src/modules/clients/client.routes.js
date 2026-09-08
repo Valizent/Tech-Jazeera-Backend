@@ -1,9 +1,10 @@
 /**
  * Client routes.
  *
- * Role design: everyone authenticated may READ (accounts, managers all
- * need to look clients up). WRITE (create/update/decide) is Section Access
- * key 'clientsManage', default ['Manager','Coordinator'] — matches today's
+ * Role design: READ is Section Access key 'clientsManage' at the 'read'
+ * level (default mirrors the write circle below — see
+ * sectionAccess.service.js). WRITE (create/update/decide) is the same key
+ * at the 'write' level, default ['Manager','Coordinator'] — matches today's
  * create/update circle exactly; decide's floor widens from Admin/Manager to
  * also admit Coordinator by default, but client.service.js's own "must be
  * THIS coordinator's manager" check (decideClient) still gates the actual
@@ -34,10 +35,11 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireStaff); // staff-only module; Workers use the ESS portal (P2-M2)
 
-const canManageClients = requireSectionAccess('clientsManage');
+const canReadClients = requireSectionAccess('clientsManage', 'read');
+const canManageClients = requireSectionAccess('clientsManage', 'write');
 
-router.get('/', validate({ query: listClientsSchema }), asyncHandler(clientController.list));
-router.get('/:id', validate({ params: clientIdParamSchema }), asyncHandler(clientController.get));
+router.get('/', canReadClients, validate({ query: listClientsSchema }), asyncHandler(clientController.list));
+router.get('/:id', canReadClients, validate({ params: clientIdParamSchema }), asyncHandler(clientController.get));
 router.post(
   '/',
   canManageClients,

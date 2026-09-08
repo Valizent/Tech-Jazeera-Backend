@@ -1,13 +1,14 @@
 /**
  * Subcontractor routes.
  *
- * Role design: everyone staff may READ (Coordinators need it for the
- * mobilisation-create picker). WRITE/DELETE is Section Access key
- * 'subcontractorsManage', default ['Manager'] — matches today's
- * Admin/Manager circle exactly. Delete is folded into the same key rather
- * than kept separately hardcoded, since it was already the same tier as
- * create/update here (no stricter delete-only circle to preserve as an
- * extra safety rail) — same reasoning as EOSB's collapse.
+ * Role design: READ is Section Access key 'subcontractorsManage' at the
+ * 'read' level (default mirrors write — Coordinators need it for the
+ * mobilisation-create picker). WRITE/DELETE is the same key at 'write',
+ * default ['Manager'] — matches today's Admin/Manager circle exactly.
+ * Delete is folded into the same key rather than kept separately
+ * hardcoded, since it was already the same tier as create/update here (no
+ * stricter delete-only circle to preserve as an extra safety rail) — same
+ * reasoning as EOSB's collapse.
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
@@ -28,10 +29,11 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireStaff);
 
-const canWrite = requireSectionAccess('subcontractorsManage');
+const canRead = requireSectionAccess('subcontractorsManage', 'read');
+const canWrite = requireSectionAccess('subcontractorsManage', 'write');
 
-router.get('/', validate({ query: listSubcontractorsSchema }), asyncHandler(subcontractorController.list));
-router.get('/:id', validate({ params: subcontractorIdParamSchema }), asyncHandler(subcontractorController.get));
+router.get('/', canRead, validate({ query: listSubcontractorsSchema }), asyncHandler(subcontractorController.list));
+router.get('/:id', canRead, validate({ params: subcontractorIdParamSchema }), asyncHandler(subcontractorController.get));
 router.post(
   '/',
   canWrite,

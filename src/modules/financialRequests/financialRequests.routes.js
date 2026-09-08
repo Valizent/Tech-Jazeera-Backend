@@ -61,7 +61,7 @@ const router = Router();
 
 router.use(requireAuth);
 
-const canDecideFinancialRequests = requireSectionAccess('financialRequests');
+const canDecideFinancialRequests = requireSectionAccess('financialRequests', 'write');
 const canHandleMoney = requireRoles('Admin', 'Manager', 'HR', 'Accounts');
 
 router.get(

@@ -44,16 +44,20 @@ import * as certificateController from './certificate.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireSectionAccess('exitDocuments'));
 
-router.get('/exit-reentry', validate({ query: listExitReentrySchema }), asyncHandler(exitReentryController.list));
+const canRead = requireSectionAccess('exitDocuments', 'read');
+const canWrite = requireSectionAccess('exitDocuments', 'write');
+
+router.get('/exit-reentry', canRead, validate({ query: listExitReentrySchema }), asyncHandler(exitReentryController.list));
 router.post(
   '/exit-reentry',
+  canWrite,
   validate({ body: submitExitReentrySchema }),
   asyncHandler(exitReentryController.submit)
 );
 router.patch(
   '/exit-reentry/:id/decide',
+  canWrite,
   validate({ params: exitReentryIdParamSchema, body: decideExitReentrySchema }),
   asyncHandler(exitReentryController.decide)
 );
@@ -64,19 +68,22 @@ router.patch(
   asyncHandler(exitReentryController.markIssued)
 );
 
-router.get('/certificates', validate({ query: listCertificatesSchema }), asyncHandler(certificateController.list));
+router.get('/certificates', canRead, validate({ query: listCertificatesSchema }), asyncHandler(certificateController.list));
 router.post(
   '/certificates',
+  canWrite,
   validate({ body: submitCertificateSchema }),
   asyncHandler(certificateController.submit)
 );
 router.get(
   '/certificates/:id/pdf',
+  canRead,
   validate({ params: certificateIdParamSchema }),
   asyncHandler(certificateController.pdf)
 );
 router.patch(
   '/certificates/:id/decide',
+  canWrite,
   validate({ params: certificateIdParamSchema, body: decideCertificateSchema }),
   asyncHandler(certificateController.decide)
 );

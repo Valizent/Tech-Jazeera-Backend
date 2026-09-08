@@ -5,8 +5,10 @@
  * governs everything below except delete (Admin/Manager only, an extra
  * safety rail on the single most destructive action, same posture as
  * Quotations/Clients — see sectionAccess.model.js's design notes). Read
- * narrows from "any staff" to the 'invoices' circle now — a deliberate
- * change per the financial-document classification, not an oversight.
+ * ('read' level, both tiers starting identical) and create/record-payment
+ * ('write' level) both narrowed from "any staff" to the 'invoices' circle —
+ * a deliberate change per the financial-document classification, not an
+ * oversight.
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
@@ -25,16 +27,18 @@ import * as invoiceController from './invoice.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireSectionAccess('invoices'));
 
+const canRead = requireSectionAccess('invoices', 'read');
+const canWrite = requireSectionAccess('invoices', 'write');
 const canDelete = requireRoles('Admin', 'Manager');
 
-router.get('/', validate({ query: listInvoicesSchema }), asyncHandler(invoiceController.list));
-router.get('/:id', validate({ params: invoiceIdParamSchema }), asyncHandler(invoiceController.get));
-router.get('/:id/pdf', validate({ params: invoiceIdParamSchema }), asyncHandler(invoiceController.pdf));
-router.post('/', validate({ body: createInvoiceSchema }), asyncHandler(invoiceController.create));
+router.get('/', canRead, validate({ query: listInvoicesSchema }), asyncHandler(invoiceController.list));
+router.get('/:id', canRead, validate({ params: invoiceIdParamSchema }), asyncHandler(invoiceController.get));
+router.get('/:id/pdf', canRead, validate({ params: invoiceIdParamSchema }), asyncHandler(invoiceController.pdf));
+router.post('/', canWrite, validate({ body: createInvoiceSchema }), asyncHandler(invoiceController.create));
 router.post(
   '/:id/payments',
+  canWrite,
   validate({ params: invoiceIdParamSchema, body: recordPaymentSchema }),
   asyncHandler(invoiceController.recordPayment)
 );

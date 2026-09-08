@@ -1,8 +1,9 @@
 /**
- * SectionAccess service — see the model's doc comment for the mechanism.
- * `getSectionAccess`/`canAccessSection` never throw "not configured": a
- * section nobody has touched yet falls back to DEFAULT_ALLOWED_ROLES, the
- * same "found-or-created default" posture CompanySettings uses.
+ * SectionAccess service — see the model's doc comment for the two-tier
+ * (Read/Write) mechanism. `getSectionAccess`/`canAccessSection` never throw
+ * "not configured": a section nobody has touched yet falls back to
+ * DEFAULT_READ_ROLES/DEFAULT_WRITE_ROLES, the same "found-or-created
+ * default" posture CompanySettings uses.
  */
 import SectionAccess, { SECTION_KEYS } from './sectionAccess.model.js';
 import ApprovalRole from '../approvals/approvalRole.model.js';
@@ -16,12 +17,25 @@ import { logAudit } from '../audit/audit.service.js';
  *  touched both Payroll and Expenses) while Manager/HR no longer get in by
  *  default now that this is admin-configurable per section. `employeeCreate`
  *  defaults to nobody but Admin — "until then only admin can add employees,"
- *  the user's own words when asking for this. */
-const DEFAULT_ALLOWED_ROLES = {
+ *  the user's own words when asking for this.
+ *
+ * These are the WRITE-tier defaults — for the vast majority of sections
+ * this is also the READ-tier default (see DEFAULT_READ_ROLES below), since
+ * before the Read/Write split, viewing the underlying list was either
+ * already wide open to any staff (most sections — mirroring Write here is a
+ * real new restriction, applied deliberately per the user's explicit
+ * instruction) or already gated by this exact same value (Payroll,
+ * Expenses, Invoices, EOSB, NFC, Company Settings, Timesheet Processor,
+ * Audit Log, Leave/Timesheet/Exit-Documents requests — mirroring here
+ * changes nothing on day one for those). */
+const DEFAULT_WRITE_ROLES = {
   payroll: ['Accounts'],
   expenses: ['Accounts'],
   employeeCreate: [],
   companySettings: ['Manager'],
+  // No write action is tied to this key at all — Mobilisation's real write
+  // path is the separate mobilisationsSelfMobilise key below. See the
+  // model's doc comment.
   mobilisationsViewer: [],
   mobilisationsSelfMobilise: ['Coordinator'],
   invoices: ['Manager', 'Accounts'],
@@ -41,10 +55,8 @@ const DEFAULT_ALLOWED_ROLES = {
   timesheetProcessor: [],
   nfc: [],
   clientsManage: ['Manager', 'Coordinator'],
-  // Office Secretary is a hardcoded exception INSIDE addMonthlyHours/
-  // updateMonthlyHours (deployment.service.js), same pattern as
-  // mobilisation.service.js's createMobilisation — not expressible here
-  // since Office Secretary is deliberately excluded from GRANTABLE_ROLES.
+  // Real write action is entering monthly hours (Office Secretary is a
+  // hardcoded bypass on top of this — see deployment.service.js).
   deploymentsHours: [],
   deploymentsRelease: ['Coordinator', 'Manager'],
   subcontractorsManage: ['Manager'],
@@ -53,22 +65,31 @@ const DEFAULT_ALLOWED_ROLES = {
   assetsManage: ['Manager', 'HR'],
   quotationsManage: ['Manager', 'Accounts'],
   ramadanManage: ['Manager', 'HR'],
-  team: ['Manager', 'HR'],
+  // No write action is tied to this key — a staff login's own edit/reset/
+  // delete is a permanently hardcoded Admin-only rail (user.routes.js),
+  // deliberately never delegable via Section Access at all.
+  team: [],
   approvalHierarchy: [],
-  // M7 (optional zero-regression floor migration): these three routers were
-  // already uniformly gated by requireStaffOrExecutive for EVERY action
-  // (list/submit/decide, no per-route carve-out needed, unlike
-  // financialRequests above) — so the default here matches that floor's
-  // full reach exactly, changing nothing until an Admin narrows it.
   leaveRequests: ['Manager', 'HR', 'Accounts', 'Coordinator', 'Executive'],
   timesheetRequests: ['Manager', 'HR', 'Accounts', 'Coordinator', 'Executive'],
   exitDocuments: ['Manager', 'HR', 'Accounts', 'Coordinator', 'Executive'],
 };
 
+/** READ-tier defaults. Mirrors DEFAULT_WRITE_ROLES for every section EXCEPT
+ *  the two whose single pre-split grant already meant "can view", not
+ *  "can write" — `mobilisationsViewer` and `team` keep their real
+ *  historical default here rather than inheriting an empty write default
+ *  that was never about reading in the first place. */
+const DEFAULT_READ_ROLES = {
+  ...DEFAULT_WRITE_ROLES,
+  mobilisationsViewer: [],
+  team: ['Manager', 'HR'],
+};
+
 const SECTION_LABELS = {
   payroll: 'Payroll',
   expenses: 'Expenses',
-  employeeCreate: 'Adding employees',
+  employeeCreate: 'Employees — view & add',
   companySettings: 'Company Settings',
   mobilisationsViewer: 'Mobilisations — full visibility',
   mobilisationsSelfMobilise: 'Mobilisations — self-mobilise',
@@ -78,55 +99,59 @@ const SECTION_LABELS = {
   auditLog: 'Security Log',
   timesheetProcessor: 'Timesheet Processor',
   nfc: 'NFC Customers',
-  clientsManage: 'Clients — create/edit/decide',
-  deploymentsHours: 'Deployments — enter monthly client hours & OT',
-  deploymentsRelease: 'Deployments — release a worker',
-  subcontractorsManage: 'Subcontractors — create/edit/delete',
-  attendanceManage: 'Attendance — bulk mark/adjust',
-  documentsManage: 'Documents — upload/version/delete',
-  assetsManage: 'Assets — create/edit/assign',
-  quotationsManage: 'Quotations — create/edit',
-  ramadanManage: 'Ramadan Periods — create/edit',
-  team: 'Team — view staff logins',
-  approvalHierarchy: 'Approval Hierarchy — edit roles & workflows',
-  leaveRequests: 'Leave requests — review queue',
-  timesheetRequests: 'Timesheet requests — review queue',
-  exitDocuments: 'Exit & Documents — review queue',
+  clientsManage: 'Clients',
+  deploymentsHours: 'Deployments — monthly hours & OT',
+  deploymentsRelease: 'Deployments — view & release',
+  subcontractorsManage: 'Subcontractors',
+  attendanceManage: 'Attendance',
+  documentsManage: 'Documents',
+  assetsManage: 'Assets',
+  quotationsManage: 'Quotations',
+  ramadanManage: 'Ramadan Periods',
+  team: 'Team — staff logins',
+  approvalHierarchy: 'Approval Hierarchy',
+  leaveRequests: 'Leave requests',
+  timesheetRequests: 'Timesheet requests',
+  exitDocuments: 'Exit & Documents',
 };
 
 const SECTION_DESCRIPTIONS = {
-  payroll: 'Monthly runs, payslips, and finalizing a period.',
-  expenses: 'Recording and managing the company expense ledger.',
-  employeeCreate: 'Creating a new employee record — Admin only until you grant someone else this specifically.',
-  companySettings: "Editing the company's legal/contact/bank identity and logo — printed on every generated document.",
-  mobilisationsViewer:
-    'Read-only access to every mobilisation once submitted (not while still a Draft), including commercial fields.',
-  mobilisationsSelfMobilise:
-    'Can create a mobilisation directly as its own primary coordinator. Coordinator logins are granted this by default, but it can be changed here.',
-  invoices: 'Viewing and creating invoices, and recording payments against them. Deleting one stays Admin/Manager only.',
-  eosb: 'Computing and viewing End of Service settlements.',
-  financialRequests: 'Deciding a salary advance or reimbursement request. Viewing the queue and submitting a request stay open to any staff role, unchanged.',
-  auditLog: 'The auth & CRUD audit trail — who did what, and when.',
-  timesheetProcessor: 'Bulk-importing attendance-device exports.',
-  nfc: 'The NFC business-card program — companies, cards, and batches.',
-  clientsManage: 'Creating/editing a client, and deciding one a Coordinator submitted. Everyone can still read the list; deleting stays Admin/Manager only.',
-  deploymentsHours: "Entering or correcting a month's actual client-timesheet hours and OT amount. Office Secretary always has this, regardless of this setting. Everyone can still read the register.",
-  deploymentsRelease: 'Releasing a worker off a deployment (ends it and frees them for a new mobilisation). Everyone can still read the register.',
-  subcontractorsManage: 'Creating, editing, or deleting a subcontractor. Everyone can still read the list.',
-  attendanceManage: 'Bulk-marking or adjusting attendance records. Everyone can still read/export the register.',
-  documentsManage: 'Uploading, versioning, or deleting a document. Everyone can still read/download.',
-  assetsManage: 'Creating, editing, assigning or returning an asset. Everyone can still read the register; deleting stays Admin/HR only.',
-  quotationsManage: 'Creating, editing, or duplicating a quotation. Everyone can still read/PDF; deleting stays Admin/Manager only.',
-  ramadanManage: 'Creating, editing, or deleting a Ramadan overtime period. Everyone can still read the list.',
-  team: 'Viewing the staff login list. Editing a login, resetting its password, or deleting it stays Admin only — too sensitive to delegate broadly.',
-  approvalHierarchy: 'Creating or editing an approval role or workflow. Everyone can still read the list — many pages depend on it.',
-  leaveRequests: 'Viewing, submitting, and deciding leave requests. Optional — matches the existing wide-open default until narrowed.',
-  timesheetRequests: 'Viewing, submitting, deciding, and bulk-approving timesheets. Optional — matches the existing wide-open default until narrowed.',
-  exitDocuments: 'Viewing, submitting, and deciding exit re-entry visa and certificate requests. Optional — matches the existing wide-open default until narrowed.',
+  payroll: 'Read: view monthly runs and payslips. Write: create a run, edit a line, finalize, or delete.',
+  expenses: 'Read: view the expense ledger. Write: record, edit, or delete an expense.',
+  employeeCreate: 'Read: view the employee list and profiles. Write: create a new employee record — Admin only until you grant someone else this specifically.',
+  companySettings: "Read/Write: viewing and editing the company's legal/contact/bank identity and logo — printed on every generated document.",
+  mobilisationsViewer: 'Read-only access to every mobilisation once submitted (not while still a Draft), including commercial fields. No write action is tied to this key.',
+  mobilisationsSelfMobilise: 'Write-only: can create a mobilisation directly as its own primary coordinator. Coordinator logins are granted this by default. Viewing a mobilisation is governed separately (coordinator, or the Mobilisations — full visibility key above).',
+  invoices: 'Read: view invoices. Write: create an invoice or record a payment. Deleting one stays Admin/Manager only regardless.',
+  eosb: 'Read: view End of Service settlements. Write: compute/create or delete one.',
+  financialRequests: 'Read/Write: deciding a salary advance or reimbursement request. Viewing the queue and submitting a request stay open to any staff role, unchanged — this key only governs the decide action.',
+  auditLog: 'Read-only: the auth & CRUD audit trail — who did what, and when. There is no write action.',
+  timesheetProcessor: 'Read/Write: bulk-importing attendance-device exports (a stateless tool — no separate viewing exists beyond running it).',
+  nfc: 'Read: view companies, cards, and batches. Write: create, edit, assign, or delete them.',
+  clientsManage: 'Read: view the client list. Write: create/edit a client, and decide one a Coordinator submitted. Deleting stays Admin/Manager only regardless.',
+  deploymentsHours: 'Write-only: entering or correcting a month\'s actual client-timesheet hours and OT amount. Office Secretary always has this, regardless of this setting. Viewing the register is governed by "Deployments — view & release" below.',
+  deploymentsRelease: 'Read: view the deployments register. Write: release a worker (ends the deployment and frees them for a new mobilisation).',
+  subcontractorsManage: 'Read: view the subcontractor list. Write: create, edit, or delete one.',
+  attendanceManage: 'Read: view/export attendance records. Write: bulk-mark or adjust a record.',
+  documentsManage: 'Read: view/download documents. Write: upload, version, or delete one.',
+  assetsManage: 'Read: view the asset register. Write: create, edit, assign, or return an asset. Deleting stays Admin/HR only regardless.',
+  quotationsManage: 'Read: view/PDF a quotation. Write: create, edit, or duplicate one. Deleting stays Admin/Manager only regardless.',
+  ramadanManage: 'Read: view the Ramadan calendar. Write: create, edit, or delete a period.',
+  team: 'Read-only: viewing the staff login list. Editing a login, resetting its password, or deleting it stays Admin only — too sensitive to delegate broadly; there is no write tier for this key.',
+  approvalHierarchy: 'Read: view approval roles/workflows (many pages already depend on this being readable — narrowing it can break those). Write: create or edit an approval role or workflow.',
+  leaveRequests: 'Read/Write: viewing, submitting, and deciding leave requests. Optional — matches the existing wide-open default until narrowed.',
+  timesheetRequests: 'Read/Write: viewing, submitting, deciding, and bulk-approving timesheets. Optional — matches the existing wide-open default until narrowed.',
+  exitDocuments: 'Read/Write: viewing, submitting, and deciding exit re-entry visa and certificate requests. Optional — matches the existing wide-open default until narrowed.',
 };
 
 function defaultFor(sectionKey) {
-  return { sectionKey, allowedRoles: DEFAULT_ALLOWED_ROLES[sectionKey] ?? [], allowedApprovalRoles: [] };
+  return {
+    sectionKey,
+    readRoles: DEFAULT_READ_ROLES[sectionKey] ?? [],
+    readApprovalRoles: [],
+    writeRoles: DEFAULT_WRITE_ROLES[sectionKey] ?? [],
+    writeApprovalRoles: [],
+  };
 }
 
 export async function getSectionAccess(sectionKey) {
@@ -137,7 +162,10 @@ export async function getSectionAccess(sectionKey) {
 /** Every governed section's current settings, populated for the admin UI —
  *  always returns one row per SECTION_KEYS entry, defaulted ones included. */
 export async function listSectionAccess() {
-  const docs = await SectionAccess.find({}).populate('allowedApprovalRoles', 'name').lean();
+  const docs = await SectionAccess.find({})
+    .populate('readApprovalRoles', 'name')
+    .populate('writeApprovalRoles', 'name')
+    .lean();
   const bySectionKey = new Map(docs.map((d) => [d.sectionKey, d]));
   return SECTION_KEYS.map((key) => ({
     ...(bySectionKey.get(key) ?? defaultFor(key)),
@@ -153,31 +181,60 @@ export async function listSectionAccess() {
  * requireStaffOrExecutive enforce everywhere else; this mechanism only ever
  * ADDS access on top of it, never bypasses it. Admin always passes beyond
  * that floor (so an Admin can never configure themselves out of a section
- * they built). Beyond both: a literal role match in `allowedRoles`, or real
- * ApprovalRole membership in `allowedApprovalRoles` — same membership check
- * the Configurable Approval Hierarchy engine uses. Shared by
- * requireSectionAccess (the route gate) and the "mine" endpoint (a button's
- * "should I even show this" check) so the floor only lives in one place.
+ * they built).
+ *
+ * `level` picks the tier: `'write'` (default) checks only the write grant;
+ * `'read'` checks the write grant too (write always implies read — a write
+ * grantee never needs to be listed in both places) OR the read grant.
+ * Shared by requireSectionAccess (the route gate) and the "mine" endpoint
+ * (a button's "should I even show this" check) so the floor only lives in
+ * one place.
  */
-export async function canAccessSection(sectionKey, actor) {
+export async function canAccessSection(sectionKey, actor, level = 'write') {
   if (!STAFF_ROLES.includes(actor.role) && actor.role !== 'Executive') return false;
   if (actor.role === 'Admin') return true;
   const settings = await getSectionAccess(sectionKey);
-  if (settings.allowedRoles.includes(actor.role)) return true;
-  if (settings.allowedApprovalRoles.length) {
-    return isMemberOfAnyRole(actor.userId, settings.allowedApprovalRoles);
-  }
-  return false;
+
+  const hasWrite =
+    settings.writeRoles.includes(actor.role) ||
+    (settings.writeApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.writeApprovalRoles)));
+  if (hasWrite) return true;
+  if (level !== 'read') return false;
+
+  return (
+    settings.readRoles.includes(actor.role) ||
+    (settings.readApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.readApprovalRoles)))
+  );
 }
 
+/** Every section this actor can at least read, and the (smaller) subset
+ *  they can write to — for `user.sectionAccess` (read, drives nav
+ *  visibility) and `user.sectionAccessWrite` (write, drives action
+ *  buttons) in the login/refresh response. One DB read per section
+ *  regardless of tier count — Admin short-circuits without touching the
+ *  database at all, same as canAccessSection does per-call. */
 export async function getMySectionAccess(actor) {
-  const allowed = [];
+  if (!STAFF_ROLES.includes(actor.role) && actor.role !== 'Executive') return { read: [], write: [] };
+  if (actor.role === 'Admin') return { read: [...SECTION_KEYS], write: [...SECTION_KEYS] };
+
+  const read = [];
+  const write = [];
   for (const key of SECTION_KEYS) {
-    if (await canAccessSection(key, actor)) {
-      allowed.push(key);
+    const settings = await getSectionAccess(key);
+    const hasWrite =
+      settings.writeRoles.includes(actor.role) ||
+      (settings.writeApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.writeApprovalRoles)));
+    if (hasWrite) {
+      write.push(key);
+      read.push(key);
+      continue;
     }
+    const hasRead =
+      settings.readRoles.includes(actor.role) ||
+      (settings.readApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.readApprovalRoles)));
+    if (hasRead) read.push(key);
   }
-  return allowed;
+  return { read, write };
 }
 
 async function assertValidApprovalRoles(roleIds) {
@@ -190,16 +247,18 @@ async function assertValidApprovalRoles(roleIds) {
 
 /** Admin-only (enforced by the route) — deciding who else can open a
  *  section is not itself delegable to whoever that grant creates. */
-export async function updateSectionAccess(sectionKey, { allowedRoles, allowedApprovalRoles }, actor) {
+export async function updateSectionAccess(sectionKey, { readRoles, readApprovalRoles, writeRoles, writeApprovalRoles }, actor) {
   if (!SECTION_KEYS.includes(sectionKey)) throw new ApiError(404, 'Unknown section.');
-  await assertValidApprovalRoles(allowedApprovalRoles);
+  await assertValidApprovalRoles(readApprovalRoles);
+  await assertValidApprovalRoles(writeApprovalRoles);
 
   const settings = await SectionAccess.findOneAndUpdate(
     { sectionKey },
-    { sectionKey, allowedRoles, allowedApprovalRoles },
+    { sectionKey, readRoles, readApprovalRoles, writeRoles, writeApprovalRoles },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   )
-    .populate('allowedApprovalRoles', 'name')
+    .populate('readApprovalRoles', 'name')
+    .populate('writeApprovalRoles', 'name')
     .lean();
 
   await logAudit({
@@ -207,7 +266,13 @@ export async function updateSectionAccess(sectionKey, { allowedRoles, allowedApp
     action: 'sectionAccess.update',
     targetType: 'SectionAccess',
     targetId: settings._id,
-    meta: { sectionKey, allowedRoles, approvalRoleCount: allowedApprovalRoles?.length ?? 0 },
+    meta: {
+      sectionKey,
+      readRoles,
+      writeRoles,
+      readApprovalRoleCount: readApprovalRoles?.length ?? 0,
+      writeApprovalRoleCount: writeApprovalRoles?.length ?? 0,
+    },
     ip: actor.ip,
   });
   return { ...settings, label: SECTION_LABELS[sectionKey], description: SECTION_DESCRIPTIONS[sectionKey] };

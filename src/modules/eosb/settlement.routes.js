@@ -21,12 +21,14 @@ import * as settlementController from './settlement.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireSectionAccess('eosb'));
 
-router.get('/', validate({ query: listSettlementsSchema }), asyncHandler(settlementController.list));
-router.get('/:id', validate({ params: settlementIdParamSchema }), asyncHandler(settlementController.get));
-router.get('/:id/pdf', validate({ params: settlementIdParamSchema }), asyncHandler(settlementController.pdf));
-router.post('/', validate({ body: createSettlementSchema }), asyncHandler(settlementController.create));
-router.delete('/:id', validate({ params: settlementIdParamSchema }), asyncHandler(settlementController.remove));
+const canRead = requireSectionAccess('eosb', 'read');
+const canWrite = requireSectionAccess('eosb', 'write');
+
+router.get('/', canRead, validate({ query: listSettlementsSchema }), asyncHandler(settlementController.list));
+router.get('/:id', canRead, validate({ params: settlementIdParamSchema }), asyncHandler(settlementController.get));
+router.get('/:id/pdf', canRead, validate({ params: settlementIdParamSchema }), asyncHandler(settlementController.pdf));
+router.post('/', canWrite, validate({ body: createSettlementSchema }), asyncHandler(settlementController.create));
+router.delete('/:id', canWrite, validate({ params: settlementIdParamSchema }), asyncHandler(settlementController.remove));
 
 export default router;

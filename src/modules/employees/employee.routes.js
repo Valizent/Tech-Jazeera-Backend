@@ -1,18 +1,22 @@
 /**
  * Employee routes.
  *
- * Role design: every authenticated staff role may READ (the whole company
- * runs on looking employees up); WRITE is Admin/Manager/HR (the people who
- * own workforce data); DELETE is Admin/HR only — it destroys history, so the
+ * Role design: READ (list/get) is the generic, admin-configurable Section
+ * Access mechanism (see sectionAccess.model.js), sectionKey 'employeeCreate'
+ * at the 'read' level — its default mirrors the CREATE default below (an
+ * explicit, deliberate choice: this key's write default is empty/Admin-only
+ * by design, and Read now mirrors that exactly too, so reading the employee
+ * register also starts Admin-only until an Admin grants Read to whoever
+ * needs it). WRITE (update) is Admin/Manager/HR (the people who own
+ * workforce data); DELETE is Admin/HR only — it destroys history, so the
  * circle is smaller. Status 'Exited' is the everyday alternative to delete.
  *
- * CREATE is the generic, admin-configurable Section Access mechanism (see
- * sectionAccess.model.js), sectionKey 'employeeCreate' — by default nobody
- * but Admin can add an employee ("until then only admin can add employees,"
- * the user's own words). An Admin designates a real "office secretary"
- * person (any role — the whole point is it doesn't have to be a fixed role)
- * by putting them in an ApprovalRole and granting that role
- * 'employeeCreate' access from the Section Access page. Coordinator's old
+ * CREATE is 'employeeCreate' at the 'write' level — by default nobody but
+ * Admin can add an employee ("until then only admin can add employees," the
+ * user's own words). An Admin designates a real "office secretary" person
+ * (any role — the whole point is it doesn't have to be a fixed role) by
+ * putting them in an ApprovalRole and granting that role 'employeeCreate'
+ * write access from the Section Access page. Coordinator's old
  * self-team-creation override in employee.service.js still exists and still
  * works, but is dormant unless an Admin explicitly re-grants 'Coordinator'
  * that access — it's no longer a blanket default.
@@ -41,15 +45,18 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireStaff);
 
-router.get('/', validate({ query: listEmployeesSchema }), asyncHandler(employeeController.list));
+const canReadEmployees = requireSectionAccess('employeeCreate', 'read');
+
+router.get('/', canReadEmployees, validate({ query: listEmployeesSchema }), asyncHandler(employeeController.list));
 router.get(
   '/:id',
+  canReadEmployees,
   validate({ params: employeeIdParamSchema }),
   asyncHandler(employeeController.get)
 );
 router.post(
   '/',
-  requireSectionAccess('employeeCreate'),
+  requireSectionAccess('employeeCreate', 'write'),
   validate({ body: createEmployeeSchema }),
   asyncHandler(employeeController.create)
 );

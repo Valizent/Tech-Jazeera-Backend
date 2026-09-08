@@ -1,20 +1,31 @@
 /**
  * SectionAccess — the generic "who else can open this section" mechanism,
- * one document per section key. Extracted from the same pattern
- * CompanySettings.manageRoles and MobilisationSettings.viewerRoles each
- * built independently for their own one module — this is that pattern made
- * reusable, so a THIRD module (Payroll/Expenses, and any future one) doesn't
- * grow its own bespoke copy again.
+ * one document per section key, with TWO independent tiers: Read (can view)
+ * and Write (can create/edit/decide/delete — and always implies Read, so a
+ * Write grantee never needs to be listed twice). Extracted from the same
+ * pattern CompanySettings.manageRoles and MobilisationSettings.viewerRoles
+ * each built independently for their own one module — this is that pattern
+ * made reusable, so a THIRD module (Payroll/Expenses, and any future one)
+ * doesn't grow its own bespoke copy again.
  *
- * `allowedRoles` are literal User.role values (e.g. 'Accounts') — for a
- * grant tied to the fixed login-role enum. `allowedApprovalRoles` are
- * ApprovalRole ids (e.g. an admin-named "Financial Manager" or "COO" role) —
- * for a grant tied to a real person regardless of their login role, the same
- * indirection Company Settings/Mobilisation Settings already use. A section
- * with no document yet (nobody has configured it) falls back to a
- * hardcoded per-section default in sectionAccess.service.js — never an empty
- * "nobody but Admin" surprise for a section that already had a sensible
- * owner before this system existed.
+ * `writeRoles`/`readRoles` are literal User.role values (e.g. 'Accounts') —
+ * for a grant tied to the fixed login-role enum. `writeApprovalRoles`/
+ * `readApprovalRoles` are ApprovalRole ids (e.g. an admin-named "Financial
+ * Manager" or "COO" role) — for a grant tied to a real person regardless of
+ * their login role, the same indirection Company Settings/Mobilisation
+ * Settings already use. A section with no document yet (nobody has
+ * configured it) falls back to a hardcoded per-section default in
+ * sectionAccess.service.js — never an empty "nobody but Admin" surprise for
+ * a section that already had a sensible owner before this system existed.
+ *
+ * Not every section has a real "write" action tied to this key (e.g.
+ * `mobilisationsViewer` is pure-read by design — Mobilisation's actual write
+ * path is the separate `mobilisationsSelfMobilise` key; `team`'s real write
+ * is a permanently hardcoded Admin-only rail, not this key at all) — for
+ * those, `writeRoles`/`writeApprovalRoles` simply stay empty and nothing
+ * ever checks them. See sectionAccess.service.js's canAccessSection for how
+ * the two tiers are checked, and docs/SECTION-ACCESS-notes.md for the
+ * per-section categorization behind the migration that introduced this.
  */
 import mongoose from 'mongoose';
 import { ROLES } from '../auth/user.model.js';
@@ -65,8 +76,10 @@ export const GRANTABLE_ROLES = ROLES.filter((role) => !['Worker', 'Staff', 'Offi
 const sectionAccessSchema = new mongoose.Schema(
   {
     sectionKey: { type: String, enum: SECTION_KEYS, required: true, unique: true },
-    allowedRoles: { type: [{ type: String, enum: GRANTABLE_ROLES }], default: [] },
-    allowedApprovalRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
+    readRoles: { type: [{ type: String, enum: GRANTABLE_ROLES }], default: [] },
+    readApprovalRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
+    writeRoles: { type: [{ type: String, enum: GRANTABLE_ROLES }], default: [] },
+    writeApprovalRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
   },
   { timestamps: true }
 );

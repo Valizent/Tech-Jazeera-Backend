@@ -222,13 +222,16 @@ async function myRoleIds(userId) {
  *  getMobilisation has no such list lying around, so it falls through to
  *  isMemberOfAnyRole's single indexed lookup instead. */
 async function isMobilisationViewer(actor, precomputedRoleIds) {
+  // 'mobilisationsViewer' is a pure-read key (see sectionAccess.model.js's
+  // doc comment) — its grant lives in readRoles/readApprovalRoles, never
+  // writeRoles/writeApprovalRoles (which stay permanently empty for it).
   const settings = await getSectionAccess('mobilisationsViewer');
-  if (settings.allowedRoles.includes(actor.role)) return true;
-  if (!settings.allowedApprovalRoles.length) return false;
+  if (settings.readRoles.includes(actor.role)) return true;
+  if (!settings.readApprovalRoles.length) return false;
   if (precomputedRoleIds) {
-    return precomputedRoleIds.some((r) => settings.allowedApprovalRoles.some((v) => v.toString() === r.toString()));
+    return precomputedRoleIds.some((r) => settings.readApprovalRoles.some((v) => v.toString() === r.toString()));
   }
-  return isMemberOfAnyRole(actor.userId, settings.allowedApprovalRoles);
+  return isMemberOfAnyRole(actor.userId, settings.readApprovalRoles);
 }
 
 /**

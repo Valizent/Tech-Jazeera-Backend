@@ -13,6 +13,8 @@ export const sectionKeyParamSchema = z.object({
 });
 
 export const updateSectionAccessSchema = z.object({
-  allowedRoles: z.array(z.enum(GRANTABLE_ROLES)).max(GRANTABLE_ROLES.length),
-  allowedApprovalRoles: z.array(approvalRoleId).max(50),
+  readRoles: z.array(z.enum(GRANTABLE_ROLES)).max(GRANTABLE_ROLES.length),
+  readApprovalRoles: z.array(approvalRoleId).max(50),
+  writeRoles: z.array(z.enum(GRANTABLE_ROLES)).max(GRANTABLE_ROLES.length),
+  writeApprovalRoles: z.array(approvalRoleId).max(50),
 });

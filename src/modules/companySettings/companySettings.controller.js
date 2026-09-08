@@ -13,13 +13,18 @@ import * as companySettingsService from './companySettings.service.js';
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
 
 async function assertCanManage(req) {
-  const allowed = await canAccessSection('companySettings', actor(req));
+  const allowed = await canAccessSection('companySettings', actor(req), 'write');
   if (!allowed) throw new ApiError(403, 'You do not have permission to manage company settings.');
 }
 
-/** GET /api/company-settings   (Section Access: companySettings) */
+async function assertCanRead(req) {
+  const allowed = await canAccessSection('companySettings', actor(req), 'read');
+  if (!allowed) throw new ApiError(403, 'You do not have permission to view company settings.');
+}
+
+/** GET /api/company-settings   (Section Access: companySettings, read) */
 export async function get(req, res) {
-  await assertCanManage(req);
+  await assertCanRead(req);
   const settings = await companySettingsService.getCompanySettings();
   res.json(new ApiResponse('Company settings.', settings));
 }

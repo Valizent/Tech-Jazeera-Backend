@@ -5,9 +5,12 @@
  * smallest, most sensitive circle in the app; update/reset-password/delete
  * stay hardcoded Admin-only, deliberately not moved onto Section Access.
  * LIST (to pick a Coordinator, or an Employee's manager, in a picker) is
- * Section Access key 'team', default ['Manager','HR'] — matches today's
- * circle exactly. Creation lives on the employees module (every login
- * starts from an Employee record) — see employee.routes.js's POST /:id/user.
+ * Section Access key 'team' at the 'read' level, default ['Manager','HR']
+ * — matches today's circle exactly. This key has no write tier at all
+ * (its write default is permanently empty — see sectionAccess.service.js) —
+ * account management staying hardcoded-Admin-only above is exactly why.
+ * Creation lives on the employees module (every login starts from an
+ * Employee record) — see employee.routes.js's POST /:id/user.
  * Every route is staff-only by definition (it manages staff accounts), so
  * requireStaff isn't needed on top of the explicit roles.
  */
@@ -26,7 +29,7 @@ router.use(requireAuth);
 
 router.get(
   '/',
-  requireSectionAccess('team'),
+  requireSectionAccess('team', 'read'),
   validate({ query: listStaffUsersSchema }),
   asyncHandler(userController.list)
 );

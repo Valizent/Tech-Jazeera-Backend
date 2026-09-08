@@ -1,12 +1,12 @@
 /**
  * Document routes.
  *
- * Roles: read/preview/download for any authenticated user (internal tool).
- * Upload/versioning/delete is Section Access key 'documentsManage', default
- * ['Manager','HR'] — matches today's Admin/Manager/HR circle exactly (there
- * was never a stricter delete-only tier here to preserve separately, so
- * delete folds into the same key rather than staying hardcoded — same
- * reasoning as EOSB/Subcontractors).
+ * Roles: read/preview/download is Section Access key 'documentsManage' at
+ * the 'read' level (default mirrors write). Upload/versioning/delete is the
+ * same key at 'write', default ['Manager','HR'] — matches today's
+ * Admin/Manager/HR circle exactly (there was never a stricter delete-only
+ * tier here to preserve separately, so delete folds into the same key
+ * rather than staying hardcoded — same reasoning as EOSB/Subcontractors).
  *
  * Upload flow order: uploadSingle (Multer streams the file to Cloudinary) →
  * validate the multipart text fields → controller. If validation or the
@@ -34,17 +34,20 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireStaff); // staff-only module; Workers use the ESS portal (P2-M2)
 
-const canWrite = requireSectionAccess('documentsManage');
+const canRead = requireSectionAccess('documentsManage', 'read');
+const canWrite = requireSectionAccess('documentsManage', 'write');
 const canDelete = canWrite;
 
-router.get('/', validate({ query: listDocumentsSchema }), asyncHandler(documentController.list));
+router.get('/', canRead, validate({ query: listDocumentsSchema }), asyncHandler(documentController.list));
 router.get(
   '/:id',
+  canRead,
   validate({ params: documentIdParamSchema }),
   asyncHandler(documentController.get)
 );
 router.get(
   '/:id/file',
+  canRead,
   validate({ params: documentIdParamSchema, query: fileQuerySchema }),
   asyncHandler(documentController.file)
 );
