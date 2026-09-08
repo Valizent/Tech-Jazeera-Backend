@@ -26,6 +26,12 @@ export async function suggestions(req, res) {
   res.json(new ApiResponse('Suggestions.', values));
 }
 
+/** GET /api/mobilisations/lookup-by-iqama?iqamaNumber=... — 200 → data: worker snapshot | null */
+export async function lookupByIqama(req, res) {
+  const worker = await mobilisationService.lookupWorkerByIqama(req.query.iqamaNumber);
+  res.json(new ApiResponse(worker ? 'Worker found.' : 'No previous mobilisation for this Iqama.', worker));
+}
+
 /** GET /api/mobilisations — 200 → data: { items, total, page, pages } */
 export async function list(req, res) {
   const data = await mobilisationService.listMobilisations(req.query, actor(req));

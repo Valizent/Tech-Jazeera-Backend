@@ -259,6 +259,33 @@ export async function getFieldSuggestions(field) {
   return values.sort((a, b) => a.localeCompare(b)).slice(0, 100);
 }
 
+/**
+ * "Is this worker already known?" — a SupplierEmployee/Freelancer has no
+ * Employee record, so their only durable identity is their Iqama number.
+ * Once someone's been mobilised before (any status, any coordinator — this
+ * is company-wide recognition, not scoped to "my own"), their most recent
+ * mobilisation's own identity snapshot IS their current known details —
+ * deliberately not a separate "known workers" collection to keep in sync:
+ * Mobilisation's own history already holds this, and a later edit/decision
+ * naturally becomes the new "most recent" via createdAt. Returns null when
+ * nobody by this Iqama has ever been mobilised.
+ */
+export async function lookupWorkerByIqama(iqamaNumber) {
+  const found = await Mobilisation.findOne({ iqamaNumber, workerType: { $ne: 'Employee' } })
+    .sort({ createdAt: -1 })
+    .select('workerName nationality phone workerType subcontractor subcontractorName')
+    .lean();
+  if (!found) return null;
+  return {
+    workerName: found.workerName,
+    nationality: found.nationality,
+    phone: found.phone,
+    workerType: found.workerType,
+    subcontractor: found.subcontractor,
+    subcontractorName: found.subcontractorName,
+  };
+}
+
 /** A worker may have at most one ACTIVE placement at a time — Draft/
  *  PendingReview/Approved all count; Rejected/Completed don't (a rejected
  *  one is dead until resubmitted, a completed one has already released the

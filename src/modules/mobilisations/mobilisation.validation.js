@@ -18,6 +18,16 @@ const id = (label) => z.string().regex(/^[a-f0-9]{24}$/i, `Invalid ${label} id.`
 const optionalNonNegNumber = z.preprocess(emptyToUndef, z.coerce.number().min(0).optional());
 const optionalDate = z.preprocess(emptyToUndef, z.coerce.date().optional());
 
+// Saudi Iqama numbers are exactly 10 digits. Only meaningful for a
+// SupplierEmployee/Freelancer mobilisation (Employee-type gets this from
+// the linked Employee's own record instead — unvalidated there, since that
+// snapshot isn't user-typed here).
+const iqamaRegex = /^\d{10}$/;
+const optionalIqama = z.preprocess(
+  emptyToUndef,
+  z.string().trim().regex(iqamaRegex, 'Iqama number must be exactly 10 digits.').optional()
+);
+
 // Saudi mobile only (this company operates in Saudi Arabia) — local
 // 05XXXXXXXX (10 digits) or international +9665XXXXXXXX/9665XXXXXXXX (966 +
 // 9 digits starting with 5). Scoped to Mobilisation's own phone field only —
@@ -41,7 +51,7 @@ const mobilisationFields = {
   // withWorkerTypeRefine below, not here, since Employee-type mobilisations
   // get these from the snapshot instead.
   workerName: optionalStr(150),
-  iqamaNumber: optionalStr(50),
+  iqamaNumber: optionalIqama,
   nationality: optionalStr(80),
   phone: optionalSaudiPhone,
   jobTitle: z.string().trim().min(1, 'Job title is required.').max(150),
@@ -132,12 +142,20 @@ export const exportMobilisationsSchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
-/** GET /mobilisations/suggestions?field=... — free-typed fields only:
- *  worker-identity (SupplierEmployee/Freelancer have no Employee record to
- *  pick from, so these are typed directly — see mobilisation.model.js) plus
- *  `site`, which is never validated against a picklist either. */
+/** GET /mobilisations/suggestions?field=... — `site` only now: worker
+ *  identity (name/Iqama) is recognized by the Iqama lookup instead (see
+ *  lookupWorkerByIqama), and nationality always used the CountrySelect
+ *  picker, never this. */
 export const mobilisationSuggestionQuerySchema = z.object({
-  field: z.enum(['workerName', 'iqamaNumber', 'nationality', 'site']),
+  field: z.enum(['site']),
+});
+
+/** GET /mobilisations/lookup-by-iqama?iqamaNumber=... — a SupplierEmployee/
+ *  Freelancer worker has no Employee record, so this is how "he's been
+ *  mobilised before" is recognized: full 10-digit Iqama only, no partial
+ *  lookups. */
+export const mobilisationIqamaLookupQuerySchema = z.object({
+  iqamaNumber: z.string().trim().regex(iqamaRegex, 'Iqama number must be exactly 10 digits.'),
 });
 
 export const mobilisationCoordinatorParamSchema = z.object({

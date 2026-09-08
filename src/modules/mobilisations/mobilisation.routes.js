@@ -28,6 +28,7 @@ import {
   mobilisationDocumentCategorySchema,
   mobilisationDocumentParamSchema,
   mobilisationSuggestionQuerySchema,
+  mobilisationIqamaLookupQuerySchema,
 } from './mobilisation.validation.js';
 import * as mobilisationController from './mobilisation.controller.js';
 
@@ -43,6 +44,11 @@ router.get(
   '/suggestions',
   validate({ query: mobilisationSuggestionQuerySchema }),
   asyncHandler(mobilisationController.suggestions)
+);
+router.get(
+  '/lookup-by-iqama',
+  validate({ query: mobilisationIqamaLookupQuerySchema }),
+  asyncHandler(mobilisationController.lookupByIqama)
 );
 router.get(
   '/export',
