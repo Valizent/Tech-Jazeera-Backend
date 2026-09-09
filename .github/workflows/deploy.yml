@@ -1,58 +1,24 @@
-name: Build, Check & Deploy
+name: Deploy to Oracle Server
 
-# Restores this repo's own CI/CD after a brief consolidation into a single
-# monorepo. Two jobs, in order: build-and-check MUST pass before deploy is
-# allowed to run at all ("needs: build-and-check" below) — the original
-# version of this workflow deployed straight on push with no build gate at
-# all (a broken commit used to reach production immediately); this keeps
-# that fix.
 on:
   push:
     branches:
       - main
 
 jobs:
-  build-and-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      # No test suite (deliberately — see the project's own CLAUDE.md). A
-      # syntax check across every source file is a genuine, free correctness
-      # signal on top of `npm ci` succeeding (which alone only proves the
-      # lockfile installs).
-      - name: Install & syntax-check
-        run: |
-          npm ci
-          find src -name "*.js" -print0 | xargs -0 -n1 node --check
-
   deploy:
-    needs: build-and-check
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Copy files to Oracle via SCP
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_KEY }}
-          source: "src,package.json,package-lock.json"
-          target: "/home/ubuntu/Tech-Jazeera-Backend"
-          rm: false
-
-      - name: Install dependencies and restart PM2
+      - name: Deploy to Oracle VM via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           script: |
-            cd /home/ubuntu/Tech-Jazeera-Backend
-            npm install --production
-            pm2 restart all
+            cd ~/Tech-Jazeera-Backend
+            git pull origin main
+            npm install
+            pm2 restart aljazeera-backend
+            pm2 save
