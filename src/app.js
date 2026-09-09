@@ -104,6 +104,12 @@ app.use('/api/nfc', nfcRoutes);
 // P2-M2: staff-account management, leave (types + requests), and the
 // self-service "me" surface a Worker's ESS portal runs on.
 app.use('/api/users', userRoutes);
+// Mounted BEFORE leaveRoutes deliberately: leaveRoutes sits at the bare
+// '/api' prefix with its own unconditional requireAuth (see its doc
+// comment), which would otherwise intercept company-settings' one public
+// route (GET /branding) before it's ever reached — see
+// companySettings.routes.js's own doc comment on that route.
+app.use('/api/company-settings', companySettingsRoutes);
 app.use('/api', leaveRoutes); // owns /api/leave-types and /api/leave
 app.use('/api/holidays', holidayRoutes);
 app.use('/api/ramadan-periods', ramadanPeriodRoutes);
@@ -120,7 +126,6 @@ app.use('/api/me', meRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/staff-attendance', staffAttendanceRoutes);
 app.use('/api/approvals', approvalsRoutes);
-app.use('/api/company-settings', companySettingsRoutes);
 app.use('/api/subcontractors', subcontractorRoutes);
 app.use('/api/job-titles', jobTitleRoutes);
 app.use('/api/mobilisations', mobilisationRoutes);

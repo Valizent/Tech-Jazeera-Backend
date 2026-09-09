@@ -29,6 +29,15 @@ export async function get(req, res) {
   res.json(new ApiResponse('Company settings.', settings));
 }
 
+/** GET /api/company-settings/branding — public, no auth, no Section Access
+ *  check (see companySettings.routes.js and the service function's own doc
+ *  comment): just the logo/name the app shell needs to brand itself,
+ *  everywhere from the pre-login screen to the ESS portal. */
+export async function getBranding(req, res) {
+  const branding = await companySettingsService.getCompanyBranding();
+  res.json(new ApiResponse('Company branding.', branding));
+}
+
 /** PATCH /api/company-settings   (Section Access: companySettings) */
 export async function update(req, res) {
   await assertCanManage(req);

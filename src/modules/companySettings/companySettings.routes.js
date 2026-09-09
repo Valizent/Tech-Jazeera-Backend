@@ -19,6 +19,18 @@ import * as companySettingsController from './companySettings.controller.js';
 
 const router = Router();
 
+// Public — no requireAuth, no Section Access check. Needs to reach the
+// pre-login screen and the ESS Worker portal (requireStaff below would
+// otherwise exclude Workers from ever seeing their own company's branding).
+// See the controller/service doc comments for why just these two fields
+// are safe to expose without a permission check. This router must also be
+// mounted in app.js BEFORE `app.use('/api', leaveRoutes)` — that router is
+// mounted at the bare '/api' prefix with its own unconditional
+// `router.use(requireAuth)`, which otherwise intercepts (and 401s) any
+// '/api/*' request that falls through to it, including this one, before it
+// ever reaches this module's own mount further down.
+router.get('/branding', asyncHandler(companySettingsController.getBranding));
+
 router.use(requireAuth, requireStaff);
 
 router.get('/', asyncHandler(companySettingsController.get));

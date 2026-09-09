@@ -30,6 +30,21 @@ export async function getCompanySettings() {
   return settings ?? EMPTY;
 }
 
+/**
+ * Just the two fields the app shell needs to brand itself (sidebar/login
+ * logo + name) — deliberately excludes everything else on the document
+ * (CR/VAT numbers, bank IBAN, signatory), and deliberately has no access
+ * check at the controller/route level (see companySettings.routes.js):
+ * this has to reach the pre-login screen and the ESS Worker portal, neither
+ * of which can pass the 'companySettings' Section Access check the full
+ * record requires. A logo/name isn't sensitive the way those other fields
+ * are (same reasoning as `logoUrl` itself, see the model's doc comment).
+ */
+export async function getCompanyBranding() {
+  const settings = await CompanySettings.findOne().select('companyName logoUrl').lean();
+  return { companyName: settings?.companyName ?? null, logoUrl: settings?.logoUrl ?? null };
+}
+
 // Edit access (who besides Admin may view/change this) is governed by
 // Section Access's 'companySettings' key now — see
 // sectionAccess.service.js's canAccessSection, called directly from
