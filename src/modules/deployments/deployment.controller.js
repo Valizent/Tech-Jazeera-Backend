@@ -30,6 +30,12 @@ export async function updateMonthlyHours(req, res) {
   res.json(new ApiResponse('Monthly hours updated.', deployment));
 }
 
+/** PATCH /api/deployments/:id/monthly-hours/:entryId/decide — 200 → data: deployment */
+export async function decideMonthlyHours(req, res) {
+  const deployment = await deploymentService.decideMonthlyHours(req.params.id, req.params.entryId, req.body, actor(req));
+  res.json(new ApiResponse('Decision recorded.', deployment));
+}
+
 /** POST /api/deployments/:id/release — 200 → data: null (worker released to standby) */
 export async function release(req, res) {
   await deploymentService.releaseDeployment(req.params.id, req.body, actor(req));

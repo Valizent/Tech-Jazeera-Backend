@@ -48,6 +48,7 @@ export const SECTION_KEYS = [
   'nfc',
   'clientsManage',
   'deploymentsHours',
+  'deploymentsHoursDecide',
   'deploymentsRelease',
   'subcontractorsManage',
   'attendanceManage',

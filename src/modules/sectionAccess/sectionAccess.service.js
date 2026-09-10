@@ -58,6 +58,10 @@ const DEFAULT_WRITE_ROLES = {
   // Real write action is entering monthly hours (Office Secretary is a
   // hardcoded bypass on top of this — see deployment.service.js).
   deploymentsHours: [],
+  // Deciding (Approve/Reject) an entered month — a brand-new key, deny-by-
+  // default until an Admin grants it (typically to a "Marketing Manager"
+  // ApprovalRole), same posture as employeeCreate's own introduction.
+  deploymentsHoursDecide: [],
   deploymentsRelease: ['Coordinator', 'Manager'],
   subcontractorsManage: ['Manager'],
   attendanceManage: ['Manager', 'HR'],
@@ -101,6 +105,7 @@ const SECTION_LABELS = {
   nfc: 'NFC Customers',
   clientsManage: 'Clients',
   deploymentsHours: 'Deployments — monthly hours & OT',
+  deploymentsHoursDecide: 'Deployments — approve monthly hours',
   deploymentsRelease: 'Deployments — view & release',
   subcontractorsManage: 'Subcontractors',
   attendanceManage: 'Attendance',
@@ -130,6 +135,7 @@ const SECTION_DESCRIPTIONS = {
   nfc: 'Read: view companies, cards, and batches. Write: create, edit, assign, or delete them.',
   clientsManage: 'Read: view the client list. Write: create/edit a client, and decide one a Coordinator submitted. Deleting stays Admin/Manager only regardless.',
   deploymentsHours: 'Write-only: entering or correcting a month\'s actual client-timesheet hours and OT amount. Office Secretary always has this, regardless of this setting. Viewing the register is governed by "Deployments — view & release" below.',
+  deploymentsHoursDecide: 'Write-only: approving or rejecting a month\'s entered hours (e.g. Marketing Manager). Separate from "Deployments — monthly hours & OT" above — whoever enters hours is never automatically who approves them. Admin only until granted.',
   deploymentsRelease: 'Read: view the deployments register. Write: release a worker (ends the deployment and frees them for a new mobilisation).',
   subcontractorsManage: 'Read: view the subcontractor list. Write: create, edit, or delete one.',
   attendanceManage: 'Read: view/export attendance records. Write: bulk-mark or adjust a record.',

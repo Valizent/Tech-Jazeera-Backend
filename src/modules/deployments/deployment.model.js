@@ -33,6 +33,7 @@
 import mongoose from 'mongoose';
 
 export const DEPLOYMENT_SHIFTS = ['Day', 'Night', 'Rotating'];
+export const MONTHLY_HOURS_STATUSES = ['Pending', 'Approved', 'Rejected'];
 export const DEPLOYMENT_STATUSES = ['Active', 'Ended'];
 /** Why an Active deployment was ended. Release is the only real way a
  *  Deployment ends now — no more direct Transfer (moving to a different
@@ -44,7 +45,19 @@ export const WORKER_TYPES = ['Employee', 'SupplierEmployee', 'Freelancer'];
 /** One calendar month's actual client-timesheet hours, entered once the
  *  month has fully ended. `contractHours` is snapshotted at entry time from
  *  the deployment's own `requiredTimesheetHours` — a stable point-in-time
- *  reference even if that figure is ever revisited later. */
+ *  reference even if that figure is ever revisited later.
+ *
+ *  Single-level Approve/Reject (Marketing Manager, via the new
+ *  'deploymentsHoursDecide' Section Access key — see
+ *  deployment.service.js's decideMonthlyHours) — not the full Configurable
+ *  Approval Hierarchy engine, since this is one embedded array entry on a
+ *  Deployment, not a top-level document the engine's workflow/steps/
+ *  currentStep shape assumes. Same judgment call as Financial Requests'
+ *  own single-level decide. A Pending or Rejected entry stays editable by
+ *  whoever entered it; editing a Rejected entry resets it back to Pending
+ *  (an implicit resubmit — see updateMonthlyHours). Once Approved, it's
+ *  locked — matches the "approved financial data doesn't drift" posture
+ *  Invoice/Quotation line items already follow. */
 const monthlyHoursSchema = new mongoose.Schema(
   {
     month: { type: String, required: true, match: /^\d{4}-(0[1-9]|1[0-2])$/ }, // 'YYYY-MM'
@@ -55,6 +68,10 @@ const monthlyHoursSchema = new mongoose.Schema(
     notes: { type: String, trim: true, maxlength: 500 },
     enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     enteredAt: { type: Date, default: Date.now },
+    status: { type: String, enum: MONTHLY_HOURS_STATUSES, default: 'Pending' },
+    decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    decidedAt: { type: Date, default: null },
+    decisionNote: { type: String, trim: true, maxlength: 500, default: null },
   },
   { timestamps: true }
 );

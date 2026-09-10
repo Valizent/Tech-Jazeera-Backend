@@ -6,6 +6,8 @@
 import { z } from 'zod';
 import { DEPLOYMENT_STATUSES } from './deployment.model.js';
 
+const DECISIONS = ['Approved', 'Rejected'];
+
 const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id.');
 const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
 const optionalStr = (max) => z.preprocess(emptyToUndef, z.string().trim().max(max).optional());
@@ -39,6 +41,12 @@ export const updateMonthlyHoursSchema = z.object({
   actualHours: z.coerce.number().min(0, 'Actual hours cannot be negative.'),
   otAmount: z.preprocess(emptyToUndef, z.coerce.number().min(0).optional()),
   notes: optionalStr(500),
+});
+
+/** Approve/Reject a Pending monthly-hours entry. */
+export const decideMonthlyHoursSchema = z.object({
+  decision: z.enum(DECISIONS, { error: 'Choose Approved or Rejected.' }),
+  note: optionalStr(500),
 });
 
 export const releaseDeploymentSchema = z.object({

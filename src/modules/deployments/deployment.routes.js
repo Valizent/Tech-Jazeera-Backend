@@ -16,7 +16,14 @@
  * to this read gate too (same reasoning as the monthly-hours write bypass
  * below — they need to find the deployment they're about to enter hours
  * against). Monthly hours entry is gated inside the service (Office
- * Secretary, or Section Access key 'deploymentsHours' at 'write'). Release
+ * Secretary, or Section Access key 'deploymentsHours' at 'write'). Deciding
+ * an entered month (Approve/Reject) is a SEPARATE key, 'deploymentsHoursDecide'
+ * at 'write' — deliberately not the same key as entry, so whoever enters
+ * hours (Office Secretary) is never automatically who approves them; no
+ * Office Secretary bypass here, gated at the route like Release below.
+ * Defaults to Admin-only until an Admin grants it (e.g. to a "Marketing
+ * Manager" ApprovalRole) — same "nobody but Admin until configured"
+ * posture every newly-introduced Section Access key gets. Release
  * is 'deploymentsRelease' at 'write', default ['Coordinator', 'Manager'] —
  * Office Secretary never releases. Deployments have no create/edit route at
  * all —
@@ -37,6 +44,7 @@ import {
   monthlyHoursEntryParamSchema,
   addMonthlyHoursSchema,
   updateMonthlyHoursSchema,
+  decideMonthlyHoursSchema,
   releaseDeploymentSchema,
 } from './deployment.validation.js';
 import * as deploymentController from './deployment.controller.js';
@@ -47,6 +55,7 @@ router.use(requireAuth);
 router.use(requireStaffOrOfficeSecretary);
 
 const canRelease = requireSectionAccess('deploymentsRelease', 'write');
+const canDecideHours = requireSectionAccess('deploymentsHoursDecide', 'write');
 const canReadDeploymentsGate = requireSectionAccess('deploymentsRelease', 'read');
 // Office Secretary is deny-by-default for Section Access entirely (see
 // canAccessSection's floor) — hardcoded through here too, same as the
@@ -72,6 +81,12 @@ router.patch(
   '/:id/monthly-hours/:entryId',
   validate({ params: monthlyHoursEntryParamSchema, body: updateMonthlyHoursSchema }),
   asyncHandler(deploymentController.updateMonthlyHours)
+);
+router.patch(
+  '/:id/monthly-hours/:entryId/decide',
+  canDecideHours,
+  validate({ params: monthlyHoursEntryParamSchema, body: decideMonthlyHoursSchema }),
+  asyncHandler(deploymentController.decideMonthlyHours)
 );
 router.post(
   '/:id/release',

@@ -18,14 +18,34 @@ import mongoose from 'mongoose';
 import Deployment from './deployment.model.js';
 import Employee from '../employees/employee.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
+import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
-import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
+import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
+import { membersOfRoles } from '../approvals/approvalEngine.service.js';
+import { notifyUser } from '../notifications/notification.service.js';
 
 function currentMonthStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
+/** Every user who can decide a monthly-hours entry right now — the
+ *  'deploymentsHoursDecide' Section Access grant's literal roles plus
+ *  whoever's a member of any granted ApprovalRole (e.g. "Marketing
+ *  Manager"). Used only to notify; the actual decide endpoint re-checks
+ *  authority itself via canAccessSection, so a notification going to
+ *  someone whose grant changed a moment later is a harmless staleness, not
+ *  a security gap. */
+async function decidersOfDeploymentsHours() {
+  const settings = await getSectionAccess('deploymentsHoursDecide');
+  const roleUsers = settings.writeRoles.length
+    ? await User.find({ role: { $in: settings.writeRoles }, isActive: true }).select('_id').lean()
+    : [];
+  const approvalRoleUserIds = await membersOfRoles(settings.writeApprovalRoles);
+  const ids = new Set([...roleUsers.map((u) => u._id.toString()), ...approvalRoleUserIds]);
+  return [...ids];
+}
+
 function monthStrOf(date) {
   const d = new Date(date);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -135,6 +155,17 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     meta: { month: data.month, actualHours: data.actualHours, otHours, otAmount: data.otAmount ?? 0 },
     ip: actor.ip,
   });
+
+  const deciderIds = await decidersOfDeploymentsHours();
+  await Promise.all(
+    deciderIds.map((userId) =>
+      notifyUser(userId, {
+        type: 'RequestStatus',
+        title: `${data.month} hours for ${deployment.workerName} need your review`,
+        url: `/deployments/${deployment._id}`,
+      })
+    )
+  );
   return deployment.toObject();
 }
 
@@ -149,6 +180,10 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
   const entry = deployment.monthlyHours.id(entryId);
   if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
+  if (entry.status === 'Approved') {
+    throw new ApiError(400, 'This month is already approved and can no longer be edited.');
+  }
+  const wasRejected = entry.status === 'Rejected';
 
   entry.actualHours = data.actualHours;
   entry.otHours = Math.max(0, data.actualHours - entry.contractHours);
@@ -156,6 +191,13 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   entry.notes = data.notes;
   entry.enteredBy = actor.userId;
   entry.enteredAt = new Date();
+  // Editing a Rejected entry is an implicit resubmit — back to Pending,
+  // decision cleared, so it reappears for the decider rather than sitting
+  // rejected forever.
+  entry.status = 'Pending';
+  entry.decidedBy = null;
+  entry.decidedAt = null;
+  entry.decisionNote = null;
   await deployment.save();
 
   await logAudit({
@@ -165,6 +207,66 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
     targetId: deployment._id,
     meta: { month: entry.month, actualHours: data.actualHours, otHours: entry.otHours, otAmount: entry.otAmount },
     ip: actor.ip,
+  });
+
+  // Only a genuine resubmit (was Rejected) re-notifies the decider — a
+  // routine edit of an already-Pending entry doesn't need to ping anyone
+  // again, they already have it in their queue.
+  if (wasRejected) {
+    const deciderIds = await decidersOfDeploymentsHours();
+    await Promise.all(
+      deciderIds.map((userId) =>
+        notifyUser(userId, {
+          type: 'RequestStatus',
+          title: `${entry.month} hours for ${deployment.workerName} resubmitted for review`,
+          url: `/deployments/${deployment._id}`,
+        })
+      )
+    );
+  }
+  return deployment.toObject();
+}
+
+/** Approve or Reject one month's entry — the review half of the flow
+ *  above. Authority is checked entirely at the route (canDecideHours in
+ *  deployment.routes.js, no Office-Secretary-style bypass needed here) —
+ *  same posture as releaseDeployment below, not re-checked here. Only a
+ *  Pending entry can be decided (an Approved one is locked; a Rejected one
+ *  must go back to Pending via updateMonthlyHours first — re-deciding it
+ *  directly would bypass the enterer ever seeing/fixing whatever was
+ *  wrong). Notifies whoever entered it either way. */
+export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
+  const deployment = await Deployment.findById(deploymentId);
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  const entry = deployment.monthlyHours.id(entryId);
+  if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
+  if (entry.status !== 'Pending') {
+    throw new ApiError(400, 'Only a pending entry can be decided.');
+  }
+
+  entry.status = data.decision;
+  entry.decidedBy = actor.userId;
+  entry.decidedAt = new Date();
+  entry.decisionNote = data.note || null;
+  await deployment.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'deployment.monthlyHours.decide',
+    targetType: 'Deployment',
+    targetId: deployment._id,
+    meta: { month: entry.month, decision: data.decision },
+    ip: actor.ip,
+  });
+
+  await notifyUser(entry.enteredBy.toString(), {
+    type: 'RequestStatus',
+    title:
+      data.decision === 'Approved'
+        ? `${entry.month} hours for ${deployment.workerName} approved`
+        : `${entry.month} hours for ${deployment.workerName} rejected`,
+    body: data.note || undefined,
+    url: `/deployments/${deployment._id}`,
   });
   return deployment.toObject();
 }
