@@ -51,6 +51,17 @@ function monthStrOf(date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+/** Real day count for a 'YYYY-MM' string (28-31) — day 0 of the FOLLOWING
+ *  month is the last day of THIS one, the standard JS Date trick. */
+function daysInMonth(monthStr) {
+  const [y, m] = monthStr.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
+}
+
+function sum(numbers) {
+  return numbers.reduce((total, n) => total + n, 0);
+}
+
 /**
  * Called once by mobilisation.service.js's approveMobilisation, the moment a
  * mobilisation reaches its terminal 'Approved' state — never a route of its
@@ -133,13 +144,19 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   if (deployment.monthlyHours.some((m) => m.month === data.month)) {
     throw new ApiError(409, 'Hours for this month have already been entered — edit that entry instead.');
   }
+  const expectedDays = daysInMonth(data.month);
+  if (data.dailyHours.length !== expectedDays) {
+    throw new ApiError(400, `${data.month} has ${expectedDays} days — enter hours for each one.`);
+  }
 
   const contractHours = deployment.requiredTimesheetHours ?? 0;
-  const otHours = Math.max(0, data.actualHours - contractHours);
+  const actualHours = sum(data.dailyHours);
+  const otHours = Math.max(0, actualHours - contractHours);
   deployment.monthlyHours.push({
     month: data.month,
     contractHours,
-    actualHours: data.actualHours,
+    dailyHours: data.dailyHours,
+    actualHours,
     otHours,
     otAmount: data.otAmount ?? 0,
     notes: data.notes,
@@ -152,7 +169,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     action: 'deployment.monthlyHours.add',
     targetType: 'Deployment',
     targetId: deployment._id,
-    meta: { month: data.month, actualHours: data.actualHours, otHours, otAmount: data.otAmount ?? 0 },
+    meta: { month: data.month, actualHours, otHours, otAmount: data.otAmount ?? 0 },
     ip: actor.ip,
   });
 
@@ -169,43 +186,78 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   return deployment.toObject();
 }
 
-/** Correct an already-entered month (actualHours/otAmount/notes) — recomputes
- *  otHours from the same snapshot contractHours. Same access circle as adding. */
+/**
+ * Correct an already-entered month (actualHours/otAmount/notes) — recomputes
+ * otHours from the same snapshot contractHours.
+ *
+ * Two different editors, two different rules:
+ *  - The enterer (Office Secretary, or 'deploymentsHours' write) can edit a
+ *    Pending or Rejected entry, same as before — never an Approved one.
+ *    Editing a Rejected entry is an implicit resubmit (back to Pending,
+ *    decision cleared) so it reappears for the decider.
+ *  - Whoever can DECIDE ('deploymentsHoursDecide' write — e.g. Marketing
+ *    Manager) may also correct an Approved entry directly — added
+ *    2026-09-12, the user's own explicit ask ("the manager can still make
+ *    changes, just log the changes"): once someone has final authority over
+ *    a number, forcing them through reject→re-enter→re-approve to fix their
+ *    own mistake is friction with no real integrity benefit. Status stays
+ *    Approved (they're the approver correcting themselves, not someone
+ *    else's work needing a fresh look) — but every such edit is logged with
+ *    the full before/after (see the audit entry below), so "what changed
+ *    and who changed it" is always answerable.
+ */
 export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   const isOfficeSecretary = actor.role === 'Office Secretary';
-  const allowed = isOfficeSecretary || (await canAccessSection('deploymentsHours', actor));
-  if (!allowed) throw new ApiError(403, 'You do not have permission to edit monthly hours.');
+  const isEnterer = isOfficeSecretary || (await canAccessSection('deploymentsHours', actor));
+  const isDecider = await canAccessSection('deploymentsHoursDecide', actor);
+  if (!isEnterer && !isDecider) throw new ApiError(403, 'You do not have permission to edit monthly hours.');
 
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
   const entry = deployment.monthlyHours.id(entryId);
   if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
-  if (entry.status === 'Approved') {
+  if (entry.status === 'Approved' && !isDecider) {
     throw new ApiError(400, 'This month is already approved and can no longer be edited.');
   }
+  const expectedDays = daysInMonth(entry.month);
+  if (data.dailyHours.length !== expectedDays) {
+    throw new ApiError(400, `${entry.month} has ${expectedDays} days — enter hours for each one.`);
+  }
   const wasRejected = entry.status === 'Rejected';
+  const wasApproved = entry.status === 'Approved';
+  const before = { actualHours: entry.actualHours, otAmount: entry.otAmount, notes: entry.notes };
+  const previousEnteredBy = entry.enteredBy.toString();
 
-  entry.actualHours = data.actualHours;
-  entry.otHours = Math.max(0, data.actualHours - entry.contractHours);
+  const actualHours = sum(data.dailyHours);
+  entry.dailyHours = data.dailyHours;
+  entry.actualHours = actualHours;
+  entry.otHours = Math.max(0, actualHours - entry.contractHours);
   entry.otAmount = data.otAmount ?? 0;
   entry.notes = data.notes;
   entry.enteredBy = actor.userId;
   entry.enteredAt = new Date();
   // Editing a Rejected entry is an implicit resubmit — back to Pending,
   // decision cleared, so it reappears for the decider rather than sitting
-  // rejected forever.
-  entry.status = 'Pending';
-  entry.decidedBy = null;
-  entry.decidedAt = null;
-  entry.decisionNote = null;
+  // rejected forever. An Approved entry stays Approved (see doc comment).
+  if (wasRejected) {
+    entry.status = 'Pending';
+    entry.decidedBy = null;
+    entry.decidedAt = null;
+    entry.decisionNote = null;
+  }
   await deployment.save();
 
   await logAudit({
     user: actor.userId,
-    action: 'deployment.monthlyHours.update',
+    action: wasApproved ? 'deployment.monthlyHours.correctApproved' : 'deployment.monthlyHours.update',
     targetType: 'Deployment',
     targetId: deployment._id,
-    meta: { month: entry.month, actualHours: data.actualHours, otHours: entry.otHours, otAmount: entry.otAmount },
+    meta: {
+      month: entry.month,
+      before,
+      after: { actualHours: entry.actualHours, otAmount: entry.otAmount, notes: entry.notes },
+      otHours: entry.otHours,
+    },
     ip: actor.ip,
   });
 
@@ -223,6 +275,17 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
         })
       )
     );
+  }
+  // A post-approval correction is the one other case worth a proactive
+  // notification — the original enterer should know an already-approved
+  // figure they submitted was changed, even though it needs no action from
+  // them (unlike self-correcting their own entry, silently, below).
+  if (wasApproved && previousEnteredBy !== actor.userId) {
+    await notifyUser(previousEnteredBy, {
+      type: 'RequestStatus',
+      title: `${entry.month} hours for ${deployment.workerName} were corrected after approval`,
+      url: `/deployments/${deployment._id}`,
+    });
   }
   return deployment.toObject();
 }
@@ -351,12 +414,65 @@ export async function listDeployments({ page, limit, worker, client, status, sor
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
-export async function getDeployment(id) {
+/**
+ * Real profit for one already-entered month — same shape as Mobilisation's
+ * own computeProfitFields (server/src/modules/mobilisations/
+ * mobilisation.service.js), just applied recurringly per real month instead
+ * of once at commercial-details time. Deployment has no rate fields of its
+ * own (see the model's doc comment — identity/commercial context lives on
+ * the source Mobilisation), so the caller must pass the populated one.
+ * Never stored — recomputed on every read, matching this app's "recompute
+ * financials server-side, always" rule (see money()'s sibling in
+ * mobilisation.service.js).
+ */
+function money(n) {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+function computeMonthlyProfit(entry, mobilisation) {
+  if (!mobilisation) return null;
+  const isSupplier = mobilisation.workerType === 'SupplierEmployee';
+  const clientSide = (mobilisation.clientRate ?? 0) - (mobilisation.clientCommission ?? 0);
+  const subSide = isSupplier ? (mobilisation.subcontractorRate ?? 0) + (mobilisation.subcontractorCommission ?? 0) : 0;
+  const profitPerHour = clientSide - subSide;
+
+  const otClientSide = (mobilisation.otClientRate ?? 0) - (mobilisation.otClientCommission ?? 0);
+  const otSubSide = isSupplier
+    ? (mobilisation.otSubcontractorRate ?? 0) + (mobilisation.otSubcontractorCommission ?? 0)
+    : 0;
+  const otProfitPerHour = otClientSide - otSubSide;
+  const otProfitTotal = money(otProfitPerHour * entry.otHours);
+
+  return money(profitPerHour * entry.contractHours - (mobilisation.fta ?? 0) - (mobilisation.allowance ?? 0) + otProfitTotal);
+}
+
+const PROFIT_RATE_FIELDS =
+  'serialNumber workerType clientRate clientCommission subcontractorRate subcontractorCommission ' +
+  'otClientRate otClientCommission otSubcontractorRate otSubcontractorCommission fta allowance';
+
+export async function getDeployment(id, actor) {
   const deployment = await Deployment.findById(id)
     .populate('worker', 'fullName employeeId')
-    .populate('mobilisation', 'serialNumber')
+    .populate('mobilisation', PROFIT_RATE_FIELDS)
     .lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
+
+  // Profit is commercial data, same sensitivity class as Mobilisation's own
+  // COMMERCIAL_FIELDS — restricted to whoever can decide this section
+  // (Admin always passes canAccessSection) rather than the broader
+  // deploymentsRelease/deploymentsHours circles that can merely view or
+  // enter hours. Computed either way (cheap, no extra query — the
+  // Mobilisation rate fields are already populated above), then stripped,
+  // matching "never trust the client, and never even SEND what an
+  // unauthorized viewer shouldn't have" rather than just hiding it in the UI.
+  const canSeeProfit = actor ? await canAccessSection('deploymentsHoursDecide', actor) : false;
+  deployment.monthlyHours = deployment.monthlyHours.map((entry) => {
+    const profit = computeMonthlyProfit(entry, deployment.mobilisation);
+    return canSeeProfit ? { ...entry, profit } : entry;
+  });
+  if (canSeeProfit) {
+    const withProfit = deployment.monthlyHours.filter((e) => e.profit != null);
+    deployment.totalProfit = withProfit.length ? money(withProfit.reduce((sum, e) => sum + e.profit, 0)) : null;
+  }
   return deployment;
 }
 

@@ -14,7 +14,7 @@ export async function list(req, res) {
 
 /** GET /api/deployments/:id — 200 → data: deployment */
 export async function get(req, res) {
-  const deployment = await deploymentService.getDeployment(req.params.id);
+  const deployment = await deploymentService.getDeployment(req.params.id, actor(req));
   res.json(new ApiResponse('Deployment.', deployment));
 }
 

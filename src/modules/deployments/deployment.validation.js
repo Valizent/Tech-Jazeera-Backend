@@ -26,11 +26,22 @@ export const deploymentIdParamSchema = z.object({ id });
 
 export const monthlyHoursEntryParamSchema = z.object({ id, entryId: id });
 
-/** Add this month's actual client-timesheet hours. `otAmount` is a plain
- *  manually-entered number — see deployment.model.js's doc comment. */
+// One entry per calendar day of the month — a single day capped at 24h;
+// the exact array LENGTH (must equal that month's real day count) is
+// checked in deployment.service.js, which knows the target month for both
+// add (from the body) and update (from the existing entry) — one shared
+// check (daysInMonth) instead of duplicating the month-aware part here.
+const dailyHours = z
+  .array(z.coerce.number().min(0, 'Hours cannot be negative.').max(24, 'A single day cannot exceed 24 hours.'))
+  .min(1, "Enter each day's hours.");
+
+/** Add this month's actual client-timesheet hours, one day at a time —
+ *  `actualHours` is never in this payload at all, it's always the
+ *  server-computed sum of `dailyHours` (see deployment.model.js's doc
+ *  comment). `otAmount` is a plain manually-entered number. */
 export const addMonthlyHoursSchema = z.object({
   month: monthStr,
-  actualHours: z.coerce.number().min(0, 'Actual hours cannot be negative.'),
+  dailyHours,
   otAmount: z.preprocess(emptyToUndef, z.coerce.number().min(0).optional()),
   notes: optionalStr(500),
 });
@@ -38,7 +49,7 @@ export const addMonthlyHoursSchema = z.object({
 /** Correcting an already-entered month — same shape, month itself is fixed
  *  (it identifies which entry, never changes on an edit). */
 export const updateMonthlyHoursSchema = z.object({
-  actualHours: z.coerce.number().min(0, 'Actual hours cannot be negative.'),
+  dailyHours,
   otAmount: z.preprocess(emptyToUndef, z.coerce.number().min(0).optional()),
   notes: optionalStr(500),
 });

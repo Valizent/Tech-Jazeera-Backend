@@ -62,6 +62,16 @@ const monthlyHoursSchema = new mongoose.Schema(
   {
     month: { type: String, required: true, match: /^\d{4}-(0[1-9]|1[0-2])$/ }, // 'YYYY-MM'
     contractHours: { type: Number, required: true, min: 0 },
+    // One entry per calendar day of `month` (index 0 = day 1), added
+    // 2026-09-12 so the client's real day-by-day timesheet can be entered
+    // directly — same idea as Attendance's own day-by-day grid — instead of
+    // only ever typing one aggregate number for the whole month.
+    // `actualHours` is the sum, always server-computed from this array
+    // (never trust a client-submitted total when the real breakdown is
+    // right there — same rule as every other derived financial figure in
+    // this app). A legacy entry from before this existed has an empty
+    // `dailyHours` and keeps its own already-stored `actualHours`.
+    dailyHours: { type: [{ type: Number, min: 0, max: 24 }], default: [] },
     actualHours: { type: Number, required: true, min: 0 },
     otHours: { type: Number, required: true, min: 0 }, // server-computed = max(0, actualHours - contractHours)
     otAmount: { type: Number, default: 0, min: 0 }, // manually entered — see module doc comment
@@ -118,9 +128,21 @@ deploymentSchema.index({ mobilisation: 1 }, { unique: true });
 // The double-assignment guard for a real Employee worker: at most one Active
 // deployment at a time. Excludes null `worker` (SupplierEmployee/Freelancer)
 // from the partial index entirely, rather than colliding multiple nulls.
+// Bug fixed 2026-09-12: MongoDB's partialFilterExpression does NOT support
+// $ne at all (only $eq/$gt/$gte/$lt/$lte/$exists/$type, and $and of those) —
+// it was silently DROPPED at index-creation time, leaving the real, already
+// -built index as just `{ status: 'Active' }` with no worker condition, so
+// every null-worker (SupplierEmployee/Freelancer) deployment collided as if
+// they all shared one "worker". In production this meant only ONE Active
+// Freelancer/SupplierEmployee deployment could exist system-wide at a time
+// — found via a live E11000 error while verifying an unrelated feature, not
+// user-reported. Same `$type` pattern NfcCard.model.js's own chipUid
+// partial index already uses (a value can only be of BSON type 'objectId'
+// if it's actually present and non-null, which is exactly "a real
+// Employee").
 deploymentSchema.index(
   { worker: 1 },
-  { unique: true, partialFilterExpression: { status: 'Active', worker: { $ne: null } }, name: 'uniq_active_worker' }
+  { unique: true, partialFilterExpression: { status: 'Active', worker: { $type: 'objectId' } }, name: 'uniq_active_worker' }
 );
 deploymentSchema.index({ worker: 1, startDate: -1 });
 deploymentSchema.index({ client: 1, status: 1 });
