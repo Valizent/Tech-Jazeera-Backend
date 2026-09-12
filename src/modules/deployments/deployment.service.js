@@ -18,7 +18,6 @@ import mongoose from 'mongoose';
 import Deployment, { DEMOBILISATION_OUTCOME, EMPLOYEE_ONLY_DEMOBILISATION_REASONS } from './deployment.model.js';
 import Employee from '../employees/employee.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
-import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
@@ -29,21 +28,15 @@ function currentMonthStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
-/** Every user who can decide a monthly-hours entry right now — the
- *  'deploymentsHoursDecide' Section Access grant's literal roles plus
- *  whoever's a member of any granted ApprovalRole (e.g. "Marketing
- *  Manager"). Used only to notify; the actual decide endpoint re-checks
- *  authority itself via canAccessSection, so a notification going to
- *  someone whose grant changed a moment later is a harmless staleness, not
- *  a security gap. */
+/** Every user who can decide a monthly-hours entry right now — whoever's a
+ *  member of any ApprovalRole granted write on the 'deploymentsHoursDecide'
+ *  Section Access key (e.g. "Marketing Manager"). Used only to notify; the
+ *  actual decide endpoint re-checks authority itself via canAccessSection,
+ *  so a notification going to someone whose grant changed a moment later is
+ *  a harmless staleness, not a security gap. */
 async function decidersOfDeploymentsHours() {
   const settings = await getSectionAccess('deploymentsHoursDecide');
-  const roleUsers = settings.writeRoles.length
-    ? await User.find({ role: { $in: settings.writeRoles }, isActive: true }).select('_id').lean()
-    : [];
-  const approvalRoleUserIds = await membersOfRoles(settings.writeApprovalRoles);
-  const ids = new Set([...roleUsers.map((u) => u._id.toString()), ...approvalRoleUserIds]);
-  return [...ids];
+  return membersOfRoles(settings.writeApprovalRoles);
 }
 
 /** Every user who can compute/create an EOSB settlement right now — same
@@ -53,12 +46,19 @@ async function decidersOfDeploymentsHours() {
  *  this person a settlement" nudge, not a permission check. */
 async function decidersOfEosb() {
   const settings = await getSectionAccess('eosb');
-  const roleUsers = settings.writeRoles.length
-    ? await User.find({ role: { $in: settings.writeRoles }, isActive: true }).select('_id').lean()
-    : [];
-  const approvalRoleUserIds = await membersOfRoles(settings.writeApprovalRoles);
-  const ids = new Set([...roleUsers.map((u) => u._id.toString()), ...approvalRoleUserIds]);
-  return [...ids];
+  return membersOfRoles(settings.writeApprovalRoles);
+}
+
+/** The OT amount billed for one month — otHours × the source Mobilisation's
+ *  `otClientRate` (the OT rate/hour quoted to the client, set on the
+ *  Mobilisation at creation — see mobilisation.service.js). Always
+ *  server-computed, never client-submitted (see deployment.validation.js) —
+ *  same "recompute financials server-side" rule as every other derived
+ *  figure in this app. Commercial data — see getDeployment/listDeployments
+ *  for where it's stripped from a non-decider's response. */
+async function computeOtAmount(mobilisationId, otHours) {
+  const mobilisation = await Mobilisation.findById(mobilisationId).select('otClientRate').lean();
+  return money(otHours * (mobilisation?.otClientRate ?? 0));
 }
 
 function monthStrOf(date) {
@@ -169,13 +169,14 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   const contractHours = deployment.requiredTimesheetHours ?? 0;
   const actualHours = sumWorkedHours(data.dailyHours);
   const otHours = Math.max(0, actualHours - contractHours);
+  const otAmount = await computeOtAmount(deployment.mobilisation, otHours);
   deployment.monthlyHours.push({
     month: data.month,
     contractHours,
     dailyHours: data.dailyHours,
     actualHours,
     otHours,
-    otAmount: data.otAmount ?? 0,
+    otAmount,
     notes: data.notes,
     enteredBy: actor.userId,
   });
@@ -186,7 +187,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     action: 'deployment.monthlyHours.add',
     targetType: 'Deployment',
     targetId: deployment._id,
-    meta: { month: data.month, actualHours, otHours, otAmount: data.otAmount ?? 0 },
+    meta: { month: data.month, actualHours, otHours, otAmount },
     ip: actor.ip,
   });
 
@@ -249,7 +250,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   entry.dailyHours = data.dailyHours;
   entry.actualHours = actualHours;
   entry.otHours = Math.max(0, actualHours - entry.contractHours);
-  entry.otAmount = data.otAmount ?? 0;
+  entry.otAmount = await computeOtAmount(deployment.mobilisation, entry.otHours);
   entry.notes = data.notes;
   entry.enteredBy = actor.userId;
   entry.enteredAt = new Date();
@@ -453,7 +454,7 @@ export async function demobiliseDeployment(deploymentId, data, actor) {
  * List deployments (the register / a worker's history / a client's placements).
  * Filters: worker, client, status. Worker/mobilisation are populated for display.
  */
-export async function listDeployments({ page, limit, worker, client, status, sortOrder }) {
+export async function listDeployments({ page, limit, worker, client, status, sortOrder }, actor) {
   const filter = {};
   if (worker) filter.worker = worker;
   if (client) filter.client = client;
@@ -470,7 +471,15 @@ export async function listDeployments({ page, limit, worker, client, status, sor
       .lean(),
     Deployment.countDocuments(filter),
   ]);
-  return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+  // otAmount is commercial (see getDeployment's own doc comment) — this list
+  // isn't currently rendered anywhere on the client, but never send it to a
+  // non-decider regardless, same "never even send it" rule as the
+  // single-record read.
+  const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor) : false;
+  const strippedItems = canSeeCommercial
+    ? items
+    : items.map((d) => ({ ...d, monthlyHours: d.monthlyHours.map(({ otAmount, ...rest }) => rest) }));
+  return { items: strippedItems, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
 /**
@@ -515,22 +524,31 @@ export async function getDeployment(id, actor) {
     .lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
 
-  // Profit is commercial data, same sensitivity class as Mobilisation's own
+  // Profit and OT amount (added 2026-09-13, see the model's doc comment) are
+  // both commercial data, same sensitivity class as Mobilisation's own
   // COMMERCIAL_FIELDS — restricted to whoever can decide this section
   // (Admin always passes canAccessSection) rather than the broader
   // deploymentsRelease/deploymentsHours circles that can merely view or
-  // enter hours. Computed either way (cheap, no extra query — the
-  // Mobilisation rate fields are already populated above), then stripped,
-  // matching "never trust the client, and never even SEND what an
-  // unauthorized viewer shouldn't have" rather than just hiding it in the UI.
-  const canSeeProfit = actor ? await canAccessSection('deploymentsHoursDecide', actor) : false;
+  // enter hours. Profit is computed either way (cheap, no extra query — the
+  // Mobilisation rate fields are already populated above) then only attached
+  // for a decider; otAmount is stripped the other way (it's already stored
+  // on the entry). Non-deciders also lose the raw rate fields off
+  // `mobilisation` itself, not just the figures derived from them — matching
+  // "never trust the client, and never even SEND what an unauthorized viewer
+  // shouldn't have" rather than just hiding it in the UI. `serialNumber` is
+  // kept regardless — the "View mobilisation" link needs it and it's not
+  // commercial.
+  const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor) : false;
   deployment.monthlyHours = deployment.monthlyHours.map((entry) => {
-    const profit = computeMonthlyProfit(entry, deployment.mobilisation);
-    return canSeeProfit ? { ...entry, profit } : entry;
+    if (canSeeCommercial) return { ...entry, profit: computeMonthlyProfit(entry, deployment.mobilisation) };
+    const { otAmount, ...rest } = entry;
+    return rest;
   });
-  if (canSeeProfit) {
+  if (canSeeCommercial) {
     const withProfit = deployment.monthlyHours.filter((e) => e.profit != null);
     deployment.totalProfit = withProfit.length ? money(withProfit.reduce((sum, e) => sum + e.profit, 0)) : null;
+  } else if (deployment.mobilisation) {
+    deployment.mobilisation = { _id: deployment.mobilisation._id, serialNumber: deployment.mobilisation.serialNumber };
   }
   return deployment;
 }

@@ -24,11 +24,16 @@
  *  - `monthlyHours` is EMBEDDED — it lives and dies with this one
  *    deployment, is never queried on its own, and is exactly the kind of
  *    small append-mostly history this app always embeds (line items, doc
- *    versions, emergency contact). One entry per calendar month; `otAmount`
- *    is a plain manually-entered number (no verified OT-commission formula
- *    trusted yet), same posture as Payroll's GOSI and Mobilisation's own
- *    original `profit` field. `otHours` IS server-computed
- *    (max(0, actualHours - contractHours)) — see deployment.service.js.
+ *    versions, emergency contact). One entry per calendar month. `otHours`
+ *    IS server-computed (max(0, actualHours - contractHours)), and so is
+ *    `otAmount` (= otHours × the source Mobilisation's `otClientRate`,
+ *    added 2026-09-13 per the user's own ask — never client-submitted,
+ *    same "recompute financials server-side, always" rule as Mobilisation's
+ *    own commission math) — see deployment.service.js. `otAmount` is
+ *    commercial data, same sensitivity class as `profit`: stripped from the
+ *    response entirely for anyone without `deploymentsHoursDecide` access,
+ *    so whoever just enters the daily hours (typically Office Secretary)
+ *    never sees what it bills to the client.
  */
 import mongoose from 'mongoose';
 
@@ -125,7 +130,7 @@ const monthlyHoursSchema = new mongoose.Schema(
     dailyHours: { type: [dailyEntrySchema], default: [] },
     actualHours: { type: Number, required: true, min: 0 },
     otHours: { type: Number, required: true, min: 0 }, // server-computed = max(0, actualHours - contractHours)
-    otAmount: { type: Number, default: 0, min: 0 }, // manually entered — see module doc comment
+    otAmount: { type: Number, default: 0, min: 0 }, // server-computed = otHours × Mobilisation.otClientRate — see module doc comment
     notes: { type: String, trim: true, maxlength: 500 },
     enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     enteredAt: { type: Date, default: Date.now },

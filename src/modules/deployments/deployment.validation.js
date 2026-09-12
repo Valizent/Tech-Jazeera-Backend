@@ -52,11 +52,12 @@ const dailyHours = z.array(dailyEntry).min(1, "Enter each day's status.");
 /** Add this month's actual client-timesheet hours, one day at a time —
  *  `actualHours` is never in this payload at all, it's always the
  *  server-computed sum of `dailyHours` (see deployment.model.js's doc
- *  comment). `otAmount` is a plain manually-entered number. */
+ *  comment). `otAmount` isn't in this payload either, for the same reason —
+ *  it's always server-computed from `otHours` × the source Mobilisation's
+ *  `otClientRate`, never client-submitted. */
 export const addMonthlyHoursSchema = z.object({
   month: monthStr,
   dailyHours,
-  otAmount: z.preprocess(emptyToUndef, z.coerce.number().min(0).optional()),
   notes: optionalStr(500),
 });
 
@@ -64,7 +65,6 @@ export const addMonthlyHoursSchema = z.object({
  *  (it identifies which entry, never changes on an edit). */
 export const updateMonthlyHoursSchema = z.object({
   dailyHours,
-  otAmount: z.preprocess(emptyToUndef, z.coerce.number().min(0).optional()),
   notes: optionalStr(500),
 });
 

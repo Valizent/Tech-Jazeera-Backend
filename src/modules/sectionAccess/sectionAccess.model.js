@@ -8,27 +8,30 @@
  * made reusable, so a THIRD module (Payroll/Expenses, and any future one)
  * doesn't grow its own bespoke copy again.
  *
- * `writeRoles`/`readRoles` are literal User.role values (e.g. 'Accounts') —
- * for a grant tied to the fixed login-role enum. `writeApprovalRoles`/
- * `readApprovalRoles` are ApprovalRole ids (e.g. an admin-named "Financial
- * Manager" or "COO" role) — for a grant tied to a real person regardless of
- * their login role, the same indirection Company Settings/Mobilisation
- * Settings already use. A section with no document yet (nobody has
- * configured it) falls back to a hardcoded per-section default in
- * sectionAccess.service.js — never an empty "nobody but Admin" surprise for
- * a section that already had a sensible owner before this system existed.
+ * `writeApprovalRoles`/`readApprovalRoles` are `ApprovalRole` ids (e.g. an
+ * admin-named "Financial Manager" or "COO" role) — a grant tied to a real
+ * person regardless of their login role, the same indirection Company
+ * Settings/Mobilisation Settings already use. This used to also support a
+ * second grant type tied directly to the fixed login-role enum
+ * (`readRoles`/`writeRoles`); the user asked to drop that entirely so
+ * Approval Roles are the only way anything is granted here — see
+ * docs/SECTION-ACCESS-notes.md's 2026-09-13 follow-up and
+ * src/scripts/migrate-section-access-approval-roles.js, which converted every
+ * section's pre-existing login-role grant into a matching Approval Role
+ * before this field was removed. A section with no document yet (nobody has
+ * configured it) has an empty grant — Admin-only until an Admin grants an
+ * Approval Role — see sectionAccess.service.js's `defaultFor`.
  *
  * Not every section has a real "write" action tied to this key (e.g.
  * `mobilisationsViewer` is pure-read by design — Mobilisation's actual write
  * path is the separate `mobilisationsSelfMobilise` key; `team`'s real write
  * is a permanently hardcoded Admin-only rail, not this key at all) — for
- * those, `writeRoles`/`writeApprovalRoles` simply stay empty and nothing
- * ever checks them. See sectionAccess.service.js's canAccessSection for how
- * the two tiers are checked, and docs/SECTION-ACCESS-notes.md for the
- * per-section categorization behind the migration that introduced this.
+ * those, `writeApprovalRoles` simply stays empty and nothing ever checks it.
+ * See sectionAccess.service.js's canAccessSection for how the two tiers are
+ * checked, and docs/SECTION-ACCESS-notes.md for the per-section
+ * categorization behind the migration that introduced this.
  */
 import mongoose from 'mongoose';
-import { ROLES } from '../auth/user.model.js';
 
 /** Every section this mechanism currently governs. Add a key here (and a
  *  default in sectionAccess.service.js) to bring a new page under
@@ -63,23 +66,10 @@ export const SECTION_KEYS = [
   'exitDocuments',
 ];
 
-/** Worker/Staff (the ESS self-service personas) are never grantable here —
- *  same floor requireStaff/requireStaffOrExecutive enforce everywhere else.
- *  This system only ever ADDS access on top of that floor. Office Secretary
- *  is excluded too, deliberately: unlike every other role here, it's
- *  designed to reach things ONLY via ApprovalRole membership on a specific
- *  workflow step (see requireStaffOrOfficeSecretary's own doc comment),
- *  never a blanket per-section grant — canAccessSection's own floor check
- *  (STAFF_ROLES) already excludes it, so allowing it here would just be a
- *  silently-broken option in the UI (picking it saves fine, grants nothing). */
-export const GRANTABLE_ROLES = ROLES.filter((role) => !['Worker', 'Staff', 'Office Secretary'].includes(role));
-
 const sectionAccessSchema = new mongoose.Schema(
   {
     sectionKey: { type: String, enum: SECTION_KEYS, required: true, unique: true },
-    readRoles: { type: [{ type: String, enum: GRANTABLE_ROLES }], default: [] },
     readApprovalRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
-    writeRoles: { type: [{ type: String, enum: GRANTABLE_ROLES }], default: [] },
     writeApprovalRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
   },
   { timestamps: true }

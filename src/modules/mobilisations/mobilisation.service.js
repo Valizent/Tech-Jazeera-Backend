@@ -220,10 +220,9 @@ async function myRoleIds(userId) {
  *  isMemberOfAnyRole's single indexed lookup instead. */
 async function isMobilisationViewer(actor, precomputedRoleIds) {
   // 'mobilisationsViewer' is a pure-read key (see sectionAccess.model.js's
-  // doc comment) — its grant lives in readRoles/readApprovalRoles, never
-  // writeRoles/writeApprovalRoles (which stay permanently empty for it).
+  // doc comment) — its grant lives in readApprovalRoles, never
+  // writeApprovalRoles (which stays permanently empty for it).
   const settings = await getSectionAccess('mobilisationsViewer');
-  if (settings.readRoles.includes(actor.role)) return true;
   if (!settings.readApprovalRoles.length) return false;
   if (precomputedRoleIds) {
     return precomputedRoleIds.some((r) => settings.readApprovalRoles.some((v) => v.toString() === r.toString()));
@@ -389,13 +388,13 @@ async function assertNoDateOverlap(workerType, identity, proposedDate) {
 
 /** Office Secretary is a hardcoded exception to the Section Access gate
  *  below (same "deny by default, then an explicit hardcoded allow" pattern
- *  as requireStaffOrOfficeSecretary) — they aren't a grantable Section
- *  Access role at all (see sectionAccess.model.js's GRANTABLE_ROLES), and
- *  the user's own ask was specifically "let Office Secretary create one for
- *  a Coordinator who's busy," not a general Section Access grant. Building
- *  it as a real Section Access grant would also let an admin accidentally
- *  hand Office Secretary a blanket self-mobilise permission never intended
- *  for them. */
+ *  as requireStaffOrOfficeSecretary) — canAccessSection's own floor
+ *  (sectionAccess.service.js) excludes Office Secretary from every section
+ *  outright, regardless of Approval Role membership, and the user's own ask
+ *  was specifically "let Office Secretary create one for a Coordinator
+ *  who's busy," not a general Section Access grant. Building it as a real
+ *  Section Access grant would also let an admin accidentally hand Office
+ *  Secretary a blanket self-mobilise permission never intended for them. */
 export async function createMobilisation(data, actor) {
   const isOfficeSecretary = actor.role === 'Office Secretary';
   const allowed = isOfficeSecretary || (await canAccessSection('mobilisationsSelfMobilise', actor));
@@ -600,7 +599,16 @@ async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
           const currentStepRoleIds = (m.steps?.[m.currentStep]?.roles ?? []).map((r) => (r._id ?? r).toString());
           const isStepReviewer = roleIds.some((r) => currentStepRoleIds.includes(r.toString()));
           let item = isStepReviewer ? m : stripFields(m, REVIEW_FIELDS);
-          if (!isStepReviewer && m.status === 'Approved') item = stripFields(item, COMMERCIAL_FIELDS);
+          // Mirrors getMobilisation's own commercial-visibility rule
+          // (2026-09-13) exactly — see that function's doc comment for the
+          // full reasoning. Step 0's own role pool specifically, not
+          // "whoever's turn it is", same distinction the standing
+          // Section-1-edit-right check below already draws.
+          const stepZeroRoleIds = (m.steps?.[0]?.roles ?? []).map((r) => (r._id ?? r).toString());
+          const isStepZeroReviewer = roleIds.some((r) => stepZeroRoleIds.includes(r.toString()));
+          const isCoordinator = m.coordinators.some((c) => (c.user._id ?? c.user).toString() === actor.userId);
+          const canSeeCommercial = (isCoordinator && m.status !== 'Approved') || (isStepReviewer && !isStepZeroReviewer);
+          if (!canSeeCommercial) item = stripFields(item, COMMERCIAL_FIELDS);
           return item;
         });
   return { items, total };
@@ -669,7 +677,21 @@ export async function getMobilisation(id, actor) {
     if (!isViewer && !isStepReviewer) {
       visible = stripFields(visible, REVIEW_FIELDS);
     }
-    if (!isViewer && !isStepReviewer && mobilisation.status === 'Approved') {
+    // Rates & Financials (Section 1's own commercial fields) — hidden from
+    // whoever holds STEP 0 specifically (2026-09-13, the user's own ask:
+    // "hide this for office secretary, only manager has to see this"),
+    // even while PendingReview and even though step 0's reviewer is
+    // otherwise treated as "the current reviewer" above (`isStepReviewer`)
+    // and would see everything else. `canEditSection1` already IS "is this
+    // actor step 0's reviewer right now" (see its own computation just
+    // above) — reused rather than a second identical lookup. A LATER-step
+    // reviewer (the actual commercial decider, e.g. Marketing Manager)
+    // still sees it — they need the rates to decide — as does a
+    // 'mobilisationsViewer' member, or the coordinator who typed it
+    // themselves (only before Approved, unchanged from before).
+    const canSeeCommercial =
+      isViewer || (isCoordinator && mobilisation.status !== 'Approved') || (isStepReviewer && !canEditSection1);
+    if (!canSeeCommercial) {
       visible = stripFields(visible, COMMERCIAL_FIELDS);
     }
   }

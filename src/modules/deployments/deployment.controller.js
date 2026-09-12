@@ -8,7 +8,7 @@ const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip }
 
 /** GET /api/deployments — 200 → data: { items, total, page, pages } */
 export async function list(req, res) {
-  const data = await deploymentService.listDeployments(req.query);
+  const data = await deploymentService.listDeployments(req.query, actor(req));
   res.json(new ApiResponse('Deployments.', data));
 }
 
