@@ -32,17 +32,15 @@ const RATE_COLUMNS = [
   { header: 'FTA', key: 'fta', width: 10 },
   { header: 'Allowance', key: 'allowance', width: 10 },
   { header: 'Required timesheet hours', key: 'requiredTimesheetHours', width: 18 },
-  { header: 'Client timesheet hours', key: 'clientTimesheetHours', width: 18 },
   { header: 'Subcontractor rate', key: 'subcontractorRate', width: 14 },
   { header: 'Subcontractor commission', key: 'subcontractorCommission', width: 18 },
   { header: 'Profit per hour', key: 'profitPerHour', width: 14 },
   { header: 'Profit per month', key: 'profitPerMonth', width: 16 },
-  { header: 'Overtime hours', key: 'otHours', width: 14 },
   { header: 'OT client rate', key: 'otClientRate', width: 14 },
   { header: 'OT client commission', key: 'otClientCommission', width: 16 },
   { header: 'OT subcontractor rate', key: 'otSubcontractorRate', width: 16 },
   { header: 'OT subcontractor commission', key: 'otSubcontractorCommission', width: 20 },
-  { header: 'OT profit', key: 'otProfitTotal', width: 14 },
+  { header: 'OT profit per hour', key: 'otProfitPerHour', width: 16 },
 ];
 
 const COLUMNS = [...WORKER_COLUMNS, ...RATE_COLUMNS];

@@ -42,18 +42,20 @@ const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
  * Formula given directly by the business owner (not inferred):
  *   profitPerHour = SupplierEmployee: (clientRate - clientCommission) - (subcontractorRate + subcontractorCommission)
  *                   Employee/Freelancer: clientRate - clientCommission
- *   otProfitPerHour = the same split, using the ot*-prefixed fields
- *   otHours = max(0, clientTimesheetHours - requiredTimesheetHours) — never a
- *             manually-typed value (see docs/MOBILISATION-notes.md's own
- *             "never trust a client-submitted financial value" convention);
- *             0 until clientTimesheetHours is actually filled in
- *   profitPerMonth = (profitPerHour * requiredTimesheetHours) - fta - allowance + otProfitTotal
- *             — the base rate only ever applies to the required hours; hours
- *             beyond that are otHours, priced at the OT rate instead
- *             (otProfitTotal), never both.
- * `profitPerMonth` stays null until clientTimesheetHours is actually filled
- * in (usually by the current-step reviewer, once the client's real
- * timesheet arrives) — there's nothing meaningful to compute before then.
+ *   otProfitPerHour = the same split, using the ot*-prefixed fields — a pure
+ *             per-hour margin preview, no hours figure needed
+ *   profitPerMonth = (profitPerHour * requiredTimesheetHours) - fta - allowance
+ * `profitPerMonth` stays null until requiredTimesheetHours is actually
+ * filled in — there's nothing meaningful to compute before then. This is a
+ * pre-deployment ESTIMATE off the contracted hours only, deliberately
+ * excluding overtime — no real worker is placed yet at the mobilisation
+ * stage, so there's no actual timesheet to price. `clientTimesheetHours`/
+ * `otHours`/`otProfitTotal` were removed from this model 2026-09-12: once
+ * Approved, the resulting Deployment's own monthly-hours ledger is the real
+ * actual-hours-based profit figure (deployment.service.js's
+ * computeMonthlyProfit, which reads these same rate fields off this
+ * document) — duplicating a second, manually-typed "current" hours figure
+ * here was redundant with that and couldn't ever stay in sync with it.
  */
 function computeProfitFields(m) {
   const isSupplier = m.workerType === 'SupplierEmployee';
@@ -61,20 +63,14 @@ function computeProfitFields(m) {
   const subSide = isSupplier ? (m.subcontractorRate ?? 0) + (m.subcontractorCommission ?? 0) : 0;
   const profitPerHour = money(clientSide - subSide);
 
-  const otHours =
-    m.clientTimesheetHours == null ? 0 : Math.max(0, m.clientTimesheetHours - (m.requiredTimesheetHours ?? 0));
-
   const otClientSide = (m.otClientRate ?? 0) - (m.otClientCommission ?? 0);
   const otSubSide = isSupplier ? (m.otSubcontractorRate ?? 0) + (m.otSubcontractorCommission ?? 0) : 0;
   const otProfitPerHour = money(otClientSide - otSubSide);
-  const otProfitTotal = money(otProfitPerHour * otHours);
 
   const profitPerMonth =
-    m.clientTimesheetHours == null
-      ? null
-      : money(profitPerHour * (m.requiredTimesheetHours ?? 0) - (m.fta ?? 0) - (m.allowance ?? 0) + otProfitTotal);
+    m.requiredTimesheetHours == null ? null : money(profitPerHour * m.requiredTimesheetHours - (m.fta ?? 0) - (m.allowance ?? 0));
 
-  return { profitPerHour, otHours, otProfitPerHour, otProfitTotal, profitPerMonth };
+  return { profitPerHour, otProfitPerHour, profitPerMonth };
 }
 
 /** Applied right before every `.save()` (create/update/commercial-details)
@@ -112,21 +108,17 @@ const COMMERCIAL_FIELDS = [
   'subcontractorCommission',
   'profitPerHour',
   'profitPerMonth',
-  'otHours',
   'otProfitPerHour',
-  'otProfitTotal',
 ];
 
 // Section 2 — the CURRENT-STEP REVIEWER's own work (quotation/PO, the
-// client's actual timesheet hours, overtime, their remark). A plain
-// Coordinator never entered any of this themselves — unlike Section 1
-// above, it is stripped from their view UNCONDITIONALLY, at every status,
-// not just once Approved. Visible only to Admin, a 'mobilisationsViewer'
-// Section Access member, or whoever is actually authorized for the current
-// step right now. See
+// overtime rates, their remark). A plain Coordinator never entered any of
+// this themselves — unlike Section 1 above, it is stripped from their view
+// UNCONDITIONALLY, at every status, not just once Approved. Visible only to
+// Admin, a 'mobilisationsViewer' Section Access member, or whoever is
+// actually authorized for the current step right now. See
 // saveCommercialDetails below, which writes exactly this field list.
 const REVIEW_FIELDS = [
-  'clientTimesheetHours',
   'otClientRate',
   'otClientCommission',
   'otSubcontractorRate',
@@ -979,11 +971,10 @@ export async function submitMobilisation(id, actor) {
  *  deciding is a separate call, since the shared decide engine only ever
  *  mutates status/decidedBy/approvalTrail (see approvalEngine.service.js).
  *  Every field is individually optional — the step-0 reviewer fills in
- *  what they have as it arrives (the client's quotation today, the actual
- *  timesheet hours once the client's timesheet itself arrives, overtime
- *  once that's known). Recomputes profitPerHour/profitPerMonth/otProfit*
- *  on save since clientTimesheetHours and every OT field feed directly
- *  into that formula. */
+ *  what they have as it arrives (the client's quotation today, the OT rates
+ *  once those are agreed). Recomputes profitPerHour/profitPerMonth/
+ *  otProfitPerHour on save since every OT rate field feeds directly into
+ *  that formula. */
 export async function saveCommercialDetails(id, data, actor) {
   const mobilisation = await Mobilisation.findById(id);
   if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');

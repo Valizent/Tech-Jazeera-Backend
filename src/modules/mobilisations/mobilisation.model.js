@@ -9,12 +9,16 @@
  *
  * Section 1 is filled by whoever creates it (a Coordinator, or — from M4 —
  * a BDM/Marketing Manager self-mobilising); Section 2 (client/sub quotation
- * & PO, overtime, actual client timesheet hours) is filled by whoever holds
- * the CURRENT approval step (Office Secretary, then Marketing Manager, once
- * an Admin configures that multi-step workflow) via the commercial-details
- * endpoint — see mobilisation.service.js's saveCommercialDetails, which was
- * already generic over "whoever's turn it is" before Office Secretary
- * existed.
+ * & PO, overtime RATES) is filled by whoever holds the CURRENT approval step
+ * (Office Secretary, then Marketing Manager, once an Admin configures that
+ * multi-step workflow) via the commercial-details endpoint — see
+ * mobilisation.service.js's saveCommercialDetails, which was already
+ * generic over "whoever's turn it is" before Office Secretary existed.
+ * Section 2 no longer includes the client's actual timesheet hours
+ * (2026-09-12 follow-up) — a real worker isn't even placed yet at this
+ * stage, so there's no timesheet to enter; that now lives entirely on the
+ * Deployment this mobilisation produces once Approved, entered month by
+ * month as the client's real timesheets actually arrive.
  *
  * `worker` is a reference, populated ONLY when `workerType === 'Employee'` —
  * a Supplier-Employee or Freelancer worker never gets an Employee HR record
@@ -25,15 +29,22 @@
  * convention as Deployment.clientName — a later Iqama renewal or client
  * rename must not silently rewrite an already-submitted mobilisation.
  *
- * `profitPerHour`/`profitPerMonth`/`otProfitPerHour`/`otProfitTotal` are
- * SERVER-COMPUTED (mobilisation.service.js's computeProfitFields), never
- * accepted from client input and recomputed on every save AND every read —
- * this app's "never trust a stored financial figure, recompute server-side"
- * rule, same posture as Payroll/Invoice totals. Formula (given directly by
- * the business owner, not inferred):
+ * `profitPerHour`/`profitPerMonth`/`otProfitPerHour` are SERVER-COMPUTED
+ * (mobilisation.service.js's computeProfitFields), never accepted from
+ * client input and recomputed on every save AND every read — this app's
+ * "never trust a stored financial figure, recompute server-side" rule, same
+ * posture as Payroll/Invoice totals. Formula (given directly by the
+ * business owner, not inferred):
  *   profitPerHour = SupplierEmployee: (clientRate - clientCommission) - (subcontractorRate + subcontractorCommission)
  *                   Employee/Freelancer: clientRate - clientCommission
- *   profitPerMonth = (profitPerHour * clientTimesheetHours) - fta - allowance + otProfitTotal
+ *   profitPerMonth = (profitPerHour * requiredTimesheetHours) - fta - allowance
+ * This is a pre-deployment ESTIMATE off the contracted/target hours only —
+ * it deliberately does NOT factor in overtime or the client's real worked
+ * hours. Once this mobilisation is Approved, the resulting Deployment's own
+ * monthly-hours ledger (deployment.model.js/deployment.service.js's
+ * computeMonthlyProfit) is the real, actual-hours-based profit figure for
+ * every month actually worked — see the 2026-09-12 follow-up below for why
+ * `clientTimesheetHours`/`otHours`/`otProfitTotal` were removed from here.
  *
  * `workflow`/`workflowName`/`steps`/`currentStep`/`approvalTrail` are the
  * Configurable Approval Hierarchy fields, identical shape to
@@ -122,7 +133,6 @@ const mobilisationSchema = new mongoose.Schema(
     fta: { type: Number, default: 0, min: 0 }, // per month — Food/Travel/Accommodation, company-paid
     allowance: { type: Number, default: 0, min: 0 }, // per month, company-paid
     requiredTimesheetHours: { type: Number, default: null, min: 0 }, // contracted/target hours, set by the Coordinator
-    clientTimesheetHours: { type: Number, default: null, min: 0 }, // actual hours, filled later by the current-step reviewer
 
     // --- Section 1: subcontractor — only when workerType === 'SupplierEmployee' ---
     hasSubcontractor: { type: Boolean, default: false }, // server-derived from workerType — never client-writable
@@ -133,19 +143,23 @@ const mobilisationSchema = new mongoose.Schema(
 
     // --- Section 1: computed economics (server-only — see computeProfitFields) ---
     profitPerHour: { type: Number, default: null },
-    profitPerMonth: { type: Number, default: null }, // null until clientTimesheetHours is set
+    profitPerMonth: { type: Number, default: null }, // null until requiredTimesheetHours is set
 
     mobilisationDate: { type: Date, required: true },
     checkoutDate: { type: Date, default: null },
 
-    // --- Section 2: overtime — filled by the current-step reviewer, mirrors the regular-hours split ---
-    otHours: { type: Number, default: null, min: 0 },
+    // --- Section 2: overtime RATES — filled by the current-step reviewer,
+    // mirrors the regular-hours rate split. No `otHours`/`otProfitTotal`
+    // here (removed 2026-09-12) — actual OT hours are now tracked entirely
+    // on the Deployment's monthly-hours ledger, which already reads these
+    // rate fields straight off this document (see deployment.service.js's
+    // computeMonthlyProfit). `otProfitPerHour` stays: a pure rate-derived
+    // margin preview that needs no hours figure at all.
     otClientRate: { type: Number, default: null, min: 0 },
     otClientCommission: { type: Number, default: null, min: 0 },
     otSubcontractorRate: { type: Number, default: null, min: 0 }, // SupplierEmployee only
     otSubcontractorCommission: { type: Number, default: null, min: 0 }, // SupplierEmployee only
     otProfitPerHour: { type: Number, default: null }, // computed
-    otProfitTotal: { type: Number, default: null }, // computed = otProfitPerHour * otHours
 
     // --- stale-mobilisation warning support ---
     currentStepEnteredAt: { type: Date, default: null },

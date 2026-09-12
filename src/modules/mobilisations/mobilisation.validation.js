@@ -183,14 +183,15 @@ export const addCoordinatorSchema = z.object({
  *  Secretary, then Marketing Manager, once configured), during review.
  *  Every field is optional individually: a reviewer fills in what they have
  *  as it arrives — the client side today, the subcontractor side once that
- *  quote arrives, the client's actual timesheet hours once that timesheet
- *  itself arrives. `otHours` is NOT here — it's server-derived (see
- *  computeProfitFields in mobilisation.service.js: max(0, clientTimesheetHours
- *  - requiredTimesheetHours)), never a value a reviewer types in.
- *  `otSubcontractorRate`/`otSubcontractorCommission` are only meaningful for
- *  a SupplierEmployee mobilisation, but left optional here rather than
- *  workerType-conditional — an out-of-scope value for an Employee/Freelancer
- *  record is simply never read by computeProfitFields. */
+ *  quote arrives, the OT rates once those are agreed. No actual-hours field
+ *  here at all (2026-09-12) — a real worker isn't placed yet at this stage,
+ *  so there's no timesheet to enter; that now lives entirely on the
+ *  Deployment this mobilisation produces once Approved (see
+ *  deployment.validation.js's addMonthlyHoursSchema). `otSubcontractorRate`/
+ *  `otSubcontractorCommission` are only meaningful for a SupplierEmployee
+ *  mobilisation, but left optional here rather than workerType-conditional —
+ *  an out-of-scope value for an Employee/Freelancer record is simply never
+ *  read by computeProfitFields. */
 export const commercialDetailsSchema = z.object({
   clientQuotation: optionalStr(100),
   clientQuotationDate: optionalDate,
@@ -200,7 +201,6 @@ export const commercialDetailsSchema = z.object({
   subQuotationDate: optionalDate,
   subPO: optionalStr(100),
   subPODate: optionalDate,
-  clientTimesheetHours: optionalNonNegNumber,
   otClientRate: optionalNonNegNumber,
   otClientCommission: optionalNonNegNumber,
   otSubcontractorRate: optionalNonNegNumber,
