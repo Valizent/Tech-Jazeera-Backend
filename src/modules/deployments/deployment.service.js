@@ -73,8 +73,10 @@ function daysInMonth(monthStr) {
   return new Date(y, m, 0).getDate();
 }
 
-function sum(numbers) {
-  return numbers.reduce((total, n) => total + n, 0);
+/** Only a 'Worked' day contributes hours — Off/Sick/Absent are explicitly
+ *  non-working days (see deployment.model.js's DAILY_ENTRY_STATUSES). */
+function sumWorkedHours(dailyHours) {
+  return dailyHours.reduce((total, d) => total + (d.status === 'Worked' ? d.hours ?? 0 : 0), 0);
 }
 
 /**
@@ -165,7 +167,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   }
 
   const contractHours = deployment.requiredTimesheetHours ?? 0;
-  const actualHours = sum(data.dailyHours);
+  const actualHours = sumWorkedHours(data.dailyHours);
   const otHours = Math.max(0, actualHours - contractHours);
   deployment.monthlyHours.push({
     month: data.month,
@@ -243,7 +245,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   const before = { actualHours: entry.actualHours, otAmount: entry.otAmount, notes: entry.notes };
   const previousEnteredBy = entry.enteredBy.toString();
 
-  const actualHours = sum(data.dailyHours);
+  const actualHours = sumWorkedHours(data.dailyHours);
   entry.dailyHours = data.dailyHours;
   entry.actualHours = actualHours;
   entry.otHours = Math.max(0, actualHours - entry.contractHours);

@@ -71,6 +71,18 @@ export const DEMOBILISATION_OUTCOME = {
   TransferredToAnotherCompany: 'Exit',
 };
 export const WORKER_TYPES = ['Employee', 'SupplierEmployee', 'Freelancer'];
+/** One calendar day of a monthly-hours entry is either a real worked day
+ *  (`hours` meaningful) or a non-working day the enterer marks explicitly —
+ *  added 2026-09-12 per the user's own ask ("when day is off, then its F,
+ *  when on sick leave S, when absent A"), deliberately a manual per-day
+ *  mark typed in by whoever fills the sheet, NOT auto-pulled from the
+ *  Attendance module (a client timesheet can legitimately differ from
+ *  internal attendance, and SupplierEmployee/Freelancer workers have no
+ *  Attendance record to pull from at all). 'Off'/'Sick'/'Absent' BLOCK
+ *  `hours` entirely for that day (the client's own UI enforces this one
+ *  input can only ever be a number OR one of these three states, never
+ *  both) — see deployments.schema.js's parseDailyEntry. */
+export const DAILY_ENTRY_STATUSES = ['Worked', 'Off', 'Sick', 'Absent'];
 
 /** One calendar month's actual client-timesheet hours, entered once the
  *  month has fully ended. `contractHours` is snapshotted at entry time from
@@ -88,6 +100,11 @@ export const WORKER_TYPES = ['Employee', 'SupplierEmployee', 'Freelancer'];
  *  (an implicit resubmit — see updateMonthlyHours). Once Approved, it's
  *  locked — matches the "approved financial data doesn't drift" posture
  *  Invoice/Quotation line items already follow. */
+const dailyEntrySchema = new mongoose.Schema(
+  { status: { type: String, enum: DAILY_ENTRY_STATUSES, default: 'Worked' }, hours: { type: Number, min: 0, max: 24, default: 0 } },
+  { _id: false }
+);
+
 const monthlyHoursSchema = new mongoose.Schema(
   {
     month: { type: String, required: true, match: /^\d{4}-(0[1-9]|1[0-2])$/ }, // 'YYYY-MM'
@@ -95,13 +112,17 @@ const monthlyHoursSchema = new mongoose.Schema(
     // One entry per calendar day of `month` (index 0 = day 1), added
     // 2026-09-12 so the client's real day-by-day timesheet can be entered
     // directly — same idea as Attendance's own day-by-day grid — instead of
-    // only ever typing one aggregate number for the whole month.
-    // `actualHours` is the sum, always server-computed from this array
-    // (never trust a client-submitted total when the real breakdown is
-    // right there — same rule as every other derived financial figure in
-    // this app). A legacy entry from before this existed has an empty
-    // `dailyHours` and keeps its own already-stored `actualHours`.
-    dailyHours: { type: [{ type: Number, min: 0, max: 24 }], default: [] },
+    // only ever typing one aggregate number for the whole month. Each day
+    // is `{status, hours}` (see DAILY_ENTRY_STATUSES above) — widened the
+    // same day, before any real data existed in this shape yet, once a
+    // plain worked-hours number per day turned out not to be enough.
+    // `actualHours` is the sum of every 'Worked' day's `hours`, always
+    // server-computed from this array (never trust a client-submitted
+    // total when the real breakdown is right there — same rule as every
+    // other derived financial figure in this app). A legacy entry from
+    // before this existed has an empty `dailyHours` and keeps its own
+    // already-stored `actualHours`.
+    dailyHours: { type: [dailyEntrySchema], default: [] },
     actualHours: { type: Number, required: true, min: 0 },
     otHours: { type: Number, required: true, min: 0 }, // server-computed = max(0, actualHours - contractHours)
     otAmount: { type: Number, default: 0, min: 0 }, // manually entered — see module doc comment

@@ -4,7 +4,7 @@
  * read filters, a monthly-hours entry/correction, or a Release.
  */
 import { z } from 'zod';
-import { DEPLOYMENT_STATUSES, DEMOBILISATION_REASONS } from './deployment.model.js';
+import { DEPLOYMENT_STATUSES, DEMOBILISATION_REASONS, DAILY_ENTRY_STATUSES } from './deployment.model.js';
 
 const DECISIONS = ['Approved', 'Rejected'];
 
@@ -26,14 +26,28 @@ export const deploymentIdParamSchema = z.object({ id });
 
 export const monthlyHoursEntryParamSchema = z.object({ id, entryId: id });
 
-// One entry per calendar day of the month — a single day capped at 24h;
-// the exact array LENGTH (must equal that month's real day count) is
-// checked in deployment.service.js, which knows the target month for both
-// add (from the body) and update (from the existing entry) — one shared
-// check (daysInMonth) instead of duplicating the month-aware part here.
-const dailyHours = z
-  .array(z.coerce.number().min(0, 'Hours cannot be negative.').max(24, 'A single day cannot exceed 24 hours.'))
-  .min(1, "Enter each day's hours.");
+// One entry per calendar day of the month — the exact array LENGTH (must
+// equal that month's real day count) is checked in deployment.service.js,
+// which knows the target month for both add (from the body) and update
+// (from the existing entry) — one shared check (daysInMonth) instead of
+// duplicating the month-aware part here. Each day is either a real worked
+// day (`hours` required, 0-24) or an explicit Off/Sick/Absent mark (`hours`
+// must be absent — see deployment.model.js's DAILY_ENTRY_STATUSES doc
+// comment: these three BLOCK hours entirely, never both).
+const dailyEntry = z
+  .object({
+    status: z.enum(DAILY_ENTRY_STATUSES, { error: 'Invalid day status.' }),
+    hours: z.coerce.number().min(0, 'Hours cannot be negative.').max(24, 'A single day cannot exceed 24 hours.').optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.status === 'Worked' && val.hours == null) {
+      ctx.addIssue({ code: 'custom', path: ['hours'], message: 'Enter hours for a worked day.' });
+    }
+    if (val.status !== 'Worked' && val.hours != null) {
+      ctx.addIssue({ code: 'custom', path: ['hours'], message: 'An Off/Sick/Absent day cannot also have hours.' });
+    }
+  });
+const dailyHours = z.array(dailyEntry).min(1, "Enter each day's status.");
 
 /** Add this month's actual client-timesheet hours, one day at a time —
  *  `actualHours` is never in this payload at all, it's always the
