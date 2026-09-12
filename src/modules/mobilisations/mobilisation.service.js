@@ -106,23 +106,28 @@ const COMMERCIAL_FIELDS = [
   'requiredTimesheetHours',
   'subcontractorRate',
   'subcontractorCommission',
+  // Moved here from REVIEW_FIELDS 2026-09-13 — the OT rates are now a
+  // Section 1 field the coordinator sets at creation, same visibility rule
+  // as every other rate above (visible to them while Draft/PendingReview/
+  // Rejected, stripped only once Approved).
+  'otClientRate',
+  'otClientCommission',
+  'otSubcontractorRate',
+  'otSubcontractorCommission',
   'profitPerHour',
   'profitPerMonth',
   'otProfitPerHour',
 ];
 
-// Section 2 — the CURRENT-STEP REVIEWER's own work (quotation/PO, the
-// overtime rates, their remark). A plain Coordinator never entered any of
-// this themselves — unlike Section 1 above, it is stripped from their view
-// UNCONDITIONALLY, at every status, not just once Approved. Visible only to
-// Admin, a 'mobilisationsViewer' Section Access member, or whoever is
-// actually authorized for the current step right now. See
-// saveCommercialDetails below, which writes exactly this field list.
+// Section 2 — the CURRENT-STEP REVIEWER's own work (the client/sub
+// quotation-PO paper trail, their remark). A plain Coordinator never
+// entered any of this themselves — unlike Section 1 above, it is stripped
+// from their view UNCONDITIONALLY, at every status, not just once
+// Approved. Visible only to Admin, a 'mobilisationsViewer' Section Access
+// member, or whoever is actually authorized for the current step right
+// now. See saveCommercialDetails below, which writes exactly this field
+// list. No OT rate fields here as of 2026-09-13 — see COMMERCIAL_FIELDS.
 const REVIEW_FIELDS = [
-  'otClientRate',
-  'otClientCommission',
-  'otSubcontractorRate',
-  'otSubcontractorCommission',
   'clientQuotation',
   'clientQuotationDate',
   'clientPO',
@@ -324,6 +329,64 @@ async function assertNoActiveNonEmployeePlacement(iqamaNumber) {
   );
 }
 
+/** A worker's full deployment HISTORY — every period they were ever
+ *  actually placed somewhere, Active or already Ended. For a real Employee,
+ *  keyed by their Employee id; for a SupplierEmployee/Freelancer (no
+ *  Employee record at all), keyed by Iqama number instead, found via every
+ *  Mobilisation that ever carried it — Deployment itself doesn't snapshot
+ *  Iqama, so this is a two-step lookup for that case. */
+async function deploymentPeriodsFor(workerType, { workerId, iqamaNumber }) {
+  let deploymentFilter;
+  if (workerType === 'Employee') {
+    if (!workerId) return [];
+    deploymentFilter = { worker: workerId };
+  } else {
+    if (!iqamaNumber) return [];
+    const mobIds = await Mobilisation.find({ iqamaNumber, workerType: { $ne: 'Employee' } })
+      .select('_id')
+      .lean();
+    if (!mobIds.length) return [];
+    deploymentFilter = { mobilisation: { $in: mobIds.map((m) => m._id) } };
+  }
+  return Deployment.find(deploymentFilter).select('startDate endDate clientName').lean();
+}
+
+/**
+ * A new (or edited) mobilisation's date can never fall inside a period the
+ * worker was already deployed somewhere else — added 2026-09-13, a real gap
+ * the user found: `assertNoActivePlacement`/`assertNoActiveNonEmployeePlacement`
+ * above only ever check the worker's CURRENT status (any Draft/
+ * PendingReview/Approved mobilisation), never their actual placement
+ * HISTORY. Once a deployment is demobilised, its Mobilisation flips to
+ * Completed and those checks find nothing — so nothing stopped backdating a
+ * brand new mobilisation to a date that fell during that very deployment
+ * (or any earlier one), which is physically impossible: a worker can only
+ * be in one place at a time, even with backdated data.
+ *
+ * Same-day handoffs ARE allowed (confirmed with the user): demobilised from
+ * Client A on day X, mobilised to Client B also on day X. So the boundary
+ * is inclusive of a period's own start (a new mobilisation can't start
+ * exactly when another one already did) and exclusive of its end (a new
+ * one CAN start exactly when the old one ended).
+ */
+async function assertNoDateOverlap(workerType, identity, proposedDate) {
+  const periods = await deploymentPeriodsFor(workerType, identity);
+  const proposed = new Date(proposedDate).getTime();
+  for (const period of periods) {
+    const start = new Date(period.startDate).getTime();
+    const end = period.endDate ? new Date(period.endDate).getTime() : null;
+    const overlaps = proposed >= start && (end === null || proposed < end);
+    if (overlaps) {
+      const startLabel = new Date(period.startDate).toLocaleDateString('en-GB');
+      const rangeLabel = end ? `${startLabel} to ${new Date(period.endDate).toLocaleDateString('en-GB')}` : `${startLabel} (still active)`;
+      throw new ApiError(
+        409,
+        `This worker was already deployed at ${period.clientName} from ${rangeLabel} — choose a mobilisation date outside that period.`
+      );
+    }
+  }
+}
+
 /** Office Secretary is a hardcoded exception to the Section Access gate
  *  below (same "deny by default, then an explicit hardcoded allow" pattern
  *  as requireStaffOrOfficeSecretary) — they aren't a grantable Section
@@ -351,8 +414,10 @@ export async function createMobilisation(data, actor) {
       throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
     }
     await assertNoActivePlacement(data.worker);
+    await assertNoDateOverlap('Employee', { workerId: data.worker }, data.mobilisationDate);
   } else {
     await assertNoActiveNonEmployeePlacement(workerSnapshot.iqamaNumber);
+    await assertNoDateOverlap(data.workerType, { iqamaNumber: workerSnapshot.iqamaNumber }, data.mobilisationDate);
   }
   const clientDoc = await Client.findById(data.client).lean();
   if (!clientDoc) throw new ApiError(404, 'Client not found.');
@@ -635,6 +700,12 @@ const DIRECT_FIELDS = [
   'requiredTimesheetHours',
   'subcontractorRate',
   'subcontractorCommission',
+  // Moved to Section 1 2026-09-13 — see mobilisation.validation.js's
+  // mobilisationFields and COMMERCIAL_FIELDS above.
+  'otClientRate',
+  'otClientCommission',
+  'otSubcontractorRate',
+  'otSubcontractorCommission',
   'mobilisationDate',
   'checkoutDate',
   'remark',
@@ -685,6 +756,15 @@ export async function updateMobilisation(id, data, actor) {
   } else {
     assertPrimaryOrAdmin(mobilisation, actor);
   }
+
+  // Captured before any of the blocks below mutate `mobilisation` in
+  // memory, so the date-overlap re-check further down can tell whether the
+  // worker identity or the date actually changed — same no-self-collision
+  // reasoning as workerActuallyChanged below, just widened to the date too.
+  const originalWorkerType = mobilisation.workerType;
+  const originalWorker = mobilisation.worker;
+  const originalIqama = mobilisation.iqamaNumber;
+  const originalMobilisationDate = mobilisation.mobilisationDate;
 
   // workerType changing (or being resent) re-resolves worker identity in
   // full — same "only touch it if the caller sent it" discipline as
@@ -744,6 +824,29 @@ export async function updateMobilisation(id, data, actor) {
   }
   for (const field of DIRECT_FIELDS) {
     if (field in data) mobilisation[field] = data[field];
+  }
+
+  // Date-overlap re-check (2026-09-13, a real gap the user found) — same
+  // reasoning as createMobilisation/approveMobilisation's own calls (see
+  // assertNoDateOverlap's doc comment): retargeting a Draft/Rejected/
+  // PendingReview mobilisation's worker OR its date could land it inside a
+  // period the (possibly new) worker was already deployed during. Runs
+  // once, after every block above has resolved its final values, and only
+  // when the worker identity or the date actually changed from what was
+  // already stored — a routine resend of unchanged values must never
+  // collide with the mobilisation's own existing (or, once Approved, its
+  // own resulting Deployment's) period.
+  const identityOrDateChanged =
+    mobilisation.workerType !== originalWorkerType ||
+    String(mobilisation.worker ?? '') !== String(originalWorker ?? '') ||
+    (mobilisation.iqamaNumber ?? '') !== (originalIqama ?? '') ||
+    new Date(mobilisation.mobilisationDate).getTime() !== new Date(originalMobilisationDate).getTime();
+  if (identityOrDateChanged) {
+    if (mobilisation.workerType === 'Employee') {
+      await assertNoDateOverlap('Employee', { workerId: mobilisation.worker }, mobilisation.mobilisationDate);
+    } else {
+      await assertNoDateOverlap(mobilisation.workerType, { iqamaNumber: mobilisation.iqamaNumber }, mobilisation.mobilisationDate);
+    }
   }
 
   applyProfitFields(mobilisation);
@@ -971,10 +1074,12 @@ export async function submitMobilisation(id, actor) {
  *  deciding is a separate call, since the shared decide engine only ever
  *  mutates status/decidedBy/approvalTrail (see approvalEngine.service.js).
  *  Every field is individually optional — the step-0 reviewer fills in
- *  what they have as it arrives (the client's quotation today, the OT rates
- *  once those are agreed). Recomputes profitPerHour/profitPerMonth/
- *  otProfitPerHour on save since every OT rate field feeds directly into
- *  that formula. */
+ *  what they have as it arrives (the client's quotation today, the
+ *  subcontractor's once that arrives). Still recomputes profitPerHour/
+ *  profitPerMonth/otProfitPerHour on save even though this function no
+ *  longer writes any of the rate fields those depend on — applyProfitFields
+ *  runs unconditionally on every save regardless of what changed, so this
+ *  stays correct with zero special-casing. */
 export async function saveCommercialDetails(id, data, actor) {
   const mobilisation = await Mobilisation.findById(id);
   if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
@@ -1024,8 +1129,27 @@ export async function saveCommercialDetails(id, data, actor) {
  * only the workflow's final step gets a real Reject, and it needs to record
  * WHO it's being sent back to (Coordinator/Office Secretary/Both), which
  * the generic shared engine has no concept of.
+ *
+ * Re-checks the date-overlap guard (assertNoDateOverlap) right before
+ * handing off to the shared engine — added 2026-09-13. create/
+ * updateMobilisation already check this at their own point in time, but
+ * time passes between a mobilisation being created and actually reaching
+ * its final approval (a multi-step workflow, someone sitting on a review),
+ * during which another mobilisation for the same worker could be created
+ * and approved first. This is the moment the real Deployment period
+ * actually gets locked in (createDeploymentFromMobilisation below), so
+ * it's the one check here that MUST NOT be skipped even if the earlier
+ * ones already passed once.
  */
 async function approveMobilisation(id, decisionNote, actor) {
+  const pending = await Mobilisation.findById(id).select('workerType worker iqamaNumber mobilisationDate').lean();
+  if (pending) {
+    if (pending.workerType === 'Employee') {
+      await assertNoDateOverlap('Employee', { workerId: pending.worker }, pending.mobilisationDate);
+    } else {
+      await assertNoDateOverlap(pending.workerType, { iqamaNumber: pending.iqamaNumber }, pending.mobilisationDate);
+    }
+  }
   const result = await decideApprovalStep({
     Model: Mobilisation,
     id,

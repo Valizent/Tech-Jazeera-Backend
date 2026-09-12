@@ -16,6 +16,7 @@ const emptyToUndef = (value) =>
 const optionalStr = (max) => z.preprocess(emptyToUndef, z.string().trim().max(max).optional());
 const id = (label) => z.string().regex(/^[a-f0-9]{24}$/i, `Invalid ${label} id.`);
 const optionalNonNegNumber = z.preprocess(emptyToUndef, z.coerce.number().min(0).optional());
+const requiredNonNegNumber = (message) => z.coerce.number({ error: message }).min(0, 'Cannot be negative.');
 const optionalDate = z.preprocess(emptyToUndef, z.coerce.date().optional());
 
 // Saudi Iqama numbers are exactly 10 digits. Only meaningful for a
@@ -67,18 +68,34 @@ const mobilisationFields = {
   nationality: optionalStr(80),
   phone: optionalSaudiPhone,
   jobTitle: z.string().trim().min(1, 'Job title is required.').max(150),
+  // Both moved into Worker & Job (2026-09-13, the user's own ask) — the
+  // coordinator/whoever creates the mobilisation sets the target hours AND
+  // the OT client rate/commission up front now, instead of the OT rate
+  // half waiting on the current-step reviewer's later Section 2 pass (see
+  // commercialDetailsSchema below, which no longer carries these two).
+  requiredTimesheetHours: optionalNonNegNumber,
+  otClientRate: optionalNonNegNumber,
+  otClientCommission: optionalNonNegNumber,
 
   client: id('client'),
   site: optionalStr(150),
-  clientRate: optionalNonNegNumber,
+  // Required (2026-09-13, the user's own ask) — every mobilisation needs a
+  // real client rate from the start; every other Section 1 commercial field
+  // here stays optional (fta/allowance/commission can genuinely be zero or
+  // unknown yet, this one can't).
+  clientRate: requiredNonNegNumber('Client rate is required.'),
   clientCommission: optionalNonNegNumber,
   fta: optionalNonNegNumber,
   allowance: optionalNonNegNumber,
-  requiredTimesheetHours: optionalNonNegNumber,
 
   subcontractor: z.preprocess(emptyToUndef, id('subcontractor').optional()),
   subcontractorRate: optionalNonNegNumber,
   subcontractorCommission: optionalNonNegNumber,
+  // Moved alongside subcontractorRate/subcontractorCommission above, same
+  // reasoning as otClientRate/otClientCommission — SupplierEmployee only,
+  // silently unused by computeProfitFields for any other workerType.
+  otSubcontractorRate: optionalNonNegNumber,
+  otSubcontractorCommission: optionalNonNegNumber,
 
   mobilisationDate: z.coerce.date({ error: 'Mobilisation date is required.' }),
   checkoutDate: optionalDate,
@@ -183,15 +200,15 @@ export const addCoordinatorSchema = z.object({
  *  Secretary, then Marketing Manager, once configured), during review.
  *  Every field is optional individually: a reviewer fills in what they have
  *  as it arrives — the client side today, the subcontractor side once that
- *  quote arrives, the OT rates once those are agreed. No actual-hours field
- *  here at all (2026-09-12) — a real worker isn't placed yet at this stage,
- *  so there's no timesheet to enter; that now lives entirely on the
- *  Deployment this mobilisation produces once Approved (see
- *  deployment.validation.js's addMonthlyHoursSchema). `otSubcontractorRate`/
- *  `otSubcontractorCommission` are only meaningful for a SupplierEmployee
- *  mobilisation, but left optional here rather than workerType-conditional —
- *  an out-of-scope value for an Employee/Freelancer record is simply never
- *  read by computeProfitFields. */
+ *  quote arrives. No actual-hours field here at all (2026-09-12) — a real
+ *  worker isn't placed yet at this stage, so there's no timesheet to enter;
+ *  that now lives entirely on the Deployment this mobilisation produces
+ *  once Approved (see deployment.validation.js's addMonthlyHoursSchema).
+ *  No OT rate fields here either as of 2026-09-13 — the user's own ask
+ *  moved that responsibility to Section 1 (`mobilisationFields` above),
+ *  filled by the coordinator up front instead of the reviewer during
+ *  review; this schema is now purely the client/sub quotation-PO paper
+ *  trail plus the reviewer's own remark. */
 export const commercialDetailsSchema = z.object({
   clientQuotation: optionalStr(100),
   clientQuotationDate: optionalDate,
@@ -201,10 +218,6 @@ export const commercialDetailsSchema = z.object({
   subQuotationDate: optionalDate,
   subPO: optionalStr(100),
   subPODate: optionalDate,
-  otClientRate: optionalNonNegNumber,
-  otClientCommission: optionalNonNegNumber,
-  otSubcontractorRate: optionalNonNegNumber,
-  otSubcontractorCommission: optionalNonNegNumber,
   remark: optionalStr(1000),
 });
 
