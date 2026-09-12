@@ -43,12 +43,21 @@ function escapeRegex(text) {
  * thresholdDays→ override the alert window (P2-M2, customizable per viewer)
  * client       → only employees currently assigned to that client
  * team         → 'mine' (Manager only) — only employees under their coordinators
+ * loginRole    → only employees whose OWN linked login has this role (e.g.
+ *                'Worker' — Mobilisation's "Own Employee" picker needs real
+ *                field workers, not any Own-type employee who happens to be
+ *                staff for payroll purposes)
+ *
+ * Every returned item also carries `.login` (id/email/role/isActive, or
+ * null) — same shape getEmployee already attaches, batched here into one
+ * query rather than one per row — so a caller can distinguish login roles
+ * itself without a second round-trip, independent of the loginRole filter.
  *
  * `actor` (role + userId) is optional so internal callers (e.g. a future
  * script) can still list company-wide; every HTTP call supplies it.
  */
 export async function listEmployees(
-  { page, limit, search, status, type, alerts, thresholdDays, client, team, createdByRole, sortBy, sortOrder },
+  { page, limit, search, status, type, alerts, thresholdDays, client, team, createdByRole, loginRole, sortBy, sortOrder },
   actor
 ) {
   // Each condition is AND-ed; search and alerts are each internally OR-ed.
@@ -72,6 +81,10 @@ export async function listEmployees(
   if (createdByRole === 'Coordinator') {
     const coordinatorIds = await User.find({ role: 'Coordinator' }).distinct('_id');
     conditions.push({ createdBy: { $in: coordinatorIds } });
+  }
+  if (loginRole) {
+    const employeeIds = await User.find({ role: loginRole, employee: { $ne: null } }).distinct('employee');
+    conditions.push({ _id: { $in: employeeIds } });
   }
   // P2-M2: a Coordinator sees their own assigned employees — this is not a
   // filter the caller can opt out of. Milestone 5: PLUS every standby
@@ -109,7 +122,25 @@ export async function listEmployees(
       .lean(),
     Employee.countDocuments(filter),
   ]);
-  return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+
+  // Same '.login' shape getEmployee already attaches (minimal, non-sensitive
+  // fields — never the hash) — batched in one query rather than one per row,
+  // so a caller can tell an office-staff Own employee apart from a real
+  // Worker-login one without a second round-trip per row (see Mobilisation's
+  // "Own Employee" picker, the reason this got added).
+  const logins = await User.find({ employee: { $in: items.map((e) => e._id) } })
+    .select('employee email role isActive')
+    .lean();
+  const loginByEmployeeId = new Map(logins.map((l) => [l.employee.toString(), l]));
+  const withLogin = items.map((e) => {
+    const login = loginByEmployeeId.get(e._id.toString());
+    return {
+      ...e,
+      login: login ? { id: login._id.toString(), email: login.email, role: login.role, isActive: login.isActive } : null,
+    };
+  });
+
+  return { items: withLogin, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
 export async function getEmployee(id, actor) {

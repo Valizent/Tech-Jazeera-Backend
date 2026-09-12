@@ -39,5 +39,8 @@
     "winston": "^3.17.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
   }
 }
