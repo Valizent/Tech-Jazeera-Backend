@@ -306,6 +306,32 @@ async function assertNoActivePlacement(workerId) {
   );
 }
 
+/** SupplierEmployee/Freelancer analogue of assertNoActivePlacement above —
+ *  these worker types have no `worker` ref at all (see
+ *  resolveWorkerSnapshot), so the only durable identity to dedupe on is
+ *  their snapshotted Iqama number. Added 2026-09-12: found during the
+ *  Deployment demobilise work that this guard simply didn't exist for these
+ *  two types — nothing stopped mobilising the same real person to two
+ *  clients at once, unlike the Employee-only check above. Skipped when no
+ *  Iqama was given (nothing to match against — the field isn't required for
+ *  these types). */
+async function assertNoActiveNonEmployeePlacement(iqamaNumber) {
+  if (!iqamaNumber) return;
+  const existing = await Mobilisation.findOne({
+    iqamaNumber,
+    workerType: { $ne: 'Employee' },
+    status: { $in: ['Draft', 'PendingReview', 'Approved'] },
+  })
+    .populate('coordinators.user', 'name')
+    .lean();
+  if (!existing) return;
+  const primary = existing.coordinators.find((c) => c.isPrimary);
+  throw new ApiError(
+    409,
+    `This worker already has an active mobilisation (${existing.status}${primary ? `, coordinated by ${primary.user.name}` : ''}).`
+  );
+}
+
 /** Office Secretary is a hardcoded exception to the Section Access gate
  *  below (same "deny by default, then an explicit hardcoded allow" pattern
  *  as requireStaffOrOfficeSecretary) — they aren't a grantable Section
@@ -322,8 +348,20 @@ export async function createMobilisation(data, actor) {
     throw new ApiError(403, 'You do not have permission to create a mobilisation.');
   }
 
-  const { snapshot: workerSnapshot } = await resolveWorkerSnapshot(data.workerType, data);
-  if (data.workerType === 'Employee') await assertNoActivePlacement(data.worker);
+  const { employee, snapshot: workerSnapshot } = await resolveWorkerSnapshot(data.workerType, data);
+  if (data.workerType === 'Employee') {
+    // Closes the loop with Deployment's demobilise Exit outcome (added
+    // 2026-09-12) — without this, "no longer part of the company" would be
+    // cosmetic: nothing would stop mobilising the same person again five
+    // minutes later. Reversing a mistaken Exit needs no new UI — status is
+    // already a plain editable field on the Employee form.
+    if (employee.status === 'Exited') {
+      throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
+    }
+    await assertNoActivePlacement(data.worker);
+  } else {
+    await assertNoActiveNonEmployeePlacement(workerSnapshot.iqamaNumber);
+  }
   const clientDoc = await Client.findById(data.client).lean();
   if (!clientDoc) throw new ApiError(404, 'Client not found.');
   const subcontractorSnapshot = await resolveSubcontractorSnapshot(data.workerType, data.subcontractor);
@@ -661,13 +699,40 @@ export async function updateMobilisation(id, data, actor) {
   // worker/client always had, just widened to cover the new field too.
   if ('workerType' in data || 'worker' in data || 'workerName' in data) {
     const workerType = data.workerType ?? mobilisation.workerType;
-    const { snapshot } = await resolveWorkerSnapshot(workerType, {
+    const workerInput = {
       worker: 'worker' in data ? data.worker : mobilisation.worker,
       workerName: data.workerName ?? mobilisation.workerName,
       iqamaNumber: data.iqamaNumber ?? mobilisation.iqamaNumber,
       nationality: data.nationality ?? mobilisation.nationality,
       phone: data.phone ?? mobilisation.phone,
-    });
+    };
+
+    // Re-run the same double-placement (and Exited-employee) guards
+    // createMobilisation always has — added 2026-09-12, found while
+    // building Deployment's demobilise feature: this branch could silently
+    // retarget a Draft/Rejected/PendingReview mobilisation onto a worker
+    // who's already actively placed elsewhere (or has since exited the
+    // company), since nothing here ever re-checked. Only worth running
+    // when the worker identity is actually CHANGING to someone else — the
+    // currently-persisted document (what these checks query against) still
+    // holds the OLD identity at this point, so a routine resend of the
+    // SAME worker can never collide with itself.
+    const { employee, snapshot } = await resolveWorkerSnapshot(workerType, workerInput);
+    const workerActuallyChanged =
+      workerType === 'Employee'
+        ? String(workerInput.worker ?? '') !== String(mobilisation.worker ?? '')
+        : workerType !== mobilisation.workerType || (workerInput.iqamaNumber ?? '') !== (mobilisation.iqamaNumber ?? '');
+    if (workerActuallyChanged) {
+      if (workerType === 'Employee') {
+        if (employee.status === 'Exited') {
+          throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
+        }
+        await assertNoActivePlacement(workerInput.worker);
+      } else {
+        await assertNoActiveNonEmployeePlacement(workerInput.iqamaNumber);
+      }
+    }
+
     mobilisation.workerType = workerType;
     Object.assign(mobilisation, snapshot);
   }

@@ -4,7 +4,7 @@
  * read filters, a monthly-hours entry/correction, or a Release.
  */
 import { z } from 'zod';
-import { DEPLOYMENT_STATUSES } from './deployment.model.js';
+import { DEPLOYMENT_STATUSES, DEMOBILISATION_REASONS } from './deployment.model.js';
 
 const DECISIONS = ['Approved', 'Rejected'];
 
@@ -60,7 +60,19 @@ export const decideMonthlyHoursSchema = z.object({
   note: optionalStr(500),
 });
 
-export const releaseDeploymentSchema = z.object({
-  releaseDate: z.coerce.date({ error: 'Release date is required.' }),
+/**
+ * Demobilise (formerly Release) — `reason` drives what happens to the
+ * worker (see deployment.model.js's DEMOBILISATION_OUTCOME). `exitOutcome`
+ * is only read when `reason === 'Other'` (every other reason has a fixed
+ * outcome) — an explicit yes/no for a genuinely novel reason, rather than
+ * guessing. Whether `reason` is valid for this deployment's `workerType`
+ * (the 3 Employee-only reasons) can't be checked here — this schema has no
+ * access to the deployment record — so that check lives in
+ * deployment.service.js's demobiliseDeployment.
+ */
+export const demobiliseDeploymentSchema = z.object({
+  releaseDate: z.coerce.date({ error: 'Demobilisation date is required.' }),
+  reason: z.enum(DEMOBILISATION_REASONS, { error: 'Choose a reason.' }),
+  exitOutcome: z.coerce.boolean().optional(),
   releaseNote: optionalStr(1000),
 });

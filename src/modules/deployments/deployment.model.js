@@ -35,11 +35,41 @@ import mongoose from 'mongoose';
 export const DEPLOYMENT_SHIFTS = ['Day', 'Night', 'Rotating'];
 export const MONTHLY_HOURS_STATUSES = ['Pending', 'Approved', 'Rejected'];
 export const DEPLOYMENT_STATUSES = ['Active', 'Ended'];
-/** Why an Active deployment was ended. Release is the only real way a
- *  Deployment ends now — no more direct Transfer (moving to a different
- *  client always goes through a brand new Mobilisation and its own
- *  approval, never a same-step swap). */
-export const DEPLOYMENT_END_REASONS = ['Released'];
+/**
+ * Why an Active deployment was demobilised (added 2026-09-12, replacing the
+ * single generic 'Released'). Each reason resolves to exactly one outcome
+ * for the worker — Standby (still with the company, eligible for a new
+ * Mobilisation) or Exit (no longer with the company at all) — via
+ * DEMOBILISATION_OUTCOME below, EXCEPT 'Other', whose outcome is an explicit
+ * caller-supplied flag (see deployment.service.js's demobiliseDeployment) —
+ * a genuinely novel reason shouldn't be forced into either bucket by a
+ * fixed lookup.
+ *  - 'ClientAssignmentEnded': the direct rename of the old 'Released' — the
+ *    client/project no longer needs this worker; they remain employed.
+ *  - 'TerminatedByCompany' / 'Resigned' / 'TransferredToAnotherCompany'
+ *    (sponsorship/"Tanazel" transfer to a new employer): Employee-only —
+ *    SupplierEmployee/Freelancer have no employment relationship with this
+ *    company to end (rejected server-side if attempted, see
+ *    deployment.validation.js).
+ *  - 'Other': any worker type; the note is mandatory (see the model field).
+ */
+export const DEMOBILISATION_REASONS = [
+  'ClientAssignmentEnded',
+  'TerminatedByCompany',
+  'Resigned',
+  'TransferredToAnotherCompany',
+  'Other',
+];
+/** Reasons restricted to a real Employee — see the enum's own doc comment. */
+export const EMPLOYEE_ONLY_DEMOBILISATION_REASONS = ['TerminatedByCompany', 'Resigned', 'TransferredToAnotherCompany'];
+/** Reason → outcome, for every reason except 'Other' (see the enum's own doc
+ *  comment). Consumed by deployment.service.js's demobiliseDeployment. */
+export const DEMOBILISATION_OUTCOME = {
+  ClientAssignmentEnded: 'Standby',
+  TerminatedByCompany: 'Exit',
+  Resigned: 'Exit',
+  TransferredToAnotherCompany: 'Exit',
+};
 export const WORKER_TYPES = ['Employee', 'SupplierEmployee', 'Freelancer'];
 
 /** One calendar month's actual client-timesheet hours, entered once the
@@ -112,7 +142,14 @@ const deploymentSchema = new mongoose.Schema(
     startDate: { type: Date, required: true }, // = Mobilisation.mobilisationDate
     endDate: { type: Date, default: null },
     status: { type: String, enum: DEPLOYMENT_STATUSES, default: 'Active' },
-    endReason: { type: String, enum: DEPLOYMENT_END_REASONS, default: null },
+    endReason: { type: String, enum: DEMOBILISATION_REASONS, default: null },
+    // The outcome actually applied for the worker at demobilise time —
+    // DEMOBILISATION_OUTCOME[endReason] for every reason except 'Other'
+    // (whose outcome comes from an explicit form choice, see
+    // deployment.service.js) — stored rather than re-derived so 'Other'
+    // stays reportable too, and so a later change to the lookup table can
+    // never silently reinterpret history.
+    demobilisationOutcome: { type: String, enum: ['Standby', 'Exit'], default: null },
     releaseNote: { type: String, trim: true, maxlength: 1000 },
 
     monthlyHours: { type: [monthlyHoursSchema], default: [] },

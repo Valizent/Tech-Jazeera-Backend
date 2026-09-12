@@ -4,11 +4,13 @@
  * every figure is computed HERE from the employee's real record, never
  * accepted from the client.
  *
- * Scope note (see docs/P3-A-notes.md for the full reasoning): only the three
- * exit reasons the PRD actually specifies are modeled. Article 80
- * (termination for an employee's serious misconduct, which can forfeit the
- * award entirely) is a distinct, contentious legal category this app does
- * not attempt to adjudicate — not offered as an exit reason here.
+ * Scope note (see docs/P3-A-notes.md for the full reasoning): only the exit
+ * reasons the PRD actually specifies (plus 'SponsorshipTransfer', added
+ * 2026-09-12 for Deployment's demobilise feature — see settlement.model.js)
+ * are modeled. Article 80 (termination for an employee's serious
+ * misconduct, which can forfeit the award entirely) is a distinct,
+ * contentious legal category this app does not attempt to adjudicate — not
+ * offered as an exit reason here.
  */
 import Employee from '../employees/employee.model.js';
 import LeaveType from '../leave/leaveType.model.js';

@@ -23,10 +23,11 @@
  * Office Secretary bypass here, gated at the route like Release below.
  * Defaults to Admin-only until an Admin grants it (e.g. to a "Marketing
  * Manager" ApprovalRole) — same "nobody but Admin until configured"
- * posture every newly-introduced Section Access key gets. Release
- * is 'deploymentsRelease' at 'write', default ['Coordinator', 'Manager'] —
- * Office Secretary never releases. Deployments have no create/edit route at
- * all —
+ * posture every newly-introduced Section Access key gets. Demobilise
+ * (POST /:id/demobilise, formerly "Release" — the Section Access key name
+ * itself, 'deploymentsRelease', is unchanged) is 'deploymentsRelease' at
+ * 'write', default ['Coordinator', 'Manager'] — Office Secretary never
+ * demobilises. Deployments have no create/edit route at all —
  * they're born automatically from an Approved Mobilisation (see
  * mobilisation.service.js's approveMobilisation) — EXCEPT for a TEMPORARY
  * Admin-only DELETE added for pre-production cleanup; remove it before
@@ -45,7 +46,7 @@ import {
   addMonthlyHoursSchema,
   updateMonthlyHoursSchema,
   decideMonthlyHoursSchema,
-  releaseDeploymentSchema,
+  demobiliseDeploymentSchema,
 } from './deployment.validation.js';
 import * as deploymentController from './deployment.controller.js';
 
@@ -89,10 +90,10 @@ router.patch(
   asyncHandler(deploymentController.decideMonthlyHours)
 );
 router.post(
-  '/:id/release',
+  '/:id/demobilise',
   canRelease,
-  validate({ params: deploymentIdParamSchema, body: releaseDeploymentSchema }),
-  asyncHandler(deploymentController.release)
+  validate({ params: deploymentIdParamSchema, body: demobiliseDeploymentSchema }),
+  asyncHandler(deploymentController.demobilise)
 );
 // TEMPORARY — pre-production cleanup only, Admin-only hard delete. Remove
 // this route (and deployment.controller.js's `remove` / deployment.

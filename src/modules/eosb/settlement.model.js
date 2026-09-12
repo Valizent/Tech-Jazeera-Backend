@@ -13,7 +13,16 @@
  */
 import mongoose from 'mongoose';
 
-export const EXIT_REASONS = ['Resignation', 'TerminationByEmployer', 'EndOfContract'];
+// 'SponsorshipTransfer' added 2026-09-12 alongside Deployment's demobilise
+// feature (a worker whose Iqama sponsorship transfers/"Tanazel"s to another
+// employer) — safe to add with zero formula changes, since
+// settlement.service.js's computeEosb only special-cases 'Resignation' for
+// its reduction tiers; every other reason (this one included) already gets
+// the full, unreduced award. A real Tanazel's legal EOSB treatment should
+// ultimately be confirmed with the company's own HR/legal advisor — this
+// reason stays fully editable on the settlement form regardless, so HR can
+// override it before computing if that guidance differs.
+export const EXIT_REASONS = ['Resignation', 'TerminationByEmployer', 'EndOfContract', 'SponsorshipTransfer'];
 
 const settlementSchema = new mongoose.Schema(
   {

@@ -15,7 +15,7 @@
  * transaction, so writes can never drift apart: either all land or none do.
  */
 import mongoose from 'mongoose';
-import Deployment from './deployment.model.js';
+import Deployment, { DEMOBILISATION_OUTCOME, EMPLOYEE_ONLY_DEMOBILISATION_REASONS } from './deployment.model.js';
 import Employee from '../employees/employee.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import User from '../auth/user.model.js';
@@ -38,6 +38,21 @@ function currentMonthStr() {
  *  a security gap. */
 async function decidersOfDeploymentsHours() {
   const settings = await getSectionAccess('deploymentsHoursDecide');
+  const roleUsers = settings.writeRoles.length
+    ? await User.find({ role: { $in: settings.writeRoles }, isActive: true }).select('_id').lean()
+    : [];
+  const approvalRoleUserIds = await membersOfRoles(settings.writeApprovalRoles);
+  const ids = new Set([...roleUsers.map((u) => u._id.toString()), ...approvalRoleUserIds]);
+  return [...ids];
+}
+
+/** Every user who can compute/create an EOSB settlement right now — same
+ *  shape as decidersOfDeploymentsHours above, just against the 'eosb'
+ *  Section Access key. Used only to proactively notify when a demobilise
+ *  exits an Employee (see demobiliseDeployment) — a genuine "you may owe
+ *  this person a settlement" nudge, not a permission check. */
+async function decidersOfEosb() {
+  const settings = await getSectionAccess('eosb');
   const roleUsers = settings.writeRoles.length
     ? await User.find({ role: { $in: settings.writeRoles }, isActive: true }).select('_id').lean()
     : [];
@@ -335,18 +350,37 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
 }
 
 /**
- * Release: the worker is pulled off this client and goes back to standby.
- * Ends the Deployment AND completes the source Mobilisation in one
+ * Demobilise (formerly Release): ends this one placement. What happens to
+ * the worker next depends on the reason (see deployment.model.js's
+ * DEMOBILISATION_OUTCOME):
+ *  - Standby (the default, 'ClientAssignmentEnded'): pulled off this client,
+ *    same as the old unconditional Release — free for a brand new
+ *    Mobilisation right away (Mobilisation.assertNoActivePlacement only
+ *    blocks Draft/PendingReview/Approved, never Completed).
+ *  - Exit ('TerminatedByCompany'/'Resigned'/'TransferredToAnotherCompany',
+ *    or 'Other' with exitOutcome:true — Employee only): also sets
+ *    Employee.status='Exited', the one new piece of state this feature
+ *    adds. Every filter that already excludes Exited employees (Payroll,
+ *    the dashboard's active headcount, expiry alerts) picks this up for
+ *    free — no other code needed to "connect" it. mobilisation.service.js's
+ *    createMobilisation separately refuses to mobilise an Exited employee
+ *    again, so this is a real dead end, not cosmetic.
+ * Still ends the Deployment AND completes the source Mobilisation in one
  * transaction (see this file's own module comment for why that logic lives
- * here rather than being called back into mobilisation.service.js) — the
- * worker is immediately eligible for a brand new Mobilisation afterward
- * (Mobilisation.assertNoActivePlacement only blocks Draft/PendingReview/
- * Approved, never Completed).
+ * here rather than being called back into mobilisation.service.js).
  */
-export async function releaseDeployment(deploymentId, data, actor) {
+export async function demobiliseDeployment(deploymentId, data, actor) {
   const deployment = await Deployment.findById(deploymentId).lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
   if (deployment.status !== 'Active') throw new ApiError(400, 'This deployment has already ended.');
+
+  const isEmployeeOnlyReason = EMPLOYEE_ONLY_DEMOBILISATION_REASONS.includes(data.reason);
+  if (isEmployeeOnlyReason && deployment.workerType !== 'Employee') {
+    throw new ApiError(400, 'This reason only applies to a real Employee — this worker has no employment relationship with the company to end.');
+  }
+  const isExitOutcome =
+    deployment.workerType === 'Employee' &&
+    (data.reason === 'Other' ? Boolean(data.exitOutcome) : DEMOBILISATION_OUTCOME[data.reason] === 'Exit');
 
   const session = await mongoose.startSession();
   try {
@@ -356,17 +390,16 @@ export async function releaseDeployment(deploymentId, data, actor) {
         {
           status: 'Ended',
           endDate: data.releaseDate,
-          endReason: 'Released',
+          endReason: data.reason,
+          demobilisationOutcome: isExitOutcome ? 'Exit' : 'Standby',
           releaseNote: data.releaseNote,
         },
         { session }
       );
       if (deployment.workerType === 'Employee' && deployment.worker) {
-        await Employee.updateOne(
-          { _id: deployment.worker },
-          { currentClient: null, currentSite: null, coordinator: null },
-          { session }
-        );
+        const employeeUpdate = { currentClient: null, currentSite: null, coordinator: null };
+        if (isExitOutcome) employeeUpdate.status = 'Exited';
+        await Employee.updateOne({ _id: deployment.worker }, employeeUpdate, { session });
       }
       const updatedMobilisation = await Mobilisation.findOneAndUpdate(
         { _id: deployment.mobilisation, status: 'Approved' },
@@ -374,7 +407,7 @@ export async function releaseDeployment(deploymentId, data, actor) {
         { session }
       );
       if (!updatedMobilisation) {
-        throw new ApiError(409, 'The source mobilisation is no longer Approved — cannot release.');
+        throw new ApiError(409, 'The source mobilisation is no longer Approved — cannot demobilise.');
       }
     });
     await logAudit({
@@ -382,11 +415,35 @@ export async function releaseDeployment(deploymentId, data, actor) {
       action: 'deployment.release',
       targetType: 'Deployment',
       targetId: deployment._id,
-      meta: { worker: deployment.workerName, client: deployment.clientName, releaseDate: data.releaseDate },
+      meta: {
+        worker: deployment.workerName,
+        client: deployment.clientName,
+        releaseDate: data.releaseDate,
+        reason: data.reason,
+        outcome: isExitOutcome ? 'Exit' : 'Standby',
+      },
       ip: actor.ip,
     });
   } finally {
     session.endSession();
+  }
+
+  // Non-blocking nudge — whoever can compute an EOSB settlement should know
+  // one may now be due, even if the person who demobilised this worker
+  // never opens the follow-up prompt the client shows. See this file's own
+  // module comment on why this notification lives here rather than in
+  // mobilisation.service.js: this IS the moment the exit is decided.
+  if (isExitOutcome) {
+    const deciderIds = await decidersOfEosb();
+    await Promise.all(
+      deciderIds.map((userId) =>
+        notifyUser(userId, {
+          type: 'RequestStatus',
+          title: `${deployment.workerName} has exited the company — an EOSB settlement may be due`,
+          url: `/eosb/new?employee=${deployment.worker}`,
+        })
+      )
+    );
   }
 }
 

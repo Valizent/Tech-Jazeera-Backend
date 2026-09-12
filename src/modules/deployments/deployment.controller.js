@@ -36,10 +36,10 @@ export async function decideMonthlyHours(req, res) {
   res.json(new ApiResponse('Decision recorded.', deployment));
 }
 
-/** POST /api/deployments/:id/release — 200 → data: null (worker released to standby) */
-export async function release(req, res) {
-  await deploymentService.releaseDeployment(req.params.id, req.body, actor(req));
-  res.json(new ApiResponse('Worker released.'));
+/** POST /api/deployments/:id/demobilise — 200 → data: null */
+export async function demobilise(req, res) {
+  await deploymentService.demobiliseDeployment(req.params.id, req.body, actor(req));
+  res.json(new ApiResponse('Deployment demobilised.'));
 }
 
 // TEMPORARY — pre-production cleanup only. Remove alongside the service
