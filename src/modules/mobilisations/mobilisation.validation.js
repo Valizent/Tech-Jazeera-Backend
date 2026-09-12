@@ -33,8 +33,20 @@ const optionalIqama = z.preprocess(
 // 9 digits starting with 5). Scoped to Mobilisation's own phone field only —
 // Employee's phone regex is deliberately looser (covers non-Saudi contacts).
 const saudiPhoneRegex = /^(?:\+?9665\d{8}|05\d{8})$/;
+// '+966' alone is the form's own pre-filled placeholder (see
+// mobilisations.schema.js's emptyMobilisationForm), not a value someone
+// actually typed — treat it the same as empty, or every Own Employee
+// mobilisation (whose phone field isn't even shown — the real number
+// lives on their Employee record) fails validation on a placeholder that
+// was never really "filled in". Bug found 2026-09-12: this silently
+// blocked every Own Employee Draft save with no visible error, since the
+// errored field wasn't rendered for that worker type.
+const phoneToUndef = (value) => {
+  const cleaned = emptyToUndef(value);
+  return cleaned === '+966' ? undefined : cleaned;
+};
 const optionalSaudiPhone = z.preprocess(
-  emptyToUndef,
+  phoneToUndef,
   z
     .string()
     .trim()
