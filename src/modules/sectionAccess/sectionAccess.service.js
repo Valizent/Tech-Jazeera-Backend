@@ -45,37 +45,47 @@ const SECTION_LABELS = {
   holidays: 'Holidays',
 };
 
+/** What each section IS FOR, in plain English — not what Read/Write
+ *  mechanically do (that's the same two generic lines under every card's
+ *  Read/Write checklist already, see SectionCard/TierChecklist on the
+ *  client). Replaced the old Read/Write-mechanics phrasing entirely per the
+ *  user's own instruction 2026-09-13 (a couple of section-specific caveats
+ *  that used to live here — e.g. "Office Secretary always has this
+ *  regardless of this setting", "deleting stays Admin/Manager only
+ *  regardless" — are a real, deliberate trade-off of that: still true, just
+ *  no longer written down at this specific spot; see each route file's own
+ *  doc comment for the underlying rule). */
 const SECTION_DESCRIPTIONS = {
-  payroll: 'Read: view monthly runs and payslips. Write: create a run, edit a line, finalize, or delete.',
-  expenses: 'Read: view the expense ledger. Write: record, edit, or delete an expense.',
-  employeeCreate: 'Read: view the employee list and profiles. Write: create a new employee record — Admin only until you grant someone else this specifically.',
-  companySettings: "Read/Write: viewing and editing the company's legal/contact/bank identity and logo — printed on every generated document.",
-  mobilisationsViewer: 'Read-only access to every mobilisation once submitted (not while still a Draft), including commercial fields. No write action is tied to this key.',
-  mobilisationsSelfMobilise: 'Write-only: can create a mobilisation directly as its own primary coordinator. Coordinators are granted this via the Coordinator approval role by default. Viewing a mobilisation is governed separately (coordinator, or the Mobilisations — full visibility key above).',
-  invoices: 'Read: view invoices. Write: create an invoice or record a payment. Deleting one stays Admin/Manager only regardless.',
-  eosb: 'Read: view End of Service settlements. Write: compute/create or delete one.',
-  financialRequests: 'Read/Write: deciding a salary advance or reimbursement request. Viewing the queue and submitting a request stay open to any staff role, unchanged — this key only governs the decide action.',
-  auditLog: 'Read-only: the auth & CRUD audit trail — who did what, and when. There is no write action.',
-  timesheetProcessor: 'Read/Write: bulk-importing attendance-device exports (a stateless tool — no separate viewing exists beyond running it).',
-  nfc: 'Read: view companies, cards, and batches. Write: create, edit, assign, or delete them.',
-  clientsManage: 'Read: view the client list. Write: create/edit a client, and decide one a Coordinator submitted. Deleting stays Admin/Manager only regardless.',
-  deploymentsHours: 'Write-only: entering or correcting a month\'s actual client-timesheet hours and OT amount. Office Secretary always has this, regardless of this setting. Viewing the register is governed by "Deployments — view & release" below.',
-  deploymentsHoursDecide: 'Write-only: approving or rejecting a month\'s entered hours (e.g. Marketing Manager). Separate from "Deployments — monthly hours & OT" above — whoever enters hours is never automatically who approves them. Admin only until granted.',
-  deploymentsRelease: 'Read: view the deployments register. Write: release a worker (ends the deployment and frees them for a new mobilisation).',
-  subcontractorsManage: 'Read: view the subcontractor list. Write: create, edit, or delete one.',
-  attendanceRecords: 'Read: view/export the attendance records grid. Write: bulk-mark or correct a worker\'s day. Separate from the other two Attendance keys below — someone can have this without being able to self-mark or configure the geofence, and vice versa.',
-  attendanceSignInOut: 'Read: view the Sign In/Out log, including other staff members\' punches. Write: also self-mark your OWN attendance from that same tab (and always implies Read, like every Write tier) — this is what makes the punch button appear at all for a staff login.',
-  attendanceOfficeLocation: 'Read: view the configured geofence/office-network settings Worker self-attendance is checked against. Write: edit them. Admin-only until granted — this is a security-relevant setting, not a day-to-day action.',
-  documentsManage: 'Read: view/download documents. Write: upload, version, or delete one.',
-  assetsManage: 'Read: view the asset register. Write: create, edit, assign, or return an asset. Deleting stays Admin/HR only regardless.',
-  quotationsManage: 'Read: view/PDF a quotation. Write: create, edit, or duplicate one. Deleting stays Admin/Manager only regardless.',
-  ramadanManage: 'Read: view the Ramadan calendar. Write: create, edit, or delete a period.',
-  team: 'Read-only: viewing the staff login list. Editing a login, resetting its password, or deleting it stays Admin only — too sensitive to delegate broadly; there is no write tier for this key.',
-  approvalHierarchy: 'Read: view approval roles/workflows (many pages already depend on this being readable — narrowing it can break those). Write: create or edit an approval role or workflow.',
-  leaveRequests: 'Read/Write: viewing, submitting, and deciding leave requests. Optional — matches the existing wide-open default until narrowed.',
-  timesheetRequests: 'Read/Write: viewing, submitting, deciding, and bulk-approving timesheets. Optional — matches the existing wide-open default until narrowed.',
-  exitDocuments: 'Read/Write: viewing, submitting, and deciding exit re-entry visa and certificate requests. Optional — matches the existing wide-open default until narrowed.',
-  holidays: 'Write-only: adding, editing, or removing a holiday. Viewing the calendar stays open to everyone, including Workers, regardless of this setting — the Read tier here is unused by design.',
+  payroll: "The company's monthly payroll runs and worker payslips.",
+  expenses: 'The company\'s internal expense ledger — spending not billed to a client.',
+  employeeCreate: "The employee directory: every worker's profile, records, and documents, plus adding a new one.",
+  companySettings: "The company's own legal identity, contact and bank details, logo, and signatory — printed on every generated document.",
+  mobilisationsViewer: 'Full visibility into every mobilisation once submitted, commercial rates and margins included.',
+  mobilisationsSelfMobilise: 'Creating a new mobilisation directly as its own primary coordinator.',
+  invoices: 'Client invoices generated from approved quotations, and the payments recorded against them.',
+  eosb: 'End of Service settlement calculations for an employee who is exiting the company.',
+  financialRequests: "Deciding a worker's salary advance or expense reimbursement request.",
+  auditLog: 'The company\'s security log — a record of every login and data change, for oversight.',
+  timesheetProcessor: 'Bulk-importing attendance from an external time-clock device export.',
+  nfc: 'The NFC business-card program — companies, cards, and batches.',
+  clientsManage: 'The client directory — companies your workers are placed with.',
+  deploymentsHours: "Entering a month's client-timesheet hours and overtime for an active deployment.",
+  deploymentsHoursDecide: "Reviewing, and approving or rejecting, a month's entered deployment hours before they reach Payroll.",
+  deploymentsRelease: 'The deployments register — which worker is placed where — and ending an active placement.',
+  subcontractorsManage: 'The subcontractor directory — outside companies a mobilisation is sometimes routed through.',
+  attendanceRecords: 'The day-by-day attendance grid for every worker, and correcting a day.',
+  attendanceSignInOut: "Staff self-service sign-in/out — your own daily attendance punch, plus oversight of everyone else's.",
+  attendanceOfficeLocation: "The office location and geofence a Worker's self-marked attendance is checked against.",
+  documentsManage: 'The company and employee document store — uploads, versions, and previews.',
+  assetsManage: 'The company asset register — equipment issued to employees.',
+  quotationsManage: 'Pricing sent to a client before an invoice exists.',
+  ramadanManage: 'The Ramadan work-hour calendar used to calculate overtime during Ramadan.',
+  team: 'The list of staff logins and their roles.',
+  approvalHierarchy: "The company's approval roles and the multi-step workflows built from them.",
+  leaveRequests: "A worker's leave requests, from submission through approval.",
+  timesheetRequests: 'Weekly timesheets submitted for approval.',
+  exitDocuments: 'Exit re-entry visa and certificate requests.',
+  holidays: 'The company holiday calendar.',
 };
 
 function defaultFor(sectionKey) {
