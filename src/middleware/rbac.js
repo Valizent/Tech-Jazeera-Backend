@@ -35,13 +35,25 @@ export const requireRoles = (...allowedRoles) => {
  * Staff = every role EXCEPT the self-service personas, Worker (P2-M1) and
  * Staff (the login role — confusingly named the same as this constant, but
  * distinct: STAFF_ROLES is "company-wide admin access", the `Staff` role is
- * "self-service only"), and the two deny-by-default senior/narrow roles
- * Executive and Office Secretary (see user.model.js's doc comments —
- * allow-listed into specific routes via requireStaffOrExecutive/
- * requireStaffOrOfficeSecretary below, never blanket CRUD access). The
- * admin modules (employees, clients, deployments, attendance, documents,
- * quotations, dashboard) are staff-only; Worker and Staff logins use the ESS
- * portal (`/api/me`) instead, never these.
+ * "self-service only"), and the one remaining deny-by-default senior/narrow
+ * role, Executive (see user.model.js's doc comments — allow-listed into
+ * specific routes via requireStaffOrExecutive below, never blanket CRUD
+ * access). The admin modules (employees, clients, deployments, attendance,
+ * documents, quotations, dashboard) are staff-only; Worker and Staff logins
+ * use the ESS portal (`/api/me`) instead, never these.
+ *
+ * Office Secretary moved INTO this set 2026-09-13 (see
+ * docs/RBAC-notes.md's Office Secretary follow-up) — originally built
+ * narrow like Executive (single-purpose: the Mobilisation module's
+ * post-Coordinator review step), the user asked for her to get the full
+ * staff floor instead once a second real use case (self-marking her own
+ * attendance) came up. This alone grants her nothing beyond reaching the
+ * same routers every other staff role reaches — actual visibility into any
+ * given section still comes entirely from her real Section Access grants
+ * (canAccessSection's own floor check is exactly this constant), same as a
+ * freshly-created Coordinator with no grants yet would see nothing either.
+ * `requireStaffOrOfficeSecretary` is gone — plain `requireStaff` already
+ * covers her now.
  *
  * Derived from ROLES rather than hard-coded so a future self-service role is
  * excluded automatically. Mounted at the router level (`router.use(requireStaff)`)
@@ -49,7 +61,7 @@ export const requireRoles = (...allowedRoles) => {
  * otherwise ask only for requireAuth, which is exactly where a Worker/Staff
  * login would leak into company-wide data.
  */
-export const STAFF_ROLES = ROLES.filter((role) => !['Worker', 'Staff', 'Executive', 'Office Secretary'].includes(role));
+export const STAFF_ROLES = ROLES.filter((role) => !['Worker', 'Staff', 'Executive'].includes(role));
 export const requireStaff = requireRoles(...STAFF_ROLES);
 
 /**
@@ -68,16 +80,3 @@ export const requireStaff = requireRoles(...STAFF_ROLES);
  * claim paid) or any create/edit/delete route — see docs/RBAC-notes.md.
  */
 export const requireStaffOrExecutive = requireRoles(...STAFF_ROLES, 'Executive');
-
-/**
- * requireStaff, plus Office Secretary — used only by mobilisation.routes.js.
- * Same safety argument as requireStaffOrExecutive: this only controls which
- * router an Office Secretary login can reach at all; real per-record
- * authorization for editing/deciding a specific mobilisation still comes
- * from ApprovalRole membership on its current workflow step
- * (resolveStepAuthority in approvalEngine.service.js), unchanged by this
- * gate. Without it, an Office-Secretary login would 403 at the router before
- * ever reaching that per-step check — the same gap Executive had before this
- * middleware's sibling was created for it.
- */
-export const requireStaffOrOfficeSecretary = requireRoles(...STAFF_ROLES, 'Office Secretary');

@@ -386,15 +386,15 @@ async function assertNoDateOverlap(workerType, identity, proposedDate) {
   }
 }
 
-/** Office Secretary is a hardcoded exception to the Section Access gate
- *  below (same "deny by default, then an explicit hardcoded allow" pattern
- *  as requireStaffOrOfficeSecretary) — canAccessSection's own floor
- *  (sectionAccess.service.js) excludes Office Secretary from every section
- *  outright, regardless of Approval Role membership, and the user's own ask
- *  was specifically "let Office Secretary create one for a Coordinator
- *  who's busy," not a general Section Access grant. Building it as a real
- *  Section Access grant would also let an admin accidentally hand Office
- *  Secretary a blanket self-mobilise permission never intended for them. */
+/** Office Secretary is a hardcoded, unconditional exception to the Section
+ *  Access gate below, independent of whatever her real 'mobilisationsSelfMobilise'
+ *  grant is (or isn't) — the user's own ask was specifically "let Office
+ *  Secretary create one for a Coordinator who's busy," a per-feature rule,
+ *  not a request to open the general Section Access grant for her (which,
+ *  since she moved into STAFF_ROLES 2026-09-13, an Admin COULD now do
+ *  through Section Access instead — but doing it this way keeps the
+ *  guarantee explicit and un-revocable-by-accident rather than depending on
+ *  a pill staying checked on the Section Access page). */
 export async function createMobilisation(data, actor) {
   const isOfficeSecretary = actor.role === 'Office Secretary';
   const allowed = isOfficeSecretary || (await canAccessSection('mobilisationsSelfMobilise', actor));
