@@ -229,7 +229,7 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     canReadDocuments,
   ] = actor
     ? await Promise.all(
-        ['employeeCreate', 'deploymentsRelease', 'clientsManage', 'quotationsManage', 'payroll', 'invoices', 'expenses', 'auditLog', 'attendanceManage', 'documentsManage'].map(
+        ['employeeCreate', 'deploymentsRelease', 'clientsManage', 'quotationsManage', 'payroll', 'invoices', 'expenses', 'auditLog', 'attendanceRecords', 'documentsManage'].map(
           (key) => canAccessSection(key, actor, 'read')
         )
       )
