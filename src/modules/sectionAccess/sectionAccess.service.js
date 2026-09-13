@@ -40,6 +40,7 @@ const SECTION_LABELS = {
   leaveRequests: 'Leave requests',
   timesheetRequests: 'Timesheet requests',
   exitDocuments: 'Exit & Documents',
+  holidays: 'Holidays',
 };
 
 const SECTION_DESCRIPTIONS = {
@@ -70,6 +71,7 @@ const SECTION_DESCRIPTIONS = {
   leaveRequests: 'Read/Write: viewing, submitting, and deciding leave requests. Optional — matches the existing wide-open default until narrowed.',
   timesheetRequests: 'Read/Write: viewing, submitting, deciding, and bulk-approving timesheets. Optional — matches the existing wide-open default until narrowed.',
   exitDocuments: 'Read/Write: viewing, submitting, and deciding exit re-entry visa and certificate requests. Optional — matches the existing wide-open default until narrowed.',
+  holidays: 'Write-only: adding, editing, or removing a holiday. Viewing the calendar stays open to everyone, including Workers, regardless of this setting — the Read tier here is unused by design.',
 };
 
 function defaultFor(sectionKey) {

@@ -64,6 +64,7 @@ export const SECTION_KEYS = [
   'leaveRequests',
   'timesheetRequests',
   'exitDocuments',
+  'holidays',
 ];
 
 const sectionAccessSchema = new mongoose.Schema(
