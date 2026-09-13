@@ -50,7 +50,15 @@ router.post(
   asyncHandler(timesheetController.bulkApprove)
 );
 // Beyond the read floor above, the controller itself checks "Admin
-// or a real Approval Role member" — see generateMonthlyReport's doc comment.
+// or a real Approval Role member" — see assertReportEligible's doc comment.
+// GET returns the JSON preview for the on-screen grid; POST converts the
+// same data to the .xlsx download — same eligibility floor, same builder.
+router.get(
+  '/monthly-report',
+  canRead,
+  validate({ query: generateMonthlyReportSchema }),
+  asyncHandler(timesheetController.getMonthlyReport)
+);
 router.post(
   '/monthly-report',
   canRead,
