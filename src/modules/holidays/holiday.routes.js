@@ -1,14 +1,15 @@
 /**
- * Holiday routes (P3-B).
- *
- * Read-open to any authenticated user (Workers included — the ESS Leave page
- * shows the upcoming-holidays list); only Admin/HR shape the calendar — this
- * is company calendar policy, not a day-to-day operational manager's job.
+ * Holiday routes (P3-B). Section Access key 'holidays' is Write-only (added
+ * 2026-09-13, alongside the Section Access page's own module-grid redesign):
+ * GET stays open to any authenticated user with no gate at all — Workers
+ * included, since the ESS Leave page shows the upcoming-holidays list off
+ * this exact route — only create/edit/delete is admin-configurable now,
+ * replacing the previous hardcoded Admin/HR check.
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireRoles } from '../../middleware/rbac.js';
+import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
   createHolidaySchema,
@@ -22,22 +23,19 @@ const router = Router();
 
 router.use(requireAuth);
 
+const canManageHolidays = requireSectionAccess('holidays', 'write');
+
 router.get('/', validate({ query: listHolidaysSchema }), asyncHandler(holidayController.list));
-router.post(
-  '/',
-  requireRoles('Admin', 'HR'),
-  validate({ body: createHolidaySchema }),
-  asyncHandler(holidayController.create)
-);
+router.post('/', canManageHolidays, validate({ body: createHolidaySchema }), asyncHandler(holidayController.create));
 router.patch(
   '/:id',
-  requireRoles('Admin', 'HR'),
+  canManageHolidays,
   validate({ params: holidayIdParamSchema, body: updateHolidaySchema }),
   asyncHandler(holidayController.update)
 );
 router.delete(
   '/:id',
-  requireRoles('Admin', 'HR'),
+  canManageHolidays,
   validate({ params: holidayIdParamSchema }),
   asyncHandler(holidayController.remove)
 );
