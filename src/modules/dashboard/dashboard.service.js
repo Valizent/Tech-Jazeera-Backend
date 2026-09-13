@@ -31,6 +31,7 @@ import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import { toUtcDay } from '../attendance/attendance.service.js';
 import { annotateCanDecide } from '../approvals/approvalEngine.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 export const EXPIRY_WARNING_DAYS = 30;
 const TREND_MONTHS = 6;
@@ -162,17 +163,35 @@ async function getMyPendingActions(actor) {
  *   customizable per viewer — mirrors the same param on the employee list)
  * @param {string} [opts.month] "YYYY-MM" — the period the real-profit section
  *   (P2-M8) shows; defaults to the current calendar month.
- * @param {{role: string, userId: string}} [opts.actor] when actor.role is
- *   'Coordinator', every figure below is scoped to their own team: deployments,
- *   workforce counts, the clients their team is placed at, and expiring
- *   documents. Quotations/revenue, payroll, and recent activity are omitted
- *   entirely (null) for a Coordinator — not a scoping gap, a deliberate
- *   visibility line: salary figures and the audit-style activity feed are
- *   Admin/Manager/HR/Accounts territory, not something a team lead sees even
- *   for their own team. Quotations specifically also has no honest per-team
- *   figure to compute (Quotation only links to Client, not to any
- *   Employee/Coordinator) — same "never fabricate a figure the data doesn't
- *   support" rule the finance section already follows for profit.
+ * @param {{role: string, userId: string}} [opts.actor] two independent axes:
+ *
+ *   1. VISIBILITY — added 2026-09-13, the user's own instruction ("the
+ *      dashboard should reflect whatever [Section Access] read access they
+ *      have"), replacing a hardcoded `isManager`-based rule that had quietly
+ *      drifted out of sync with real grants (a Manager still saw Pipeline/
+ *      Quotations here even after losing `quotationsManage`/`invoices` read
+ *      via the Section Access login-role-removal migration) and never
+ *      applied to Executive at all (who saw full company financials on the
+ *      dashboard completely unconditionally, contradicting Executive's own
+ *      deny-by-default design elsewhere). Every widget below now checks the
+ *      SAME `canAccessSection(key, actor, 'read')` real grant its own module
+ *      page is gated by — Admin always passes, same as everywhere else. A
+ *      widget built from MULTIPLE sections (`profit` = Invoices + Payroll +
+ *      Expenses) requires read on ALL of them, not any one — a profit figure
+ *      built from only some of its real inputs would be an actual number
+ *      that means something else entirely, worse than just not showing it
+ *      (the user's own explicit call). `expiringDocuments` is a list, not a
+ *      derived figure, so its two sources (Employee identity docs vs.
+ *      generic Documents) are gated independently instead of all-or-nothing.
+ *   2. SCOPING — unchanged, and orthogonal to (1): when actor.role is
+ *      'Coordinator', whatever they CAN read is further narrowed to their
+ *      own team (deployments, workforce, the clients their team is placed
+ *      at, expiring documents) — a data-scoping rule tied to the real
+ *      Employee.coordinator hierarchy, not an access-grant question.
+ *      Quotations specifically still has no honest per-team figure to
+ *      compute at all regardless of any grant (Quotation only links to
+ *      Client, never to an Employee/Coordinator) — same "never fabricate a
+ *      figure the data doesn't support" rule `profit` follows.
  */
 export async function getDashboard({ thresholdDays, month, actor } = {}) {
   const days = thresholdDays ?? EXPIRY_WARNING_DAYS;
@@ -183,21 +202,41 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
 
   // A Coordinator's entire dashboard is scoped to their own team. Computed
   // once, ahead of the parallel batch below, so every filter that needs it
-  // shares the same scope.
+  // shares the same scope. Unrelated to the read-access checks below — see
+  // this function's own doc comment (SCOPING vs. VISIBILITY).
   const isCoordinator = actor?.role === 'Coordinator';
-  // A Manager (the generic login a BDM-titled person holds) keeps their own
-  // company-wide operational counts (deployed/workers/clients/workforce +
-  // quotations BY STATUS) but loses the money-figure sections (Pipeline,
-  // Profit, Recent Activity) — those are Admin/Executive territory (GM/COO/
-  // Marketing/Financial Manager, per the org chart, all log in as Executive
-  // today). "Pending quotations" becomes personal (their own Drafts) instead
-  // of the company-wide count, since a Manager has no real per-item approval
-  // step over quotations they didn't author.
+  // "Pending quotations" is personal (their own Drafts) for a Manager
+  // (the generic login a BDM-titled person holds) instead of the
+  // company-wide count — they have no real per-item approval step over a
+  // quotation they didn't author. Unrelated to whether they can see
+  // quotations at all (canReadQuotations, below) — this only picks WHICH
+  // quotations, once that gate is already open.
   const isManager = actor?.role === 'Manager';
-  const hideFinance = isCoordinator || isManager;
   const teamIds = isCoordinator
     ? await Employee.find({ coordinator: actor.userId, type: { $in: WORKFORCE_TYPES } }).distinct('_id')
     : null;
+
+  const [
+    canReadEmployees,
+    canReadDeployments,
+    canReadClients,
+    canReadQuotations,
+    canReadPayroll,
+    canReadInvoices,
+    canReadExpenses,
+    canReadAuditLog,
+    canReadAttendance,
+    canReadDocuments,
+  ] = actor
+    ? await Promise.all(
+        ['employeeCreate', 'deploymentsRelease', 'clientsManage', 'quotationsManage', 'payroll', 'invoices', 'expenses', 'auditLog', 'attendanceManage', 'documentsManage'].map(
+          (key) => canAccessSection(key, actor, 'read')
+        )
+      )
+    : Array(10).fill(false);
+  // Profit is built from all three of these — see this function's own doc
+  // comment on why a partial figure is worse than none at all.
+  const canSeeProfit = canReadInvoices && canReadPayroll && canReadExpenses;
 
   const employeeExpiryFilter = { status: { $ne: 'Exited' }, $or: identityExpiryOr };
   if (teamIds) employeeExpiryFilter._id = { $in: teamIds };
@@ -232,60 +271,68 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     personalPendingQuotations,
     myPendingActions,
   ] = await Promise.all([
-    Deployment.countDocuments(deploymentFilter),
-    Employee.aggregate([{ $match: employeeStatusFilter }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
-    // Payroll — skipped for a Coordinator or a Manager (BDM), see hideFinance
-    // above. type: 'Outsourced' — this figure is the supplied workforce's pay,
-    // not internal staff salaries (an Own-type employee's salary, if ever
-    // set, must never silently flow into this).
-    hideFinance
-      ? Promise.resolve([])
-      : Employee.aggregate([
+    canReadDeployments ? Deployment.countDocuments(deploymentFilter) : Promise.resolve(0),
+    canReadEmployees
+      ? Employee.aggregate([{ $match: employeeStatusFilter }, { $group: { _id: '$status', count: { $sum: 1 } } }])
+      : Promise.resolve([]),
+    // type: 'Outsourced' — this figure is the supplied workforce's pay, not
+    // internal staff salaries (an Own-type employee's salary, if ever set,
+    // must never silently flow into this).
+    canReadPayroll
+      ? Employee.aggregate([
           { $match: { status: { $ne: 'Exited' }, type: 'Outsourced' } },
           { $group: { _id: null, total: { $sum: '$salary' } } },
-        ]),
+        ])
+      : Promise.resolve([]),
     // A Coordinator's "clients" are the distinct clients their team is
     // currently placed at — not every client in the system. approvalStatus:
     // 'Approved' on the company-wide count — a client still Pending isn't
     // really "active" in the business sense yet (it also can't have any
     // deployments, so the Coordinator branch is already implicitly correct).
-    teamIds
-      ? Deployment.find({ status: 'Active', worker: { $in: teamIds } }).distinct('client').then((ids) => ids.length)
-      : Client.countDocuments({ status: 'Active', approvalStatus: 'Approved' }),
-    // Skipped entirely for a Coordinator — see the doc comment above.
-    isCoordinator
+    !canReadClients
+      ? Promise.resolve(0)
+      : teamIds
+        ? Deployment.find({ status: 'Active', worker: { $in: teamIds } }).distinct('client').then((ids) => ids.length)
+        : Client.countDocuments({ status: 'Active', approvalStatus: 'Approved' }),
+    // Skipped entirely for a Coordinator regardless of any grant — see the
+    // doc comment above (Quotation has no data-model link to a team at all).
+    !canReadQuotations || isCoordinator
       ? Promise.resolve([])
       : Quotation.aggregate([{ $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$grandTotal' } } }]),
-    Employee.find(employeeExpiryFilter)
-      .select('fullName employeeId passport visa iqama medical drivingLicense')
-      .lean(),
-    Document.find(documentExpiryFilter)
-      .populate('owner', 'fullName companyName')
-      .limit(50)
-      .lean(),
-    // Recent activity — skipped for a Coordinator or a Manager, see hideFinance above.
-    hideFinance
-      ? Promise.resolve([])
-      : AuditLog.find({}).sort({ createdAt: -1 }).limit(8).populate('user', 'name').lean(),
-    // Company-wide, unrelated to the finance visibility line above — a
-    // Coordinator doesn't see this (they'd only ever see their own
-    // submissions' status on the client itself, not a company-wide count),
-    // but a Manager still does — client approvals are BDM territory.
-    isCoordinator ? Promise.resolve(null) : Client.countDocuments({ approvalStatus: 'Pending' }),
-    // "Marked today" — a workforce-activity count, not a financial figure, so
-    // (unlike payroll/revenue/activity above) it stays visible to a
-    // Coordinator, scoped to their own team via markedTodayFilter.
-    Attendance.countDocuments(markedTodayFilter),
-    // P2-M8 real profit — skipped for a Coordinator or a Manager, same
-    // visibility line as payroll/revenue above.
-    hideFinance ? Promise.resolve(null) : getProfitOverview(month),
-    // A Manager's "pending quotations" is personal (their own Drafts) — they
-    // have no per-item approval step over a quotation they didn't author, so
-    // the company-wide Draft count isn't theirs to act on.
-    isManager ? Quotation.countDocuments({ status: 'Draft', createdBy: actor.userId }) : Promise.resolve(null),
+    canReadEmployees
+      ? Employee.find(employeeExpiryFilter)
+          .select('fullName employeeId passport visa iqama medical drivingLicense')
+          .lean()
+      : Promise.resolve([]),
+    canReadDocuments
+      ? Document.find(documentExpiryFilter).populate('owner', 'fullName companyName').limit(50).lean()
+      : Promise.resolve([]),
+    canReadAuditLog
+      ? AuditLog.find({}).sort({ createdAt: -1 }).limit(8).populate('user', 'name').lean()
+      : Promise.resolve([]),
+    // Company-wide, unrelated to canReadClients scoping nuance above — a
+    // Coordinator never sees this regardless (they'd only ever see their own
+    // submissions' status on the client itself, not a company-wide count).
+    !canReadClients || isCoordinator ? Promise.resolve(null) : Client.countDocuments({ approvalStatus: 'Pending' }),
+    // "Marked today" — scoped to the Coordinator's own team via
+    // markedTodayFilter when applicable, same as every other team-scoped
+    // query above.
+    canReadAttendance ? Attendance.countDocuments(markedTodayFilter) : Promise.resolve(0),
+    // P2-M8 real profit — requires read on all three contributing sections
+    // (see canSeeProfit above).
+    canSeeProfit ? getProfitOverview(month) : Promise.resolve(null),
+    // A Manager's "pending quotations" is personal (their own Drafts) — see
+    // this function's own doc comment. Only computed once the quotations
+    // gate itself is open.
+    canReadQuotations && isManager
+      ? Quotation.countDocuments({ status: 'Draft', createdBy: actor.userId })
+      : Promise.resolve(null),
     // "Pending on me" across every workflow-integrated request type — see
     // getMyPendingActions above. Computed for every viewer (Admin included);
-    // empty array where nothing is actionable.
+    // empty array where nothing is actionable. Unrelated to the read-access
+    // gates above — it's already self-gated by real per-item decide
+    // authority (ApprovalRole membership on that record's current step),
+    // which is a stricter, more specific check than any section-level grant.
     getMyPendingActions(actor),
   ]);
 
@@ -337,30 +384,39 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
 
   return {
     stats: {
-      deployedActive,
-      activeWorkers: workforceByStatus.Active,
-      onLeave: workforceByStatus['On Leave'],
-      totalWorkers,
-      activeClients,
-      pendingQuotations: isManager ? personalPendingQuotations : teamIds ? null : quotationsByStatus.Draft,
+      deployedActive: canReadDeployments ? deployedActive : null,
+      activeWorkers: canReadEmployees ? workforceByStatus.Active : null,
+      onLeave: canReadEmployees ? workforceByStatus['On Leave'] : null,
+      totalWorkers: canReadEmployees ? totalWorkers : null,
+      activeClients: canReadClients ? activeClients : null,
+      pendingQuotations: !canReadQuotations
+        ? null
+        : isManager
+          ? personalPendingQuotations
+          : teamIds
+            ? null
+            : quotationsByStatus.Draft,
+      // Always the real count of whatever's actually in expiringDocuments
+      // below (itself built from independently-gated sources) — naturally 0
+      // when neither contributing source is readable, no extra gate needed.
       expiringSoon: expiringDocuments.length,
       pendingClientApprovals,
-      markedToday,
+      markedToday: canReadAttendance ? markedToday : null,
     },
     finance: {
-      approvedRevenue: hideFinance ? null : approvedRevenue,
-      pendingRevenue: hideFinance ? null : pendingRevenue,
-      monthlyPayroll: hideFinance ? null : (payrollAgg[0]?.total ?? 0),
+      approvedRevenue: canReadQuotations && !isCoordinator ? approvedRevenue : null,
+      pendingRevenue: canReadQuotations && !isCoordinator ? pendingRevenue : null,
+      monthlyPayroll: canReadPayroll ? (payrollAgg[0]?.total ?? 0) : null,
       // P2-M8 — real profit for the selected month (revenue from actually
       // issued invoices, cost from a finalized payroll run and recorded
-      // expenses) plus a trailing 6-month trend. null for a Coordinator or a
-      // Manager, same visibility line as the three estimates above.
+      // expenses) plus a trailing 6-month trend. null unless the viewer can
+      // read Invoices, Payroll, AND Expenses — see canSeeProfit above.
       profit: profitOverview,
     },
-    workforceByStatus,
-    quotationsByStatus: isCoordinator ? null : quotationsByStatus,
+    workforceByStatus: canReadEmployees ? workforceByStatus : null,
+    quotationsByStatus: canReadQuotations && !isCoordinator ? quotationsByStatus : null,
     expiringDocuments: expiringDocuments.slice(0, 10),
-    recentActivity: hideFinance ? null : recentActivity,
+    recentActivity: canReadAuditLog ? recentActivity : null,
     // "Pending on me" — see getMyPendingActions. Always an array (never null),
     // same "hidden entirely at zero" pattern the client already applies to
     // pendingClientApprovals.
