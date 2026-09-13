@@ -177,6 +177,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     actualHours,
     otHours,
     otAmount,
+    deductionAmount: data.deductionAmount ?? 0,
     notes: data.notes,
     enteredBy: actor.userId,
   });
@@ -243,7 +244,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   }
   const wasRejected = entry.status === 'Rejected';
   const wasApproved = entry.status === 'Approved';
-  const before = { actualHours: entry.actualHours, otAmount: entry.otAmount, notes: entry.notes };
+  const before = { actualHours: entry.actualHours, otAmount: entry.otAmount, deductionAmount: entry.deductionAmount, notes: entry.notes };
   const previousEnteredBy = entry.enteredBy.toString();
 
   const actualHours = sumWorkedHours(data.dailyHours);
@@ -251,6 +252,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   entry.actualHours = actualHours;
   entry.otHours = Math.max(0, actualHours - entry.contractHours);
   entry.otAmount = await computeOtAmount(deployment.mobilisation, entry.otHours);
+  entry.deductionAmount = data.deductionAmount ?? 0;
   entry.notes = data.notes;
   entry.enteredBy = actor.userId;
   entry.enteredAt = new Date();
@@ -273,7 +275,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
     meta: {
       month: entry.month,
       before,
-      after: { actualHours: entry.actualHours, otAmount: entry.otAmount, notes: entry.notes },
+      after: { actualHours: entry.actualHours, otAmount: entry.otAmount, deductionAmount: entry.deductionAmount, notes: entry.notes },
       otHours: entry.otHours,
     },
     ip: actor.ip,
@@ -510,7 +512,52 @@ function computeMonthlyProfit(entry, mobilisation) {
   const otProfitPerHour = otClientSide - otSubSide;
   const otProfitTotal = money(otProfitPerHour * entry.otHours);
 
-  return money(profitPerHour * entry.contractHours - (mobilisation.fta ?? 0) - (mobilisation.allowance ?? 0) + otProfitTotal);
+  return money(
+    profitPerHour * entry.contractHours -
+      (mobilisation.fta ?? 0) -
+      (mobilisation.allowance ?? 0) +
+      otProfitTotal -
+      (entry.deductionAmount ?? 0)
+  );
+}
+
+/**
+ * Every client-timesheet deduction (see deployment.model.js's own doc
+ * comment on `deductionAmount`) a real Employee had for one calendar month,
+ * across every Deployment they've ever had — for Payroll to fold into that
+ * employee's PayrollRun line as an `otherDeductions` entry (see
+ * payroll.service.js's createPayrollRun). Only an Approved entry counts —
+ * an unapproved (possibly disputed) figure must never reach a real
+ * paycheck. Payroll depends on THIS module's model, one level removed from
+ * its service, the same one-directional pattern this file itself uses for
+ * Mobilisation — no circularity risk, Deployment has no reason to ever call
+ * into Payroll.
+ *
+ * Deliberately snapshot-at-read, same as every other Payroll figure this
+ * app computes at PayrollRun creation time (approvedHours, overtimeHours,
+ * sickLeaveDeduction) — a deduction entered or approved AFTER that month's
+ * run already exists is NOT retroactively pulled in; HR/Accounts can still
+ * add it by hand via the run's own existing otherDeductions editing, same
+ * fallback GOSI already relies on, but only while the run is still Draft.
+ */
+export async function deductionsForEmployeeMonth(employeeId, monthStr) {
+  const deployments = await Deployment.find({
+    worker: employeeId,
+    monthlyHours: { $elemMatch: { month: monthStr, deductionAmount: { $gt: 0 }, status: 'Approved' } },
+  })
+    .select('clientName monthlyHours')
+    .lean();
+
+  const deductions = [];
+  for (const deployment of deployments) {
+    const entry = deployment.monthlyHours.find(
+      (m) => m.month === monthStr && m.deductionAmount > 0 && m.status === 'Approved'
+    );
+    if (entry) {
+      deductions.push({ label: `Client deduction — ${deployment.clientName} (${monthStr})`, amount: entry.deductionAmount });
+    }
+  }
+  return deductions;
 }
 
 const PROFIT_RATE_FIELDS =

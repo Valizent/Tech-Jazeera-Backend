@@ -54,10 +54,13 @@ const dailyHours = z.array(dailyEntry).min(1, "Enter each day's status.");
  *  server-computed sum of `dailyHours` (see deployment.model.js's doc
  *  comment). `otAmount` isn't in this payload either, for the same reason —
  *  it's always server-computed from `otHours` × the source Mobilisation's
- *  `otClientRate`, never client-submitted. */
+ *  `otClientRate`, never client-submitted. `deductionAmount` IS accepted
+ *  here, unlike those two — it's whatever the client's own timesheet says,
+ *  no in-app formula to recompute it from (same posture as GOSI). */
 export const addMonthlyHoursSchema = z.object({
   month: monthStr,
   dailyHours,
+  deductionAmount: z.preprocess(emptyToUndef, z.coerce.number().min(0).optional()),
   notes: optionalStr(500),
 });
 
@@ -65,6 +68,7 @@ export const addMonthlyHoursSchema = z.object({
  *  (it identifies which entry, never changes on an edit). */
 export const updateMonthlyHoursSchema = z.object({
   dailyHours,
+  deductionAmount: z.preprocess(emptyToUndef, z.coerce.number().min(0).optional()),
   notes: optionalStr(500),
 });
 

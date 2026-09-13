@@ -5,6 +5,7 @@
 import Employee from '../employees/employee.model.js';
 import Timesheet from '../timesheets/timesheet.model.js';
 import LeaveRequest from '../leave/leaveRequest.model.js';
+import { deductionsForEmployeeMonth } from '../deployments/deployment.service.js';
 import PayrollRun from './payrollRun.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
@@ -131,6 +132,7 @@ export async function createPayrollRun({ periodYear, periodMonth }, actor) {
   const monthStart = new Date(Date.UTC(periodYear, periodMonth - 1, 1));
   const monthEnd = new Date(Date.UTC(periodYear, periodMonth, 0));
 
+  const monthStr = `${periodYear}-${String(periodMonth).padStart(2, '0')}`;
   const lines = [];
   for (const employee of employees) {
     const basicSalary = employee.basicSalary ?? employee.salary;
@@ -138,7 +140,16 @@ export async function createPayrollRun({ periodYear, periodMonth }, actor) {
     const transportAllowance = employee.transportAllowance ?? 0;
     const otherAllowances = 0;
     const gosiDeduction = 0;
-    const otherDeductions = [];
+    // Any Approved client-timesheet deduction this employee's Deployment(s)
+    // carried for this exact month (e.g. a client-imposed absence penalty —
+    // see deployment.model.js's own doc comment on deductionAmount) — the
+    // one place this run's otherDeductions starts non-empty rather than as
+    // a blank ad-hoc list. Snapshot-at-creation like every other figure in
+    // this loop: a deduction entered or approved AFTER this run already
+    // exists is not retroactively pulled in (see deductionsForEmployeeMonth's
+    // own doc comment) — same limitation overtimeHours/sickLeaveDeduction
+    // already have.
+    const otherDeductions = await deductionsForEmployeeMonth(employee._id, monthStr);
 
     const { approvedHours, overtimeHours } = await approvedHoursForMonth(employee._id, monthStart, monthEnd);
     // Overtime pay is based on THIS employee's own basic salary, not a

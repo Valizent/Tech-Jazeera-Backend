@@ -39,8 +39,14 @@ import mongoose from 'mongoose';
 
 export const PAYROLL_STATUSES = ['Draft', 'Finalized'];
 
-/** One ad-hoc deduction line (e.g. an absence, a recorded loan-repayment
- *  note). _id disabled — a value object, replaced wholesale on edit. */
+/** One ad-hoc deduction line. `otherDeductions` starts non-empty for a
+ *  line whenever the employee had an Approved client-timesheet deduction on
+ *  a Deployment for this exact month (a client-imposed absence penalty,
+ *  most commonly — see deployment.model.js's `deductionAmount` doc comment
+ *  and payroll.service.js's createPayrollRun) — everything past that is
+ *  freely added/edited by hand (e.g. a recorded loan-repayment note) while
+ *  the run is still Draft. _id disabled — a value object, replaced
+ *  wholesale on edit. */
 const deductionSchema = new mongoose.Schema(
   {
     label: { type: String, required: true, trim: true, maxlength: 100 },

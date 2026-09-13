@@ -131,6 +131,26 @@ const monthlyHoursSchema = new mongoose.Schema(
     actualHours: { type: Number, required: true, min: 0 },
     otHours: { type: Number, required: true, min: 0 }, // server-computed = max(0, actualHours - contractHours)
     otAmount: { type: Number, default: 0, min: 0 }, // server-computed = otHours × Mobilisation.otClientRate — see module doc comment
+    // A deduction the CLIENT applied on their own timesheet (their most
+    // common reason: an Absent day — see DAILY_ENTRY_STATUSES above — but
+    // this is whatever figure their timesheet actually shows, not something
+    // this app derives from the Absent day count itself). Added 2026-09-13
+    // per the user's own ask. Manually entered by whoever transcribes the
+    // client's timesheet (never server-computed — there's no in-app formula
+    // for what a client chooses to deduct, same posture as GOSI), but
+    // deliberately NOT commercial like otAmount: the enterer already knows
+    // the number, since she's the one typing it in from a real document in
+    // front of her — hiding it from her afterward would hide nothing she
+    // doesn't already know. Subtracted from this entry's own computed
+    // profit (see computeMonthlyProfit) and, for a real Employee whose
+    // Employee.type is 'Outsourced' (the only kind this company actually
+    // pays), automatically seeded into that month's PayrollRun line as an
+    // `otherDeductions` entry — see payroll.service.js's createPayrollRun
+    // and deployment.service.js's deductionsForEmployeeMonth. Only an
+    // APPROVED entry's deduction is ever picked up by Payroll — an
+    // unapproved (possibly disputed) figure must never silently reduce a
+    // real paycheck.
+    deductionAmount: { type: Number, default: 0, min: 0 },
     notes: { type: String, trim: true, maxlength: 500 },
     enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     enteredAt: { type: Date, default: Date.now },
