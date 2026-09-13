@@ -43,21 +43,42 @@ export async function bulkApprove(req, res) {
   res.json(new ApiResponse(`${result.approved} of ${result.requested} timesheet(s) approved.`, result));
 }
 
+/** Shared by both handlers below: Admin, or anyone the Admin has put into a
+ *  real Approval Role — the same dynamic, DB-checked "sits somewhere in the
+ *  hierarchy" rule the Approval Log uses, not a fixed list of login roles. */
+async function assertReportEligible(req) {
+  const isEligible = req.user.role === 'Admin' || (await isApprovalRoleMember(req.user.id));
+  if (!isEligible) throw new ApiError(403, 'You are not part of any approval role.');
+}
+
+/**
+ * GET /api/timesheets/monthly-report — the JSON preview behind the Monthly
+ * Report tab's on-screen grid (added 2026-09-13, when that tab became a real
+ * employee-list → view → export flow instead of a blind download button).
+ * Same eligibility floor and same underlying builder as the POST export
+ * below — this just returns the data instead of converting it to a file, so
+ * the browser can render it before anyone decides whether to export it.
+ */
+export async function getMonthlyReport(req, res) {
+  await assertReportEligible(req);
+
+  const { employeeId, month, year } = req.query;
+  const employee = await Employee.findById(employeeId).lean();
+  if (!employee) throw new ApiError(404, 'Employee not found.');
+
+  const result = await buildMonthlyAttendanceReport(employee, { month, year });
+  res.json(new ApiResponse('Monthly report.', result));
+}
+
 /**
  * POST /api/timesheets/monthly-report — a full day-by-day monthly report
- * built from real Attendance records (phone self-punch or staff-marked),
- * in the exact same visual format as the Timesheet Processor's export (see
- * monthlyReport.service.js). Gated beyond the router's own requireStaff:
- * Admin, or anyone the Admin has put into a real Approval Role — the same
- * dynamic, DB-checked "sits somewhere in the hierarchy" rule the Approval
- * Log uses, not a fixed list of login roles. A plain 403 for anyone else,
- * same as the Approval Log's own error state.
+ * built from real attendance (Attendance for the field workforce,
+ * StaffAttendance for 'Own'-type internal staff — see
+ * monthlyReport.service.js), in the exact same visual format as the
+ * Timesheet Processor's export. Same eligibility floor as GET above.
  */
 export async function generateMonthlyReport(req, res) {
-  const isEligible = req.user.role === 'Admin' || (await isApprovalRoleMember(req.user.id));
-  if (!isEligible) {
-    throw new ApiError(403, 'You are not part of any approval role.');
-  }
+  await assertReportEligible(req);
 
   const { employeeId, month, year } = req.body;
   const employee = await Employee.findById(employeeId).lean();

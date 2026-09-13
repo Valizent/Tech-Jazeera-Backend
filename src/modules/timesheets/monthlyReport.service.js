@@ -3,19 +3,36 @@
  * Timesheet Processor's device-log report. Same day-by-day row shape
  * (Date/Day/Login/Logout/Worked/Required/Deficiency/Overtime/Status) and
  * the same .xlsx renderer (timesheetProcessor/timesheet.export.js), but
- * built from this employee's actual Attendance records (phone self-punch
- * or staff-marked) for the whole month instead of a parsed device file.
+ * built from this employee's actual attendance for the whole month instead
+ * of a parsed device file.
+ *
+ * Two real data sources, picked by `employee.type` (added 2026-09-13, when
+ * this became the Monthly Report tab's own list+view — previously only ever
+ * called for the on-site Outsourced/Subcontracted workforce): an 'Own'-type
+ * internal staff member (Coordinator/HR/Manager/Accounts) never gets an
+ * Employee-based Attendance record at all — they self-punch through the
+ * separate User-keyed StaffAttendance collection instead (see
+ * staffAttendance.model.js's own doc comment on why it's kept separate).
+ * Everyone else (the deployed/mobilised field workforce) still reads
+ * Employee-based Attendance exactly as before. A StaffAttendance day has no
+ * `status` field — there's no Absent/Leave/Sick concept for a self-punch,
+ * those go through the Leave module entirely — so `explicitStatus` is
+ * simply null for that source and every day falls through to Holiday/Off/
+ * No-Attendance/a real punch, same as an Attendance record with no special
+ * status ever did.
  *
  * Mirrors two already-established rules elsewhere in the app rather than
  * inventing new ones:
- *  - Precedence for a day with no real record — a real Attendance record
- *    always wins; otherwise infer Holiday, then the employee's own
- *    weeklyOffDay — is EXACTLY RecordsGrid.jsx's markFor() logic.
+ *  - Precedence for a day with no real record — a real record always wins;
+ *    otherwise infer Holiday, then the employee's own weeklyOffDay — is
+ *    EXACTLY RecordsGrid.jsx's markFor() logic.
  *  - A staff-marked Present day with no clock times counts as
  *    expectedDailyHours worked (never an invented default) — exactly
  *    timesheets/timesheet.service.js's computeTotals() rule.
  */
 import Attendance from '../attendance/attendance.model.js';
+import StaffAttendance from '../staffAttendance/staffAttendance.model.js';
+import User from '../auth/user.model.js';
 import Holiday from '../holidays/holiday.model.js';
 import { minutesToHHMM, daysInMonth, weekdayShort } from '../timesheetProcessor/timesheet.time.js';
 import { DEFAULT_REQUIRED_MINUTES } from '../timesheetProcessor/timesheet.constants.js';
@@ -61,8 +78,18 @@ export async function buildMonthlyAttendanceReport(employee, { year, month }) {
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
   const periodEnd = new Date(Date.UTC(year, month - 1, totalDays, 23, 59, 59));
 
+  const isOwnStaff = employee.type === 'Own';
   const [records, holidays] = await Promise.all([
-    Attendance.find({ employee: employee._id, date: { $gte: periodStart, $lte: periodEnd } }).lean(),
+    isOwnStaff
+      ? User.findOne({ employee: employee._id })
+          .select('_id')
+          .lean()
+          .then((user) =>
+            user
+              ? StaffAttendance.find({ user: user._id, date: { $gte: periodStart, $lte: periodEnd } }).lean()
+              : []
+          )
+      : Attendance.find({ employee: employee._id, date: { $gte: periodStart, $lte: periodEnd } }).lean(),
     Holiday.find({ startDate: { $lte: periodEnd }, endDate: { $gte: periodStart } }).lean(),
   ]);
   const byDate = new Map(records.map((r) => [r.date.toISOString().slice(0, 10), r]));
