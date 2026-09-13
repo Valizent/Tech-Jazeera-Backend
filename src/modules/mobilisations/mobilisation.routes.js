@@ -1,18 +1,18 @@
 /**
  * Mobilisation routes.
  *
- * `requireStaffOrOfficeSecretary` at the router level (broader than plain
- * `requireStaff` — Office Secretary is otherwise deny-by-default, see
- * rbac.js): who may create/edit/decide a mobilisation depends on ApprovalRole
- * membership and document ownership (coordinator/primary/current-step-
- * reviewer), none of which is expressible as a static `User.role` list —
- * same reasoning as client.routes.js leaving the finer rules to the service.
+ * Router-level `requireStaff` (Office Secretary included since she moved
+ * into STAFF_ROLES 2026-09-13 — see rbac.js's own doc comment): who may
+ * create/edit/decide a mobilisation depends on ApprovalRole membership and
+ * document ownership (coordinator/primary/current-step-reviewer), none of
+ * which is expressible as a static `User.role` list — same reasoning as
+ * client.routes.js leaving the finer rules to the service.
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import logger from '../../config/logger.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaffOrOfficeSecretary, requireRoles } from '../../middleware/rbac.js';
+import { requireStaff, requireRoles } from '../../middleware/rbac.js';
 import { validate } from '../../middleware/validate.js';
 import { uploadMultiple, destroyDocumentFile } from '../../middleware/upload.js';
 import {
@@ -35,7 +35,7 @@ import * as mobilisationController from './mobilisation.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaffOrOfficeSecretary);
+router.use(requireStaff);
 
 router.get('/', validate({ query: listMobilisationsSchema }), asyncHandler(mobilisationController.list));
 // Before the /:id catch-all, or these are read as a mobilisation id.

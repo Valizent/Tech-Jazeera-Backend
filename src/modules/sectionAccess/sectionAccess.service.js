@@ -114,18 +114,17 @@ export async function listSectionAccess() {
 }
 
 /**
- * Worker/Staff/Office Secretary are excluded outright by this first line,
- * regardless of configuration — the same floor requireStaff enforces
- * everywhere else (Executive is separately allow-listed right after,
- * matching requireStaffOrExecutive's own shape); this mechanism only ever
- * ADDS access on top of it, never bypasses it. Office Secretary in
- * particular stays unreachable here even if an Admin puts her in an
- * Approval Role that's granted a section — this role check runs first and
- * already returns false for her before any Approval Role membership is
- * even looked up, so she still only ever reaches a specific record through
- * a workflow step, never a blanket section grant. Admin always passes
- * beyond this floor (so an Admin can never configure themselves out of a
- * section they built).
+ * Worker/Staff are excluded outright by this first line, regardless of
+ * configuration — the same floor requireStaff enforces everywhere else
+ * (Executive is separately allow-listed right after, matching
+ * requireStaffOrExecutive's own shape); this mechanism only ever ADDS
+ * access on top of it, never bypasses it. Office Secretary passes this
+ * floor like any other staff role since 2026-09-13 (see rbac.js's own doc
+ * comment on STAFF_ROLES) — a real Approval Role grant now genuinely works
+ * for her, same as for Coordinator/HR/Manager/Accounts; she's just as
+ * unreachable as anyone else on a section she hasn't actually been granted.
+ * Admin always passes beyond this floor (so an Admin can never configure
+ * themselves out of a section they built).
  *
  * `level` picks the tier: `'write'` (default) checks only the write grant;
  * `'read'` checks the write grant too (write always implies read — a write

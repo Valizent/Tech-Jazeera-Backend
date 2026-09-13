@@ -14,11 +14,12 @@ import CertificateRequest from '../exitDocuments/certificate.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 
-// Not STAFF_ROLES (rbac.js) — that constant also excludes Executive and
-// Office Secretary, but both are legitimate ApprovalRole members (in fact
-// it's their ONLY route into deciding anything, since both are deny-by-
-// default at the router level). Only the two purely self-service personas,
-// Worker and Staff, can never sit in an approval chain.
+// Not STAFF_ROLES (rbac.js) — that constant also excludes Executive, who is
+// still a legitimate ApprovalRole member (in fact it's their ONLY route into
+// deciding anything, since Executive is deny-by-default at the router
+// level; Office Secretary used to be the same but moved into STAFF_ROLES
+// 2026-09-13). Only the two purely self-service personas, Worker and Staff,
+// can never sit in an approval chain.
 const SELF_SERVICE_ROLES = ['Worker', 'Staff'];
 
 // ---------------------------------------------------------------------------

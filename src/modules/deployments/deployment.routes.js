@@ -1,12 +1,13 @@
 /**
  * Deployment routes.
  *
- * Router-level `requireStaffOrOfficeSecretary` (not plain `requireStaff`) so
- * Office Secretary can reach the monthly-hours endpoint at all — Office
- * Secretary is otherwise deny-by-default (see rbac.js), and is a hardcoded
- * exception INSIDE addMonthlyHours/updateMonthlyHours rather than a Section
- * Access grant (same pattern mobilisation.service.js's createMobilisation
- * uses — Office Secretary isn't a grantable Section Access role at all).
+ * Router-level `requireStaff` reaches Office Secretary too now (she moved
+ * into STAFF_ROLES 2026-09-13 — see rbac.js's own doc comment); her real
+ * hours-entry ability is still the hardcoded exception INSIDE
+ * addMonthlyHours/updateMonthlyHours below, not a Section Access grant (same
+ * pattern mobilisation.service.js's createMobilisation uses — this is a
+ * per-feature business rule, unrelated to whether her login role can reach
+ * this router at all).
  *
  * Roles: READ (the register/history) is Section Access key
  * 'deploymentsRelease' at the 'read' level (default mirrors write) — chosen
@@ -36,7 +37,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaffOrOfficeSecretary, requireRoles } from '../../middleware/rbac.js';
+import { requireStaff, requireRoles } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
@@ -53,7 +54,7 @@ import * as deploymentController from './deployment.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaffOrOfficeSecretary);
+router.use(requireStaff);
 
 const canRelease = requireSectionAccess('deploymentsRelease', 'write');
 const canDecideHours = requireSectionAccess('deploymentsHoursDecide', 'write');

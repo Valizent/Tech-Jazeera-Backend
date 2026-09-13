@@ -59,12 +59,14 @@ import mongoose from 'mongoose';
  * (typically HR, Accounts, or the self-service `Staff`).
  *
  * `Office Secretary` (added for the Mobilisation module's post-Coordinator
- * review stage) is narrow like `Executive`, NOT `Coordinator` — excluded
- * from STAFF_ROLES (see rbac.js), so it is denied every CRUD module by
- * default. It reaches a specific mobilisation only by being an ApprovalRole
- * member on that record's current workflow step — the same mechanism
- * Marketing Manager already used before this role existed — never a blanket
- * company-wide grant. See `requireStaffOrOfficeSecretary` in rbac.js.
+ * review stage) started narrow like `Executive` — excluded from
+ * STAFF_ROLES, denied every CRUD module by default, reaching a specific
+ * mobilisation only via ApprovalRole membership on its current workflow
+ * step. Moved INTO STAFF_ROLES 2026-09-13 (see rbac.js's own doc comment
+ * and docs/RBAC-notes.md) once a second real use case — self-marking her
+ * own attendance — came up: full company-wide floor now, same as
+ * Coordinator/HR/Manager/Accounts, gated the normal way by real Section
+ * Access grants rather than being structurally unreachable.
  */
 export const ROLES = [
   'Admin',
