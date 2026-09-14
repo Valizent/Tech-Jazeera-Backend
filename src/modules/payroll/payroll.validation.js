@@ -16,7 +16,10 @@ export const createPayrollRunSchema = z.object({
 
 const deductionLineSchema = z.object({
   label: z.string().trim().min(1, 'Label is required.').max(100),
-  amount: z.coerce.number().min(0),
+  // Capped 2026-09-14 (a real QA-audit-found gap) — matches the sibling
+  // otherAllowances/gosiDeduction fields' own bound just below, which this
+  // one had been missing.
+  amount: z.coerce.number().min(0).max(1_000_000),
 });
 
 export const updatePayrollLineSchema = z.object({

@@ -9,6 +9,7 @@ import { logAudit } from '../audit/audit.service.js';
 import { notifyEmployeeUser } from '../notifications/notification.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -130,9 +131,19 @@ export async function listAdvances({ page, limit, status, employee }, actor) {
       .lean(),
     SalaryAdvance.countDocuments(filter),
   ]);
-  const items = actor
-    ? await annotateCanDecide(rawItems, actor, { pendingStatus: 'Pending', legacyAllowedRoles: LEGACY_DECIDE_ROLES })
-    : rawItems;
+  let items = rawItems;
+  if (actor) {
+    items = await annotateCanDecide(rawItems, actor, { pendingStatus: 'Pending', legacyAllowedRoles: LEGACY_DECIDE_ROLES });
+    // The route's real gate (financialRequests.routes.js's canDecideFinancialRequests)
+    // requires Section Access write for EVERY decide, workflow-governed or
+    // not — annotateCanDecide only knows about ApprovalRole/legacy-role
+    // membership, so its hint could say "yes" for a legacy-role match (e.g.
+    // Manager) even after an Admin narrows the real 'financialRequests'
+    // grant to exclude them (2026-09-14, a real QA-audit-found gap: the
+    // Approve/Reject buttons rendered for someone whose click would 403).
+    const hasSectionWrite = await canAccessSection('financialRequests', actor, 'write');
+    items = items.map((item) => ({ ...item, canDecideCurrentStep: item.canDecideCurrentStep && hasSectionWrite }));
+  }
   return { items: items.map(withBalance), total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
@@ -159,30 +170,54 @@ export async function decideAdvance(id, { status, decisionNote }, actor) {
 }
 
 export async function addRepayment(id, data, actor) {
-  const advance = await SalaryAdvance.findById(id);
+  const advance = await SalaryAdvance.findById(id).lean();
   if (!advance) throw new ApiError(404, 'Advance request not found.');
   if (advance.status !== 'Approved') {
     throw new ApiError(400, 'Repayments can only be recorded against an approved advance.');
   }
-
   const alreadyRepaid = money(advance.repayments.reduce((sum, r) => sum + r.amount, 0));
   const outstanding = money(advance.amount - alreadyRepaid);
   if (data.amount > outstanding) {
     throw new ApiError(400, `That exceeds the outstanding balance (SAR ${outstanding}).`);
   }
 
-  advance.repayments.push({ ...data, recordedBy: actor.userId });
-  const newOutstanding = money(outstanding - data.amount);
-  if (newOutstanding === 0) advance.status = 'Closed';
-  await advance.save();
+  // Atomic update, not read-then-save (fixed 2026-09-14, a real QA-audit-
+  // found race — F1, same class as invoice.service.js's recordPayment): two
+  // concurrent repayments could both pass the plain-JS check above against
+  // the same stale read, then both save, over-repaying the advance. `$expr`
+  // re-sums the CURRENT `repayments` array live in the filter, so it's
+  // checked atomically against the real total at write time, not a value
+  // read moments earlier.
+  const updated = await SalaryAdvance.findOneAndUpdate(
+    {
+      _id: id,
+      status: 'Approved',
+      $expr: { $lte: [{ $add: [{ $sum: '$repayments.amount' }, data.amount] }, '$amount'] },
+    },
+    [
+      { $set: { repayments: { $concatArrays: ['$repayments', [{ ...data, recordedBy: actor.userId }]] } } },
+      { $set: { status: { $cond: [{ $eq: [{ $sum: '$repayments.amount' }, '$amount'] }, 'Closed', '$status'] } } },
+    ],
+    { new: true }
+  );
+  if (!updated) {
+    const fresh = await SalaryAdvance.findById(id).lean();
+    if (!fresh) throw new ApiError(404, 'Advance request not found.');
+    if (fresh.status !== 'Approved') {
+      throw new ApiError(400, 'Repayments can only be recorded against an approved advance.');
+    }
+    const freshOutstanding = money(fresh.amount - fresh.repayments.reduce((sum, r) => sum + r.amount, 0));
+    throw new ApiError(400, `That exceeds the outstanding balance (SAR ${freshOutstanding}).`);
+  }
 
+  const newOutstanding = money(updated.amount - updated.repayments.reduce((sum, r) => sum + r.amount, 0));
   await logAudit({
     user: actor.userId,
     action: 'advance.repayment.add',
     targetType: 'SalaryAdvance',
-    targetId: advance._id,
+    targetId: updated._id,
     meta: { amount: data.amount, newOutstanding },
     ip: actor.ip,
   });
-  return withBalance(advance.toObject());
+  return withBalance(updated.toObject());
 }

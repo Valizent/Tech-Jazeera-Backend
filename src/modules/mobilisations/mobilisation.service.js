@@ -204,9 +204,11 @@ async function newMobilisationSerial() {
 
 /** Every ApprovalRole id `userId` belongs to — computed once per request and
  *  reused for both the viewer-circle check and the "am I the current step's
- *  reviewer" check, rather than querying ApprovalRole membership per document. */
+ *  reviewer" check, rather than querying ApprovalRole membership per document.
+ *  `isActive: true` (2026-09-14 QA-audit fix): a disabled role no longer
+ *  grants viewer or reviewer authority to its members. */
 async function myRoleIds(userId) {
-  const roles = await ApprovalRole.find({ members: userId }).select('_id').lean();
+  const roles = await ApprovalRole.find({ members: userId, isActive: true }).select('_id').lean();
   return roles.map((r) => r._id);
 }
 
@@ -372,9 +374,23 @@ async function assertNoDateOverlap(workerType, identity, proposedDate) {
   const periods = await deploymentPeriodsFor(workerType, identity);
   const proposed = new Date(proposedDate).getTime();
   for (const period of periods) {
-    const start = new Date(period.startDate).getTime();
     const end = period.endDate ? new Date(period.endDate).getTime() : null;
-    const overlaps = proposed >= start && (end === null || proposed < end);
+    // Fixed 2026-09-14, a real QA-audit-found gap — F4: the old condition
+    // ALSO required `proposed >= start`, which only ever caught the new
+    // date falling INSIDE an existing period. A brand-new mobilisation is
+    // open-ended (no end date yet), so its own interval is really
+    // [proposed, ∞) — an existing period entirely AFTER `proposed` (i.e.
+    // `start > proposed`) still physically conflicts with that open span,
+    // but `proposed >= start` was false for it, so it slipped through
+    // untouched. The new mobilisation's interval overlaps an existing one
+    // iff that period hasn't fully ended by `proposed` — `end === null ||
+    // proposed < end` — which is both necessary and sufficient for two
+    // intervals where one is open-ended; `start` doesn't need checking
+    // separately. Same inclusive-start/exclusive-end boundary as before
+    // (same-day handoffs still allowed): proposed === end still doesn't
+    // overlap, proposed === start still does (proposed < end is true
+    // whenever proposed === start, since start < end always).
+    const overlaps = end === null || proposed < end;
     if (overlaps) {
       const startLabel = new Date(period.startDate).toLocaleDateString('en-GB');
       const rangeLabel = end ? `${startLabel} to ${new Date(period.endDate).toLocaleDateString('en-GB')}` : `${startLabel} (still active)`;
@@ -1211,7 +1227,34 @@ async function approveMobilisation(id, decisionNote, actor) {
   // hours/OT, Release) — see deployment.service.js's
   // createDeploymentFromMobilisation.
   if (result.status === 'Approved') {
-    await createDeploymentFromMobilisation(result, actor);
+    try {
+      await createDeploymentFromMobilisation(result, actor);
+    } catch (err) {
+      // Compensate, don't leave it stuck (fixed 2026-09-14, a real QA-audit-
+      // found gap — F3): decideApprovalStep above already persisted
+      // 'Approved' before this ran, so a deployment-creation failure used to
+      // leave a permanently Approved mobilisation with no Deployment and no
+      // normal retry path (re-decide correctly refuses a non-PendingReview
+      // request). A single transaction spanning the shared decideApprovalStep
+      // engine (reused by 6 other request types with no Deployment concept at
+      // all) would be a much larger, riskier change for this one caller;
+      // reverting back to PendingReview at the same step — trail entry
+      // popped, decision fields cleared — restores the exact pre-decision
+      // state instead, so the same real reviewer can simply approve again
+      // once whatever broke deployment creation is fixed.
+      await Mobilisation.updateOne(
+        { _id: id, status: 'Approved' },
+        {
+          $set: { status: 'PendingReview', currentStep: result.currentStep },
+          $pop: { approvalTrail: 1 },
+          $unset: { decidedBy: '', decidedAt: '', decisionNote: '' },
+        }
+      );
+      throw new ApiError(
+        500,
+        'Approval could not be completed because creating the deployment record failed. The approval was reverted — please try again.'
+      );
+    }
   }
   return result;
 }

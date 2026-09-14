@@ -24,7 +24,6 @@ export const MAX_REQUIRED_MINUTES = 24 * 60;
  */
 export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 export const XLS_MIME = 'application/vnd.ms-excel';
-export const ACCEPTED_EXTENSIONS = ['.xls', '.xlsx'];
 export const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — a month of punches is tiny
 
 /** Per-day statuses. Frozen so the UI can import the exact labels/order. */

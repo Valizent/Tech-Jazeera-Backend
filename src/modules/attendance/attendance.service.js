@@ -34,6 +34,7 @@ export async function markBulk({ date, records }, actor) {
   if (existing !== ids.length) {
     throw new ApiError(400, 'One or more selected workers no longer exist.');
   }
+  await assertEmployeesInCoordinatorTeam(ids, actor);
 
   const ops = records.map((r) => ({
     updateOne: {
@@ -85,6 +86,7 @@ export async function markBulk({ date, records }, actor) {
 export async function adjustAttendance({ employee, date, status, checkInTime, checkOutTime, note }, actor) {
   const exists = await Employee.exists({ _id: employee });
   if (!exists) throw new ApiError(404, 'Employee not found.');
+  await assertEmployeesInCoordinatorTeam([employee], actor);
 
   if (checkInTime && checkOutTime && new Date(checkOutTime) <= new Date(checkInTime)) {
     throw new ApiError(400, 'Check-out time must be after check-in time.');
@@ -138,6 +140,21 @@ async function scopeToCoordinatorTeam(filterKey, target, employeeParam, actor) {
     return;
   }
   target[filterKey] = { $in: teamIds };
+}
+
+/**
+ * The WRITE-side counterpart to scopeToCoordinatorTeam (2026-09-14, a real
+ * QA-audit-found gap): markBulk/adjustAttendance had no team check at all —
+ * a Coordinator with 'attendanceRecords' write could correct or bulk-mark
+ * ANY employee's day, not just their own team's, even though the read side
+ * was already correctly scoped. Throws 403 the same way the read-side
+ * single-employee check does; a no-op for every non-Coordinator actor.
+ */
+export async function assertEmployeesInCoordinatorTeam(employeeIds, actor) {
+  if (actor?.role !== 'Coordinator') return;
+  const teamIds = new Set((await Employee.find({ coordinator: actor.userId }).distinct('_id')).map(String));
+  const outside = employeeIds.some((id) => !teamIds.has(String(id)));
+  if (outside) throw new ApiError(403, 'You do not have access to one or more of these employees.');
 }
 
 /**

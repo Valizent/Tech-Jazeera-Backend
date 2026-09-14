@@ -100,29 +100,53 @@ export async function getInvoice(id) {
 }
 
 export async function recordPayment(id, data, actor) {
-  const invoice = await Invoice.findById(id);
+  const invoice = await Invoice.findById(id).lean();
   if (!invoice) throw new ApiError(404, 'Invoice not found.');
   if (invoice.status === 'Paid') throw new ApiError(400, 'This invoice is already fully paid.');
-
   if (data.amount > invoice.balanceDue) {
     throw new ApiError(400, `That exceeds the balance due (SAR ${invoice.balanceDue}).`);
   }
 
-  invoice.payments.push({ ...data, recordedBy: actor.userId });
-  invoice.amountPaid = money(invoice.payments.reduce((sum, p) => sum + p.amount, 0));
-  invoice.balanceDue = money(invoice.grandTotal - invoice.amountPaid);
-  invoice.status = invoice.balanceDue === 0 ? 'Paid' : 'Partially Paid';
-  await invoice.save();
+  // Atomic update, not read-then-save (fixed 2026-09-14, a real QA-audit-
+  // found race — F1): two concurrent payments could both pass the plain-JS
+  // balance check above against the SAME stale in-memory read, then both
+  // save, overpaying the invoice. The filter's `balanceDue: { $gte:
+  // data.amount }` re-checks the real, current balance atomically at write
+  // time — MongoDB guarantees only one concurrent writer can match it once
+  // the balance drops below the next payment's amount, so a losing request
+  // gets `null` back instead of silently succeeding.
+  const updated = await Invoice.findOneAndUpdate(
+    { _id: id, status: { $ne: 'Paid' }, balanceDue: { $gte: data.amount } },
+    [
+      { $set: { payments: { $concatArrays: ['$payments', [{ ...data, recordedBy: actor.userId }]] } } },
+      {
+        $set: {
+          amountPaid: { $round: [{ $add: ['$amountPaid', data.amount] }, 2] },
+          balanceDue: { $round: [{ $subtract: ['$balanceDue', data.amount] }, 2] },
+        },
+      },
+      { $set: { status: { $cond: [{ $lte: ['$balanceDue', 0] }, 'Paid', 'Partially Paid'] } } },
+    ],
+    { new: true }
+  );
+  if (!updated) {
+    // Someone else's concurrent payment landed first — re-fetch for an
+    // accurate, current error instead of repeating the stale one above.
+    const fresh = await Invoice.findById(id).lean();
+    if (!fresh) throw new ApiError(404, 'Invoice not found.');
+    if (fresh.status === 'Paid') throw new ApiError(400, 'This invoice is already fully paid.');
+    throw new ApiError(400, `That exceeds the balance due (SAR ${fresh.balanceDue}).`);
+  }
 
   await logAudit({
     user: actor.userId,
     action: 'invoice.payment.record',
     targetType: 'Invoice',
-    targetId: invoice._id,
-    meta: { amount: data.amount, newStatus: invoice.status, balanceDue: invoice.balanceDue },
+    targetId: updated._id,
+    meta: { amount: data.amount, newStatus: updated.status, balanceDue: updated.balanceDue },
     ip: actor.ip,
   });
-  return invoice.toObject();
+  return updated.toObject();
 }
 
 export async function deleteInvoice(id, actor) {

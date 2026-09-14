@@ -15,7 +15,7 @@ import ApiResponse from '../../utils/ApiResponse.js';
 import { contentDisposition } from '../../utils/contentDisposition.js';
 import * as documentService from './document.service.js';
 
-const actor = (req) => ({ userId: req.user.id, ip: req.ip });
+const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
 
 /** POST /api/documents (multipart: file + fields) — 201 → data: document */
 export async function create(req, res) {
@@ -31,13 +31,13 @@ export async function addVersion(req, res) {
 
 /** GET /api/documents — 200 → data: { items, total, page, pages } */
 export async function list(req, res) {
-  const data = await documentService.listDocuments(req.query);
+  const data = await documentService.listDocuments(req.query, actor(req));
   res.json(new ApiResponse('Documents.', data));
 }
 
 /** GET /api/documents/:id — 200 → data: document (with versions) */
 export async function get(req, res) {
-  const document = await documentService.getDocument(req.params.id);
+  const document = await documentService.getDocument(req.params.id, actor(req));
   res.json(new ApiResponse('Document.', document));
 }
 
@@ -54,7 +54,7 @@ export async function get(req, res) {
  * requireStaff. See docs/SECURITY-AUDIT.md (C-1).
  */
 export async function file(req, res) {
-  const fileData = await documentService.resolveFile(req.params.id, req.query.version);
+  const fileData = await documentService.resolveFile(req.params.id, req.query.version, actor(req));
 
   res.setHeader('Content-Type', fileData.mimeType);
   res.setHeader('Content-Disposition', contentDisposition(fileData.originalName));

@@ -16,6 +16,7 @@ import {
   destroyDocumentFile,
 } from '../../middleware/upload.js';
 import { logAudit } from '../audit/audit.service.js';
+import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 
 /** Documents expiring within this many days (or already expired) are "expiring". */
 export const EXPIRY_WARNING_DAYS = 30;
@@ -137,8 +138,15 @@ export async function addVersion(id, file, actor) {
 /**
  * List/search documents. Filters: ownerType, owner, category, search (title),
  * expiring (within EXPIRY_WARNING_DAYS or past).
+ *
+ * Coordinator team-scoping (added 2026-09-14, a real QA-audit-found gap):
+ * this had NO actor-based scoping at all — a Coordinator could list, view,
+ * or download any Employee-owned document, not just their own team's, even
+ * though the employee's own profile correctly 403s them. Client-owned
+ * documents are left unscoped here — no Client-Coordinator visibility rule
+ * was demonstrated broken, and inventing one isn't this fix's job.
  */
-export async function listDocuments({ page, limit, ownerType, owner, category, search, expiring }) {
+export async function listDocuments({ page, limit, ownerType, owner, category, search, expiring }, actor) {
   const conditions = [];
   if (ownerType) conditions.push({ ownerType });
   if (owner) conditions.push({ owner });
@@ -147,6 +155,10 @@ export async function listDocuments({ page, limit, ownerType, owner, category, s
   if (expiring === 'true') {
     const threshold = new Date(Date.now() + EXPIRY_WARNING_DAYS * 24 * 60 * 60 * 1000);
     conditions.push({ expiryDate: { $ne: null, $lte: threshold } });
+  }
+  if (actor?.role === 'Coordinator') {
+    const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+    conditions.push({ $or: [{ ownerType: 'Client' }, { ownerType: 'Employee', owner: { $in: teamIds } }] });
   }
   const filter = conditions.length > 0 ? { $and: conditions } : {};
 
@@ -162,12 +174,15 @@ export async function listDocuments({ page, limit, ownerType, owner, category, s
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
-export async function getDocument(id) {
+export async function getDocument(id, actor) {
   const document = await Document.findById(id)
     .populate('owner', 'fullName employeeId companyName')
     .populate('versions.uploadedBy', 'name')
     .lean();
   if (!document) throw new ApiError(404, 'Document not found.');
+  if (document.ownerType === 'Employee') {
+    await assertEmployeeVisibleToActor(document.owner?._id, actor);
+  }
   return document;
 }
 
@@ -180,9 +195,12 @@ export async function getDocument(id) {
  * fetched BY THE SERVER — handing it to the client would put the file back
  * outside our authorization checks, which is exactly the bug this replaces.
  */
-export async function resolveFile(id, versionNumber) {
+export async function resolveFile(id, versionNumber, actor) {
   const document = await Document.findById(id).lean();
   if (!document) throw new ApiError(404, 'Document not found.');
+  if (document.ownerType === 'Employee') {
+    await assertEmployeeVisibleToActor(document.owner, actor);
+  }
 
   const version = versionNumber
     ? document.versions.find((v) => v.version === versionNumber)

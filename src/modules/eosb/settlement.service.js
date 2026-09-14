@@ -18,6 +18,7 @@ import { evaluateEligibility, monthsOfService } from '../leave/leave.service.js'
 import Settlement from './settlement.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
+import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 
 /** Round to 2 decimal places (money). */
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -134,9 +135,15 @@ export async function createSettlement(data, actor) {
   return settlement.toObject();
 }
 
-export async function listSettlements({ page, limit, employee }) {
+export async function listSettlements({ page, limit, employee }, actor) {
   const filter = {};
-  if (employee) filter.employee = employee;
+  if (employee) {
+    await assertEmployeeVisibleToActor(employee, actor);
+    filter.employee = employee;
+  } else if (actor?.role === 'Coordinator') {
+    const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+    filter.employee = { $in: teamIds };
+  }
 
   const [items, total] = await Promise.all([
     Settlement.find(filter)
@@ -149,9 +156,10 @@ export async function listSettlements({ page, limit, employee }) {
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
-export async function getSettlement(id) {
+export async function getSettlement(id, actor) {
   const settlement = await Settlement.findById(id).lean();
   if (!settlement) throw new ApiError(404, 'Settlement not found.');
+  await assertEmployeeVisibleToActor(settlement.employee, actor);
   return settlement;
 }
 

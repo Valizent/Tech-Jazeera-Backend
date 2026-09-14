@@ -15,8 +15,13 @@ const emptyToUndef = (value) =>
 
 const optionalStr = (max) => z.preprocess(emptyToUndef, z.string().trim().max(max).optional());
 const id = (label) => z.string().regex(/^[a-f0-9]{24}$/i, `Invalid ${label} id.`);
-const optionalNonNegNumber = z.preprocess(emptyToUndef, z.coerce.number().min(0).optional());
-const requiredNonNegNumber = (message) => z.coerce.number({ error: message }).min(0, 'Cannot be negative.');
+// Capped 2026-09-14 (a real QA-audit-found gap, same class as
+// deployment.validation.js's deductionAmount fix): unbounded rate/commission
+// fields accepted an overflow value that then produced non-finite profit
+// figures downstream. These are per-hour/per-unit RATES, not totals, so a
+// much smaller ceiling than a money-total field is the honest bound.
+const optionalNonNegNumber = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(100_000).optional());
+const requiredNonNegNumber = (message) => z.coerce.number({ error: message }).min(0, 'Cannot be negative.').max(100_000);
 const optionalDate = z.preprocess(emptyToUndef, z.coerce.date().optional());
 
 // Saudi Iqama numbers are exactly 10 digits. Only meaningful for a
@@ -108,11 +113,14 @@ const mobilisationFields = {
   // Office Secretary — see mobilisation.service.js's createMobilisation.
   onBehalfOf: z.preprocess(emptyToUndef, id('user').optional()),
 };
-// NOTE: hasSubcontractor, profitPerHour/profitPerMonth, and every ot* field
-// are deliberately absent from this schema — hasSubcontractor is derived
-// server-side from workerType, the rest are either server-computed or only
-// ever set via commercialDetailsSchema (the current-step reviewer's form).
-// Any of these sent by a client here is silently dropped, never applied.
+// NOTE: hasSubcontractor and profitPerHour/profitPerMonth are deliberately
+// absent from this schema — hasSubcontractor is derived server-side from
+// workerType, profitPerHour/profitPerMonth are always server-computed. The
+// ot* rate/commission fields moved INTO Section 1 above (2026-09-13, see
+// their own comments) and ARE accepted here now; only otProfitPerHour stays
+// server-computed and only ever set via commercialDetailsSchema (the
+// current-step reviewer's form). Any of these sent by a client here is
+// silently dropped, never applied.
 
 /** workerType drives which identity fields are actually required: an
  *  Employee mobilisation needs a real `worker` id (its name/Iqama/etc. come
@@ -137,11 +145,13 @@ function withWorkerTypeRefine(schema) {
 export const createMobilisationSchema = withWorkerTypeRefine(z.object(mobilisationFields));
 
 /** PATCH: any subset of the same fields — only while Draft (enforced in the
- *  service). `client` stays required even on an edit; an in-progress Draft
- *  always names a real client, there's no "half-set" state. `workerType`
- *  defaults to undefined here, so withWorkerTypeRefine's checks only fire
- *  when the caller is actually changing worker identity — the service
- *  falls back to the existing document's workerType otherwise. */
+ *  service). `.partial()` makes every field including `client` optional
+ *  here, same as everywhere else in this app (see employee.validation.js's
+ *  "No .default() here on purpose" note) — omitting a field on a PATCH just
+ *  means "leave it as-is," it does not clear it. `workerType` defaults to
+ *  undefined here too, so withWorkerTypeRefine's checks only fire when the
+ *  caller is actually changing worker identity — the service falls back to
+ *  the existing document's workerType otherwise. */
 export const updateMobilisationSchema = withWorkerTypeRefine(z.object(mobilisationFields).partial());
 
 export const listMobilisationsSchema = z.object({

@@ -10,6 +10,7 @@ import { logAudit } from '../audit/audit.service.js';
 import { notifyEmployeeUser } from '../notifications/notification.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 /** The ORIGINAL decide-route role gate for a ReimbursementClaim — preserved
  *  exactly as the authorization used whenever no ApprovalWorkflow governs a
@@ -152,9 +153,14 @@ export async function listReimbursements({ page, limit, status, employee }, acto
       .lean(),
     ReimbursementClaim.countDocuments(filter),
   ]);
-  const items = actor
-    ? await annotateCanDecide(rawItems, actor, { pendingStatus: 'Pending', legacyAllowedRoles: LEGACY_DECIDE_ROLES })
-    : rawItems;
+  let items = rawItems;
+  if (actor) {
+    items = await annotateCanDecide(rawItems, actor, { pendingStatus: 'Pending', legacyAllowedRoles: LEGACY_DECIDE_ROLES });
+    // Same real-gate intersection as advance.service.js's listAdvances —
+    // see its own comment for why (2026-09-14, a real QA-audit-found gap).
+    const hasSectionWrite = await canAccessSection('financialRequests', actor, 'write');
+    items = items.map((item) => ({ ...item, canDecideCurrentStep: item.canDecideCurrentStep && hasSectionWrite }));
+  }
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 

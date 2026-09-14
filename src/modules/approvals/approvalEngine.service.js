@@ -25,9 +25,13 @@ import { notifyUser, notifyEmployeeUser } from '../notifications/notification.se
  * membership" from "decided via the Admin override" so the Approval Log can
  * show it transparently.
  */
+// isActive: true (2026-09-14 QA-audit fix): a step's `roles` snapshot
+// references a role by id forever (roles are deactivated, never deleted),
+// but a DISABLED role must stop granting real decide authority the moment
+// it's disabled, not just stop appearing in new workflow configuration.
 export async function resolveStepAuthority(actor, stepRoleIds) {
   if (stepRoleIds?.length) {
-    const matchedRole = await ApprovalRole.findOne({ _id: { $in: stepRoleIds }, members: actor.userId })
+    const matchedRole = await ApprovalRole.findOne({ _id: { $in: stepRoleIds }, members: actor.userId, isActive: true })
       .select('_id')
       .lean();
     if (matchedRole) return { authorized: true, roleId: matchedRole._id, viaAdminOverride: false };
@@ -63,7 +67,7 @@ export async function annotateCanDecide(items, actor, { pendingStatus, legacyAll
 
   let memberRoleIds = new Set();
   if (roleIdsNeeded.size > 0) {
-    const roles = await ApprovalRole.find({ _id: { $in: [...roleIdsNeeded] }, members: actor.userId })
+    const roles = await ApprovalRole.find({ _id: { $in: [...roleIdsNeeded] }, members: actor.userId, isActive: true })
       .select('_id')
       .lean();
     memberRoleIds = new Set(roles.map((r) => r._id.toString()));
@@ -81,10 +85,13 @@ export async function annotateCanDecide(items, actor, { pendingStatus, legacyAll
   });
 }
 
-/** Every distinct User id holding any of `roleIds` — for next-step notifications. */
+/** Every distinct User id holding any of `roleIds` — for next-step
+ *  notifications. `isActive: true` (2026-09-14 QA-audit fix): a disabled
+ *  role's members shouldn't be proactively notified as if they still held
+ *  real decide authority. */
 export async function membersOfRoles(roleIds) {
   if (!roleIds?.length) return [];
-  const roles = await ApprovalRole.find({ _id: { $in: roleIds } }).select('members').lean();
+  const roles = await ApprovalRole.find({ _id: { $in: roleIds }, isActive: true }).select('members').lean();
   const ids = new Set();
   for (const role of roles) for (const memberId of role.members) ids.add(memberId.toString());
   return [...ids];

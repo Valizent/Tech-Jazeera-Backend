@@ -5,9 +5,11 @@
  *
  * KNOWN LIMITATION (documented, not silently glossed over): approving a
  * timesheet does not yet lock its underlying Attendance days against
- * further edits. There is no Payroll consumer yet to protect against a
- * post-approval change — see docs/P2-M3b-notes.md for the reasoning and
- * what adding the lock would touch.
+ * further edits. Payroll's approvedHoursForMonth (payroll.service.js) does
+ * now read Approved Timesheets for its overtime figure (P3-E), so a
+ * post-approval Attendance edit CAN silently drift from what was already
+ * paid — see docs/P2-M3b-notes.md for the reasoning and what adding the
+ * lock would touch.
  */
 import AttendanceModel from '../attendance/attendance.model.js';
 import Employee from '../employees/employee.model.js';

@@ -34,9 +34,18 @@ function normalizeError(err) {
     const field = Object.keys(err.keyValue ?? {})[0] ?? 'field';
     return new ApiError(409, `A record with this ${field} already exists.`);
   }
-  // Mongoose schema validation (last-resort net — Zod should catch these first)
+  // Mongoose schema validation (last-resort net — Zod should catch these first).
+  // A nested CastError's own .message embeds the raw submitted value, its
+  // JS type, and the full field path verbatim (fixed 2026-09-14, a real
+  // QA-audit-found gap: this went straight into the client-visible response
+  // `details`, in production too — only the top-level `stack` field was ever
+  // production-gated). Sanitized the same way the top-level CastError case
+  // above already is; every other sub-error here is a real Mongoose
+  // validator message (required/enum/custom), already written to be shown.
   if (err.name === 'ValidationError') {
-    const details = Object.values(err.errors).map((e) => ({ field: e.path, message: e.message }));
+    const details = Object.values(err.errors).map((e) =>
+      e.name === 'CastError' ? { field: e.path, message: `Invalid value for "${e.path}".` } : { field: e.path, message: e.message }
+    );
     return new ApiError(400, 'Validation failed.', details);
   }
   // body-parser: malformed JSON body

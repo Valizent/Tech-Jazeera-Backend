@@ -8,6 +8,10 @@ import { isApprovalRoleMember } from '../approvals/approvals.service.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Admin and Manager always may manage the list; beyond that, any member of
  * any configured ApprovalRole (e.g. BDM, COO, GM) — the same low-friction
@@ -26,7 +30,11 @@ export async function listJobTitles({ activeOnly } = {}) {
 }
 
 export async function createJobTitle(data, actor) {
-  const existing = await JobTitle.findOne({ name: new RegExp(`^${data.name}$`, 'i') }).lean();
+  // escapeRegex (2026-09-14, a real QA-audit-found gap): the name was
+  // spliced into `new RegExp()` unescaped — a value with regex
+  // metacharacters (e.g. "QA [") threw a 500, and a value like ".*" matched
+  // every existing title as a false duplicate.
+  const existing = await JobTitle.findOne({ name: new RegExp(`^${escapeRegex(data.name)}$`, 'i') }).lean();
   if (existing) throw new ApiError(409, 'This job title already exists.');
 
   const jobTitle = await JobTitle.create(data);

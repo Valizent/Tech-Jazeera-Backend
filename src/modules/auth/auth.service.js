@@ -225,6 +225,7 @@ export async function changePassword({ userId, currentPassword, newPassword }, i
   if (!ok) throw new ApiError(401, 'Current password is incorrect.');
 
   user.passwordHash = await hashPassword(newPassword);
+  user.passwordChangedAt = new Date();
   await user.save();
   await RefreshToken.deleteMany({ user: user._id });
 
