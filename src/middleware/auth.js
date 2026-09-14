@@ -34,6 +34,17 @@ export const requireAuth = asyncHandler(async (req, res, next) => {
   if (!user || !user.isActive) {
     throw new ApiError(401, 'This account no longer exists or is deactivated.');
   }
+  // A token issued before the last password change/reset is dead on arrival
+  // (2026-09-14, a real QA-audit-found gap) — a reset previously only
+  // revoked refresh SESSIONS; an already-issued access token kept working
+  // until its own short expiry regardless, undermining "this credential is
+  // compromised, cut it off now." `payload.iat` is seconds since epoch (a
+  // jsonwebtoken default claim); `passwordChangedAt` is `null` for an
+  // account whose password has never been reset since this field existed,
+  // in which case nothing is rejected.
+  if (user.passwordChangedAt && payload.iat * 1000 < user.passwordChangedAt.getTime()) {
+    throw new ApiError(401, 'Session expired or invalid. Please log in again.');
+  }
 
   // `employee` (P2-M1) is the linked workforce record, or null for staff. It
   // is the anchor for ownership checks — an ESS route (P2-M2) will compare a

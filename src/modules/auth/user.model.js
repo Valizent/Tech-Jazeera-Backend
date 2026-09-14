@@ -101,6 +101,17 @@ const userSchema = new mongoose.Schema(
     // Links a login to its person record. Universal for every non-Admin
     // login (Own or Client Employee.type alike) — null only for Admin.
     employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
+    // Set on every password change/reset (self-service or Admin-initiated),
+    // never on any other update (added 2026-09-14, a real QA-audit-found
+    // gap): requireAuth compares this against an access token's own `iat`
+    // claim and rejects a token issued before the last password change. A
+    // reset previously only revoked refresh sessions — an already-issued
+    // access token stayed valid until its own short expiry regardless, so
+    // "reset because this credential is compromised" didn't actually
+    // guarantee the credential stopped working immediately. `null` (no
+    // password change on record yet, e.g. seed-admin's first run) never
+    // rejects anything — see requireAuth's own comment on the null check.
+    passwordChangedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

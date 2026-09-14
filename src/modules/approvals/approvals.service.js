@@ -11,6 +11,9 @@ import User from '../auth/user.model.js';
 import LeaveRequest from '../leave/leaveRequest.model.js';
 import ExitReentryRequest from '../exitDocuments/exitReentry.model.js';
 import CertificateRequest from '../exitDocuments/certificate.model.js';
+import Timesheet from '../timesheets/timesheet.model.js';
+import SalaryAdvance from '../financialRequests/advance.model.js';
+import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 
@@ -179,16 +182,34 @@ export async function resolveApprovalWorkflow(employee, requestType) {
 // query shape for it).
 // ---------------------------------------------------------------------------
 
+// Timesheet/SalaryAdvance/Reimbursement added 2026-09-14 (a real QA-audit-
+// found gap, D1) — all three have supported real ApprovalWorkflows for a
+// while (see CLAUDE.md's own Status history), but were never added here, so
+// a workflow-decided one of these never showed up in the cross-type log.
+// Mobilisation deliberately stays OUT — its `coordinators` are Users
+// directly, not an `employee` ref, so the shared `filter.employee = ...`
+// line below doesn't apply to it the same way; folding it in needs its own
+// pass, not a blind copy-paste (flagged when Timesheet/etc. were originally
+// deferred too — still true, not a new gap).
 const LOG_SOURCES = {
   Leave: { Model: LeaveRequest, typeNameField: 'leaveTypeName' },
   ExitReentry: { Model: ExitReentryRequest, typeNameField: 'visaType' },
   Certificate: { Model: CertificateRequest, typeNameField: 'type' },
+  // No natural short "sub-type" label exists on these two — typeName
+  // resolves to undefined for them (item[null] is a safe no-op, not a
+  // crash), same as if the field were simply absent from a document.
+  Timesheet: { Model: Timesheet, typeNameField: null },
+  SalaryAdvance: { Model: SalaryAdvance, typeNameField: null },
+  Reimbursement: { Model: ReimbursementClaim, typeNameField: 'category' },
 };
 
 /** Is this user a member of ANY approval role — the dynamic "sits somewhere
- *  in the hierarchy" check that (alongside Admin) unlocks the Approval Log. */
+ *  in the hierarchy" check that (alongside Admin) unlocks the Approval Log.
+ *  `isActive: true` (added 2026-09-14, a real QA-audit-found gap): deactivating
+ *  a role must actually revoke what it granted, not just hide it from new
+ *  assignment — membership in a disabled role no longer counts. */
 export async function isApprovalRoleMember(userId) {
-  const role = await ApprovalRole.findOne({ members: userId }).select('_id').lean();
+  const role = await ApprovalRole.findOne({ members: userId, isActive: true }).select('_id').lean();
   return Boolean(role);
 }
 
@@ -200,11 +221,13 @@ export async function isApprovalRoleMember(userId) {
  * service.js's canAccessSection), including mobilisations/mobilisation.
  * service.js's read-only viewer circle ('mobilisationsViewer') — one query
  * shape, reused everywhere, rather than inventing a per-feature membership
- * check.
+ * check. `isActive: true` (2026-09-14 QA-audit fix, same reasoning as
+ * isApprovalRoleMember above) — a Section Access grant naming a since-
+ * deactivated role no longer authorizes its members.
  */
 export async function isMemberOfAnyRole(userId, roleIds) {
   if (!roleIds?.length) return false;
-  const role = await ApprovalRole.findOne({ _id: { $in: roleIds }, members: userId }).select('_id').lean();
+  const role = await ApprovalRole.findOne({ _id: { $in: roleIds }, members: userId, isActive: true }).select('_id').lean();
   return Boolean(role);
 }
 

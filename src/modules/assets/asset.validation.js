@@ -47,12 +47,5 @@ export const listAssetsSchema = z.object({
   search: z.preprocess(emptyToUndef, z.string().trim().max(100).optional()),
 });
 
-export const listAssignmentsSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  employee: z.preprocess(emptyToUndef, id.optional()),
-  asset: z.preprocess(emptyToUndef, id.optional()),
-});
-
 export const assetIdParamSchema = z.object({ id });
 export const employeeIdParamSchema = z.object({ employeeId: id });

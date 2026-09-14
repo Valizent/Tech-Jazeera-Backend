@@ -23,6 +23,7 @@ import { logAudit } from '../audit/audit.service.js';
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
 import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { notifyUser } from '../notifications/notification.service.js';
+import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 
 function currentMonthStr() {
   const d = new Date();
@@ -138,9 +139,12 @@ export async function createDeploymentFromMobilisation(mobilisation, actor) {
  * Add this month's actual client-timesheet hours — only for a month that has
  * fully ended (so "mobilised in September" unlocks September's entry on
  * October 1st) and no earlier than the deployment's own start month. Office
- * Secretary is a hardcoded exception to the Section Access gate (same
- * pattern as mobilisation.service.js's createMobilisation) — they aren't a
- * grantable Section Access role at all.
+ * Secretary is a hardcoded OR-bypass alongside the real Section Access gate
+ * (same pattern as mobilisation.service.js's createMobilisation) — a genuine
+ * business rule, not a Section Access limitation: since the 2026-09-13 "full
+ * staff floor" change, Office Secretary CAN also be granted 'deploymentsHours'
+ * like any other role via ApprovalRole membership, so this bypass is now a
+ * standing convenience on top of that, not the only path in.
  */
 export async function addMonthlyHours(deploymentId, data, actor) {
   const isOfficeSecretary = actor.role === 'Office Secretary';
@@ -149,17 +153,26 @@ export async function addMonthlyHours(deploymentId, data, actor) {
 
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  // An Ended deployment can still get its own FINAL month entered, as long
+  // as that month is one it was actually active for — fixed 2026-09-14, a
+  // real QA-audit-found gap — F5: a placement that ends mid-month (e.g.
+  // demobilised August 15th, before anyone entered August's hours) could
+  // never have its first-and-only August entry made at all, since the
+  // blanket `status !== 'Active'` check ran before the ordinary "wait for
+  // the month to end" flow ever got a chance. `endDate`'s own month is the
+  // real upper bound for an Ended deployment — a month AFTER that is still
+  // correctly refused (the worker genuinely wasn't there), unchanged.
   if (deployment.status !== 'Active') {
-    throw new ApiError(400, 'Only an active deployment can have hours entered.');
+    const endMonth = deployment.endDate ? monthStrOf(deployment.endDate) : null;
+    if (deployment.status !== 'Ended' || !endMonth || data.month > endMonth) {
+      throw new ApiError(400, 'Only an active deployment — or an ended one, for a month within its actual placement dates — can have hours entered.');
+    }
   }
   if (data.month >= currentMonthStr()) {
     throw new ApiError(400, 'You can only enter hours for a month that has already ended.');
   }
   if (data.month < monthStrOf(deployment.startDate)) {
     throw new ApiError(400, 'This deployment had not started yet in that month.');
-  }
-  if (deployment.monthlyHours.some((m) => m.month === data.month)) {
-    throw new ApiError(409, 'Hours for this month have already been entered — edit that entry instead.');
   }
   const expectedDays = daysInMonth(data.month);
   if (data.dailyHours.length !== expectedDays) {
@@ -170,7 +183,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   const actualHours = sumWorkedHours(data.dailyHours);
   const otHours = Math.max(0, actualHours - contractHours);
   const otAmount = await computeOtAmount(deployment.mobilisation, otHours);
-  deployment.monthlyHours.push({
+  const newEntry = {
     month: data.month,
     contractHours,
     dailyHours: data.dailyHours,
@@ -180,14 +193,29 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     deductionAmount: data.deductionAmount ?? 0,
     notes: data.notes,
     enteredBy: actor.userId,
-  });
-  await deployment.save();
+  };
+
+  // Atomic push, not read-.some()-then-push-then-save (fixed 2026-09-14, a
+  // real QA-audit-found race — F2): two concurrent submissions for the same
+  // month could both pass an in-memory `.some()` check against the same
+  // stale read, then both push, leaving duplicate entries for one month.
+  // `'monthlyHours.month': { $ne: data.month }` is re-checked by MongoDB
+  // against the CURRENT document at write time — only the first of two
+  // concurrent requests can match it; the loser gets `null` back.
+  const updated = await Deployment.findOneAndUpdate(
+    { _id: deployment._id, 'monthlyHours.month': { $ne: data.month } },
+    { $push: { monthlyHours: newEntry } },
+    { new: true }
+  );
+  if (!updated) {
+    throw new ApiError(409, 'Hours for this month have already been entered — edit that entry instead.');
+  }
 
   await logAudit({
     user: actor.userId,
     action: 'deployment.monthlyHours.add',
     targetType: 'Deployment',
-    targetId: deployment._id,
+    targetId: updated._id,
     meta: { month: data.month, actualHours, otHours, otAmount },
     ip: actor.ip,
   });
@@ -197,12 +225,13 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     deciderIds.map((userId) =>
       notifyUser(userId, {
         type: 'RequestStatus',
-        title: `${data.month} hours for ${deployment.workerName} need your review`,
-        url: `/deployments/${deployment._id}`,
+        title: `${data.month} hours for ${updated.workerName} need your review`,
+        url: `/deployments/${updated._id}`,
       })
     )
   );
-  return deployment.toObject();
+  const canSeeCommercial = await canAccessSection('deploymentsHoursDecide', actor);
+  return stripCommercialMonthlyHours(updated.toObject(), canSeeCommercial);
 }
 
 /**
@@ -307,7 +336,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
       url: `/deployments/${deployment._id}`,
     });
   }
-  return deployment.toObject();
+  return stripCommercialMonthlyHours(deployment.toObject(), isDecider);
 }
 
 /** Approve or Reject one month's entry — the review half of the flow
@@ -560,6 +589,23 @@ export async function deductionsForEmployeeMonth(employeeId, monthStr) {
   return deductions;
 }
 
+/**
+ * Strip `otAmount` from every monthlyHours entry for a non-decider — the
+ * same redaction getDeployment already applied on read, now shared with
+ * addMonthlyHours/updateMonthlyHours (fixed 2026-09-14, a real QA-audit
+ * finding: both mutation endpoints returned the raw `deployment.toObject()`
+ * with `otAmount` intact regardless of who called them — someone with only
+ * 'deploymentsHours' write, e.g. Office Secretary, could read the
+ * confidential OT rate straight off her own entry-submission response even
+ * though the GET endpoint correctly hid it). Never trust the client, and
+ * never even SEND what an unauthorized viewer shouldn't have.
+ */
+function stripCommercialMonthlyHours(deployment, canSeeCommercial) {
+  if (canSeeCommercial) return deployment;
+  deployment.monthlyHours = deployment.monthlyHours.map(({ otAmount, ...rest }) => rest);
+  return deployment;
+}
+
 const PROFIT_RATE_FIELDS =
   'serialNumber workerType clientRate clientCommission subcontractorRate subcontractorCommission ' +
   'otClientRate otClientCommission otSubcontractorRate otSubcontractorCommission fta allowance';
@@ -570,6 +616,13 @@ export async function getDeployment(id, actor) {
     .populate('mobilisation', PROFIT_RATE_FIELDS)
     .lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  // Coordinator team-scoping (2026-09-14, a real QA-audit-found gap): a
+  // SupplierEmployee/Freelancer deployment has no linked Employee `worker`
+  // at all, so there's nothing to scope — same reasoning Documents/Assets/
+  // EOSB use for a record with no Employee owner.
+  if (deployment.worker) {
+    await assertEmployeeVisibleToActor(deployment.worker._id, actor);
+  }
 
   // Profit and OT amount (added 2026-09-13, see the model's doc comment) are
   // both commercial data, same sensitivity class as Mobilisation's own

@@ -10,6 +10,7 @@ import AssetAssignment from './assetAssignment.model.js';
 import Employee from '../employees/employee.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
+import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 
 function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -98,6 +99,7 @@ export async function assignAsset(assetId, data, actor) {
   if (employee.status === 'Exited') {
     throw new ApiError(400, 'This employee has exited the company and cannot be assigned an asset.');
   }
+  await assertEmployeeVisibleToActor(employee._id, actor);
 
   const session = await mongoose.startSession();
   try {
@@ -192,15 +194,23 @@ export async function listAssets({ page, limit, category, status, search }) {
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
-export async function getAsset(id) {
+export async function getAsset(id, actor) {
   const asset = await Asset.findById(id).populate('currentEmployee', 'fullName employeeId').lean();
   if (!asset) throw new ApiError(404, 'Asset not found.');
+  if (asset.currentEmployee) {
+    await assertEmployeeVisibleToActor(asset.currentEmployee._id, actor);
+  }
   const history = await AssetAssignment.find({ asset: id }).sort({ assignedAt: -1 }).lean();
   return { ...asset, history };
 }
 
 /** An employee's currently-assigned assets + their assignment history — used
- *  by both the Employee profile panel and /api/me/assets. */
-export async function listEmployeeAssignments(employeeId) {
+ *  by both the Employee profile panel and /api/me/assets (the latter passes
+ *  no `actor` — a Worker/Staff viewing their OWN assets needs no Coordinator
+ *  scoping, since assertEmployeeVisibleToActor is a no-op for any non-
+ *  Coordinator actor, undefined included). Coordinator scoping added
+ *  2026-09-14, a real QA-audit-found gap: this had none at all before. */
+export async function listEmployeeAssignments(employeeId, actor) {
+  await assertEmployeeVisibleToActor(employeeId, actor);
   return AssetAssignment.find({ employee: employeeId }).sort({ assignedAt: -1 }).lean();
 }

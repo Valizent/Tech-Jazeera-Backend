@@ -57,10 +57,16 @@ const dailyHours = z.array(dailyEntry).min(1, "Enter each day's status.");
  *  `otClientRate`, never client-submitted. `deductionAmount` IS accepted
  *  here, unlike those two — it's whatever the client's own timesheet says,
  *  no in-app formula to recompute it from (same posture as GOSI). */
+// Fixed 2026-09-14, a real QA-audit-found gap: `.min(0)` with no upper bound
+// accepted 1e308, which then produced non-finite profit/totalProfit once
+// subtracted through — capped at the same order of magnitude every other
+// money field in this app tops out at (e.g. quotation unitPrice).
+const deductionAmount = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(1_000_000).optional());
+
 export const addMonthlyHoursSchema = z.object({
   month: monthStr,
   dailyHours,
-  deductionAmount: z.preprocess(emptyToUndef, z.coerce.number().min(0).optional()),
+  deductionAmount,
   notes: optionalStr(500),
 });
 
@@ -68,7 +74,7 @@ export const addMonthlyHoursSchema = z.object({
  *  (it identifies which entry, never changes on an edit). */
 export const updateMonthlyHoursSchema = z.object({
   dailyHours,
-  deductionAmount: z.preprocess(emptyToUndef, z.coerce.number().min(0).optional()),
+  deductionAmount,
   notes: optionalStr(500),
 });
 

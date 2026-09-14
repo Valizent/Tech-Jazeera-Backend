@@ -37,7 +37,6 @@
  */
 import mongoose from 'mongoose';
 
-export const DEPLOYMENT_SHIFTS = ['Day', 'Night', 'Rotating'];
 export const MONTHLY_HOURS_STATUSES = ['Pending', 'Approved', 'Rejected'];
 export const DEPLOYMENT_STATUSES = ['Active', 'Ended'];
 /**

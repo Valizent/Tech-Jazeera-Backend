@@ -13,11 +13,19 @@
  * approvalEngine — this router owns configuration only. The Approval Log
  * (`/log`) is untouched — already dynamically gated (Admin, or a real
  * ApprovalRole member) inside the controller itself.
+ *
+ * GET uses `requireStaffOrExecutive`, not plain `requireStaff` (fixed
+ * 2026-09-14, a real QA-audit-found write-implies-read violation): POST/PATCH
+ * have no router-level role floor at all beyond `canManageApprovalHierarchy`
+ * itself, and `canAccessSection`'s own floor already lets a granted Executive
+ * through — so an Executive granted 'approvalHierarchy' write could create or
+ * edit a role but couldn't list any, since the GET routes' `requireStaff`
+ * rejected Executive before Section Access was even checked.
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff, requireStaffOrExecutive } from '../../middleware/rbac.js';
+import { requireStaffOrExecutive } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
@@ -38,7 +46,7 @@ router.use(requireAuth);
 const canReadApprovalHierarchy = requireSectionAccess('approvalHierarchy', 'read');
 const canManageApprovalHierarchy = requireSectionAccess('approvalHierarchy', 'write');
 
-router.get('/roles', requireStaff, canReadApprovalHierarchy, asyncHandler(approvalsController.listRoles));
+router.get('/roles', requireStaffOrExecutive, canReadApprovalHierarchy, asyncHandler(approvalsController.listRoles));
 router.post(
   '/roles',
   canManageApprovalHierarchy,
@@ -52,7 +60,7 @@ router.patch(
   asyncHandler(approvalsController.updateRole)
 );
 
-router.get('/workflows', requireStaff, canReadApprovalHierarchy, asyncHandler(approvalsController.listWorkflows));
+router.get('/workflows', requireStaffOrExecutive, canReadApprovalHierarchy, asyncHandler(approvalsController.listWorkflows));
 router.post(
   '/workflows',
   canManageApprovalHierarchy,

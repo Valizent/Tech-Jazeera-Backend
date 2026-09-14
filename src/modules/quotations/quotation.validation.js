@@ -28,8 +28,16 @@ export const createQuotationSchema = z.object({
   notes: z.preprocess(emptyToUndef, z.string().trim().max(2000).optional()),
 });
 
-/** PATCH: any subset; if lineItems is present, totals are recomputed. */
-export const updateQuotationSchema = createQuotationSchema.partial();
+/** PATCH: any subset; if lineItems is present, totals are recomputed.
+ *  `status` is explicitly overridden to drop `.default('Draft')` (fixed
+ *  2026-09-14, a real QA-audit-found gap — same bug class as
+ *  employee.validation.js's own `updateEmployeeSchema`): `.partial()` only
+ *  makes a field OPTIONAL, it doesn't strip the field's `.default()`, so
+ *  omitting `status` from a PATCH body still resolved it to 'Draft' and
+ *  silently reverted an Approved quotation on any unrelated field edit. */
+export const updateQuotationSchema = createQuotationSchema.partial().extend({
+  status: z.enum(QUOTATION_STATUSES).optional(),
+});
 
 export const listQuotationsSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

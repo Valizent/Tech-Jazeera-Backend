@@ -77,6 +77,7 @@ export async function resetStaffPassword(id, actor) {
 
   const tempPassword = generateTempPassword();
   user.passwordHash = await hashPassword(tempPassword);
+  user.passwordChangedAt = new Date();
   await user.save();
   await RefreshToken.deleteMany({ user: user._id });
 

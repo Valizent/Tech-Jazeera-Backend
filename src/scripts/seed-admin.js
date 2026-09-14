@@ -56,7 +56,7 @@ if (existing && existing.role !== 'Admin' && !confirmed) {
 const passwordHash = await hashPassword(password);
 const admin = await User.findOneAndUpdate(
   { email: email.toLowerCase() },
-  { name, email: email.toLowerCase(), passwordHash, role: 'Admin', isActive: true },
+  { name, email: email.toLowerCase(), passwordHash, role: 'Admin', isActive: true, passwordChangedAt: new Date() },
   { new: true, upsert: true } // create if missing, update if present
 );
 

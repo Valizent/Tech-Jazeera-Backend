@@ -19,6 +19,25 @@ import { logAudit } from '../audit/audit.service.js';
  */
 export const EXPIRY_WARNING_DAYS = 30;
 
+/**
+ * A Coordinator may only see/act on employees assigned to them — the one
+ * scoping rule this app enforces everywhere an Employee is the subject
+ * (listEmployees, Attendance, Leave, ...). Added here as a single shared
+ * export (2026-09-14, a real QA-audit-found gap) after Documents, Assets,
+ * EOSB Settlements, and Deployment detail were all found reading/mutating
+ * an arbitrary employee's records with no team check at all, despite the
+ * employee's OWN profile correctly 403ing for the same Coordinator — every
+ * one of those had grown its own copy-pasted (or entirely missing) version
+ * of this exact check. No-op for every non-Coordinator actor; Admin's own
+ * bypass lives in the STAFF_ROLES/Section-Access floor upstream of this,
+ * unrelated to team scope.
+ */
+export async function assertEmployeeVisibleToActor(employeeId, actor) {
+  if (!employeeId || actor?.role !== 'Coordinator') return;
+  const owned = await Employee.exists({ _id: employeeId, coordinator: actor.userId });
+  if (!owned) throw new ApiError(403, 'You do not have access to this employee.');
+}
+
 /** Fields the expiry-alert filter inspects. */
 const EXPIRY_FIELDS = [
   'passport.expiry',
@@ -316,6 +335,7 @@ export async function resetEmployeeLoginPassword(employeeId, actor) {
 
   const tempPassword = generateTempPassword();
   login.passwordHash = await hashPassword(tempPassword);
+  login.passwordChangedAt = new Date();
   await login.save();
   await RefreshToken.deleteMany({ user: login._id });
 
@@ -363,11 +383,21 @@ export async function updateEmployee(id, data, actor) {
   if ('manager' in data) await assertValidManager(data.manager);
   if ('approvalWorkflow' in data) await assertValidApprovalWorkflow(data.approvalWorkflow);
   if ('subcontractor' in data) await assertValidSubcontractor(data.subcontractor);
-  const employee = await Employee.findByIdAndUpdate(id, data, {
-    new: true, // return the updated document, not the stale one
-    runValidators: true, // Mongoose skips schema validation on updates unless told
-  }).lean();
+  // Fetch + assign + save, NOT findByIdAndUpdate (fixed 2026-09-14, a real
+  // QA-audit-found gap): Mongoose's update validators (`runValidators`)
+  // don't reliably see the FULL merged document inside a conditional
+  // `required: function(){...}` validator (requiredForWorkforce etc. above
+  // — `this` inside an update validator isn't the same as it is during a
+  // normal `.save()`). A PATCH that changed only `{ type: 'Subcontracted' }`
+  // — nothing else — passed validation and saved, even though the schema
+  // now requires `subcontractor`/`nationality`/`mobile` for that type and
+  // none of them were present on the document. `.save()`'s validation runs
+  // against the real, complete, merged document, which these conditional
+  // validators need to work correctly.
+  const employee = await Employee.findById(id);
   if (!employee) throw new ApiError(404, 'Employee not found.');
+  Object.assign(employee, data);
+  await employee.save();
   await logAudit({
     user: actor.userId,
     action: 'employee.update',
@@ -376,7 +406,7 @@ export async function updateEmployee(id, data, actor) {
     meta: { employeeId: employee.employeeId, fields: Object.keys(data) },
     ip: actor.ip,
   });
-  return employee;
+  return employee.toObject();
 }
 
 /**

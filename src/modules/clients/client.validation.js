@@ -51,8 +51,16 @@ export const createClientSchema = z.object({
   notes: optionalStr(2000),
 });
 
-/** PATCH: any subset of the same fields, same rules. */
-export const updateClientSchema = createClientSchema.partial();
+/** PATCH: any subset of the same fields, same rules. `status` is explicitly
+ *  overridden to drop `.default('Active')` (fixed 2026-09-14, a real
+ *  QA-audit-found gap — same bug class as employee.validation.js's own
+ *  `updateEmployeeSchema`): `.partial()` only makes a field OPTIONAL, it
+ *  doesn't strip the field's `.default()`, so omitting `status` from a PATCH
+ *  body still resolved it to 'Active' and silently reactivated an Inactive
+ *  client on any unrelated field edit. */
+export const updateClientSchema = createClientSchema.partial().extend({
+  status: z.enum(CLIENT_STATUSES).optional(),
+});
 
 export const listClientsSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

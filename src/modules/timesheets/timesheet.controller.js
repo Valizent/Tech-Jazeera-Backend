@@ -7,6 +7,7 @@ import ApiError from '../../utils/ApiError.js';
 import ApiResponse from '../../utils/ApiResponse.js';
 import Employee from '../employees/employee.model.js';
 import { isApprovalRoleMember } from '../approvals/approvals.service.js';
+import { assertEmployeesInCoordinatorTeam } from '../attendance/attendance.service.js';
 import { getLogoForEmbedding } from '../companySettings/companySettings.service.js';
 import { buildTimesheetXlsx } from '../timesheetProcessor/timesheet.export.js';
 import { XLSX_MIME } from '../timesheetProcessor/timesheet.constants.js';
@@ -65,6 +66,7 @@ export async function getMonthlyReport(req, res) {
   const { employeeId, month, year } = req.query;
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
+  await assertEmployeesInCoordinatorTeam([employeeId], actor(req));
 
   const result = await buildMonthlyAttendanceReport(employee, { month, year });
   res.json(new ApiResponse('Monthly report.', result));
@@ -83,6 +85,7 @@ export async function generateMonthlyReport(req, res) {
   const { employeeId, month, year } = req.body;
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
+  await assertEmployeesInCoordinatorTeam([employeeId], actor(req));
 
   const result = await buildMonthlyAttendanceReport(employee, { month, year });
   const logo = await getLogoForEmbedding();

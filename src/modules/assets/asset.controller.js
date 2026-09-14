@@ -4,7 +4,7 @@
 import ApiResponse from '../../utils/ApiResponse.js';
 import * as assetService from './asset.service.js';
 
-const actor = (req) => ({ userId: req.user.id, ip: req.ip });
+const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
 
 export async function list(req, res) {
   const data = await assetService.listAssets(req.query);
@@ -12,7 +12,7 @@ export async function list(req, res) {
 }
 
 export async function get(req, res) {
-  const asset = await assetService.getAsset(req.params.id);
+  const asset = await assetService.getAsset(req.params.id, actor(req));
   res.json(new ApiResponse('Asset.', asset));
 }
 
@@ -48,6 +48,6 @@ export async function returnAsset(req, res) {
 
 /** GET /api/assets/by-employee/:employeeId — current + past assignments, for the Employee profile panel. */
 export async function listByEmployee(req, res) {
-  const data = await assetService.listEmployeeAssignments(req.params.employeeId);
+  const data = await assetService.listEmployeeAssignments(req.params.employeeId, actor(req));
   res.json(new ApiResponse('Assigned assets.', data));
 }
