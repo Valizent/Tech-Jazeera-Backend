@@ -37,6 +37,11 @@
  * business owner, not inferred):
  *   profitPerHour = SupplierEmployee: (clientRate - clientCommission) - (subcontractorRate + subcontractorCommission)
  *                   Employee/Freelancer: clientRate - clientCommission
+ *   otProfitPerHour = otClientRate - otEmployeeRate — no commission/
+ *             subcontractor-rate split for overtime (2026-09-14, the user's
+ *             own correction: that split "does not exist" for OT in real
+ *             terms — there's only what the client is billed and what's
+ *             actually paid out per OT hour, same for every workerType)
  *   profitPerMonth = (profitPerHour * requiredTimesheetHours) - fta - allowance
  * This is a pre-deployment ESTIMATE off the contracted/target hours only —
  * it deliberately does NOT factor in overtime or the client's real worked
@@ -148,17 +153,22 @@ const mobilisationSchema = new mongoose.Schema(
     mobilisationDate: { type: Date, required: true },
     checkoutDate: { type: Date, default: null },
 
-    // --- Section 2: overtime RATES — filled by the current-step reviewer,
-    // mirrors the regular-hours rate split. No `otHours`/`otProfitTotal`
-    // here (removed 2026-09-12) — actual OT hours are now tracked entirely
-    // on the Deployment's monthly-hours ledger, which already reads these
-    // rate fields straight off this document (see deployment.service.js's
-    // computeMonthlyProfit). `otProfitPerHour` stays: a pure rate-derived
-    // margin preview that needs no hours figure at all.
+    // --- Section 2: overtime RATES — filled by the current-step reviewer.
+    // No `otHours`/`otProfitTotal` here (removed 2026-09-12) — actual OT
+    // hours are now tracked entirely on the Deployment's monthly-hours
+    // ledger, which already reads these rate fields straight off this
+    // document (see deployment.service.js's computeMonthlyProfit).
+    // `otProfitPerHour` stays: a pure rate-derived margin preview that needs
+    // no hours figure at all. Unlike the regular-hours rate split above,
+    // there is deliberately NO client-commission or subcontractor-rate/
+    // commission breakdown for OT (2026-09-14, the user's own correction —
+    // that split doesn't reflect how OT is actually billed/paid in
+    // practice): just what the client is charged (`otClientRate`) and what
+    // is actually paid out per OT hour to the worker, whoever they are
+    // (`otEmployeeRate`) — the same for Employee, SupplierEmployee, and
+    // Freelancer alike.
     otClientRate: { type: Number, default: null, min: 0 },
-    otClientCommission: { type: Number, default: null, min: 0 },
-    otSubcontractorRate: { type: Number, default: null, min: 0 }, // SupplierEmployee only
-    otSubcontractorCommission: { type: Number, default: null, min: 0 }, // SupplierEmployee only
+    otEmployeeRate: { type: Number, default: null, min: 0 },
     otProfitPerHour: { type: Number, default: null }, // computed
 
     // --- stale-mobilisation warning support ---
