@@ -609,11 +609,7 @@ function computeMonthlyProfit(entry, mobilisation) {
   const subSide = isSupplier ? (mobilisation.subcontractorRate ?? 0) + (mobilisation.subcontractorCommission ?? 0) : 0;
   const profitPerHour = clientSide - subSide;
 
-  const otClientSide = (mobilisation.otClientRate ?? 0) - (mobilisation.otClientCommission ?? 0);
-  const otSubSide = isSupplier
-    ? (mobilisation.otSubcontractorRate ?? 0) + (mobilisation.otSubcontractorCommission ?? 0)
-    : 0;
-  const otProfitPerHour = otClientSide - otSubSide;
+  const otProfitPerHour = (mobilisation.otClientRate ?? 0) - (mobilisation.otEmployeeRate ?? 0);
   const otProfitTotal = money(otProfitPerHour * entry.otHours);
 
   return money(
@@ -683,7 +679,7 @@ function stripCommercialMonthlyHours(deployment, canSeeCommercial) {
 
 const PROFIT_RATE_FIELDS =
   'serialNumber workerType clientRate clientCommission subcontractorRate subcontractorCommission ' +
-  'otClientRate otClientCommission otSubcontractorRate otSubcontractorCommission fta allowance';
+  'otClientRate otEmployeeRate fta allowance';
 
 export async function getDeployment(id, actor) {
   const deployment = await Deployment.findById(id)

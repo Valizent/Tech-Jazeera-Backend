@@ -42,8 +42,11 @@ const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
  * Formula given directly by the business owner (not inferred):
  *   profitPerHour = SupplierEmployee: (clientRate - clientCommission) - (subcontractorRate + subcontractorCommission)
  *                   Employee/Freelancer: clientRate - clientCommission
- *   otProfitPerHour = the same split, using the ot*-prefixed fields — a pure
- *             per-hour margin preview, no hours figure needed
+ *   otProfitPerHour = otClientRate - otEmployeeRate — deliberately NOT the
+ *             same commission/subcontractor-rate split as profitPerHour
+ *             above (2026-09-14 correction: that split doesn't exist for
+ *             OT in real terms) — a pure per-hour margin preview, same for
+ *             every workerType, no hours figure needed
  *   profitPerMonth = (profitPerHour * requiredTimesheetHours) - fta - allowance
  * `profitPerMonth` stays null until requiredTimesheetHours is actually
  * filled in — there's nothing meaningful to compute before then. This is a
@@ -63,9 +66,7 @@ function computeProfitFields(m) {
   const subSide = isSupplier ? (m.subcontractorRate ?? 0) + (m.subcontractorCommission ?? 0) : 0;
   const profitPerHour = money(clientSide - subSide);
 
-  const otClientSide = (m.otClientRate ?? 0) - (m.otClientCommission ?? 0);
-  const otSubSide = isSupplier ? (m.otSubcontractorRate ?? 0) + (m.otSubcontractorCommission ?? 0) : 0;
-  const otProfitPerHour = money(otClientSide - otSubSide);
+  const otProfitPerHour = money((m.otClientRate ?? 0) - (m.otEmployeeRate ?? 0));
 
   const profitPerMonth =
     m.requiredTimesheetHours == null ? null : money(profitPerHour * m.requiredTimesheetHours - (m.fta ?? 0) - (m.allowance ?? 0));
@@ -111,9 +112,7 @@ const COMMERCIAL_FIELDS = [
   // as every other rate above (visible to them while Draft/PendingReview/
   // Rejected, stripped only once Approved).
   'otClientRate',
-  'otClientCommission',
-  'otSubcontractorRate',
-  'otSubcontractorCommission',
+  'otEmployeeRate',
   'profitPerHour',
   'profitPerMonth',
   'otProfitPerHour',
@@ -741,9 +740,7 @@ const DIRECT_FIELDS = [
   // Moved to Section 1 2026-09-13 — see mobilisation.validation.js's
   // mobilisationFields and COMMERCIAL_FIELDS above.
   'otClientRate',
-  'otClientCommission',
-  'otSubcontractorRate',
-  'otSubcontractorCommission',
+  'otEmployeeRate',
   'mobilisationDate',
   'checkoutDate',
   'remark',

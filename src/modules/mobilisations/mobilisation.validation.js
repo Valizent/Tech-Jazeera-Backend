@@ -75,12 +75,17 @@ const mobilisationFields = {
   jobTitle: z.string().trim().min(1, 'Job title is required.').max(150),
   // Both moved into Worker & Job (2026-09-13, the user's own ask) — the
   // coordinator/whoever creates the mobilisation sets the target hours AND
-  // the OT client rate/commission up front now, instead of the OT rate
-  // half waiting on the current-step reviewer's later Section 2 pass (see
-  // commercialDetailsSchema below, which no longer carries these two).
+  // the OT rates up front now, instead of waiting on the current-step
+  // reviewer's later Section 2 pass (see commercialDetailsSchema below,
+  // which no longer carries these two).
   requiredTimesheetHours: optionalNonNegNumber,
+  // otClientRate = billed to the client per OT hour; otEmployeeRate = paid
+  // out per OT hour to whoever actually worked it (Employee, SupplierEmployee,
+  // or Freelancer alike — 2026-09-14 correction, replacing a client-
+  // commission/subcontractor-rate split that doesn't reflect how OT is
+  // actually billed/paid in practice, see mobilisation.model.js).
   otClientRate: optionalNonNegNumber,
-  otClientCommission: optionalNonNegNumber,
+  otEmployeeRate: optionalNonNegNumber,
 
   client: id('client'),
   site: optionalStr(150),
@@ -96,11 +101,9 @@ const mobilisationFields = {
   subcontractor: z.preprocess(emptyToUndef, id('subcontractor').optional()),
   subcontractorRate: optionalNonNegNumber,
   subcontractorCommission: optionalNonNegNumber,
-  // Moved alongside subcontractorRate/subcontractorCommission above, same
-  // reasoning as otClientRate/otClientCommission — SupplierEmployee only,
-  // silently unused by computeProfitFields for any other workerType.
-  otSubcontractorRate: optionalNonNegNumber,
-  otSubcontractorCommission: optionalNonNegNumber,
+  // No otSubcontractorRate/otSubcontractorCommission here (removed
+  // 2026-09-14) — OT no longer has a subcontractor-side rate split at all,
+  // see otEmployeeRate above.
 
   mobilisationDate: z.coerce.date({ error: 'Mobilisation date is required.' }),
   checkoutDate: optionalDate,
@@ -113,14 +116,14 @@ const mobilisationFields = {
   // Office Secretary — see mobilisation.service.js's createMobilisation.
   onBehalfOf: z.preprocess(emptyToUndef, id('user').optional()),
 };
-// NOTE: hasSubcontractor and profitPerHour/profitPerMonth are deliberately
-// absent from this schema — hasSubcontractor is derived server-side from
-// workerType, profitPerHour/profitPerMonth are always server-computed. The
-// ot* rate/commission fields moved INTO Section 1 above (2026-09-13, see
-// their own comments) and ARE accepted here now; only otProfitPerHour stays
-// server-computed and only ever set via commercialDetailsSchema (the
-// current-step reviewer's form). Any of these sent by a client here is
-// silently dropped, never applied.
+// NOTE: hasSubcontractor and profitPerHour/profitPerMonth/otProfitPerHour
+// are deliberately absent from this schema — hasSubcontractor is derived
+// server-side from workerType, all three profit fields are always
+// server-computed (computeProfitFields) and never accepted from client
+// input. The otClientRate/otEmployeeRate rate fields moved INTO Section 1
+// above (2026-09-13/2026-09-14, see their own comments) and ARE accepted
+// here now. Any of the computed fields sent by a client here is silently
+// dropped, never applied.
 
 /** workerType drives which identity fields are actually required: an
  *  Employee mobilisation needs a real `worker` id (its name/Iqama/etc. come

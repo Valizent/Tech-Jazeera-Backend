@@ -37,9 +37,7 @@ const RATE_COLUMNS = [
   { header: 'Profit per hour', key: 'profitPerHour', width: 14 },
   { header: 'Profit per month', key: 'profitPerMonth', width: 16 },
   { header: 'OT client rate', key: 'otClientRate', width: 14 },
-  { header: 'OT client commission', key: 'otClientCommission', width: 16 },
-  { header: 'OT subcontractor rate', key: 'otSubcontractorRate', width: 16 },
-  { header: 'OT subcontractor commission', key: 'otSubcontractorCommission', width: 20 },
+  { header: 'OT employee rate', key: 'otEmployeeRate', width: 16 },
   { header: 'OT profit per hour', key: 'otProfitPerHour', width: 16 },
 ];
 
