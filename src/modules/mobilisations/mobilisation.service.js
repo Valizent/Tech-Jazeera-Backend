@@ -1039,6 +1039,17 @@ export async function submitMobilisation(id, actor) {
   if (unconfirmed.length > 0) {
     throw new ApiError(400, 'Every coordinator on this mobilisation must confirm before it can be submitted.');
   }
+  // Iqama/phone are only ever directly typed in for a SupplierEmployee/
+  // Freelancer worker — an Employee-type mobilisation gets both from the
+  // linked Employee's own record instead (see mobilisation.validation.js's
+  // optionalIqama/optionalSaudiPhone comment), so this check is a no-op for
+  // that type. Real QA-reported gap (2026-09-14): both fields were only
+  // ever format-validated when present, never required, so a mobilisation
+  // could reach the full approval workflow with no way to identify or
+  // contact the worker at all.
+  if (mobilisation.workerType !== 'Employee' && (!mobilisation.iqamaNumber || !mobilisation.phone)) {
+    throw new ApiError(400, 'Iqama number and phone are required before this mobilisation can be submitted for review.');
+  }
 
   const targetedResubmit = mobilisation.status === 'Rejected' && mobilisation.rejectionTarget === 'Coordinator';
 

@@ -68,6 +68,8 @@ const canReadDeployments = asyncHandler(async (req, res, next) => {
 });
 
 router.get('/', canReadDeployments, validate({ query: listDeploymentsSchema }), asyncHandler(deploymentController.list));
+// Before the /:id catch-all, or "standby" is read as a deployment id.
+router.get('/standby', canReadDeployments, asyncHandler(deploymentController.standby));
 router.get(
   '/:id',
   canReadDeployments,

@@ -12,6 +12,12 @@ export async function list(req, res) {
   res.json(new ApiResponse('Deployments.', data));
 }
 
+/** GET /api/deployments/standby — 200 → data: { ownEmployees, subcontractedWorkers } */
+export async function standby(req, res) {
+  const data = await deploymentService.getStandbyWorkforce();
+  res.json(new ApiResponse('Standby workforce.', data));
+}
+
 /** GET /api/deployments/:id — 200 → data: deployment */
 export async function get(req, res) {
   const deployment = await deploymentService.getDeployment(req.params.id, actor(req));

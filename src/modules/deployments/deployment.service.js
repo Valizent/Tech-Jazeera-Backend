@@ -18,6 +18,7 @@ import mongoose from 'mongoose';
 import Deployment, { DEMOBILISATION_OUTCOME, EMPLOYEE_ONLY_DEMOBILISATION_REASONS } from './deployment.model.js';
 import Employee from '../employees/employee.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
+import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
@@ -479,6 +480,80 @@ export async function demobiliseDeployment(deploymentId, data, actor) {
       )
     );
   }
+}
+
+/**
+ * Standby workforce — everyone who was placed with a client at some point
+ * and isn't right now, in two genuinely different shapes (2026-09-14, a
+ * real user ask — "where can I see the standby list", followed by
+ * clarifying which population it should cover):
+ *
+ *  - `ownEmployees`: an 'Own'-type Employee with a real Worker-role login —
+ *    the only population ever placed via `Mobilisation.workerType:
+ *    'Employee'` (see mobilisation.service.js's own worker-candidate
+ *    filter) and so the only one with a live `currentClient` field to read
+ *    off directly. A simple, accurate field lookup.
+ *  - `subcontractedWorkers`: a SupplierEmployee/Freelancer mobilisation has
+ *    no Employee record and no `currentClient` at all — identity is only
+ *    ever a typed-in Iqama number snapshot on the Mobilisation itself, with
+ *    no persisted "are they free right now" flag anywhere. This half is
+ *    DERIVED, not read off a field: group every non-Employee Mobilisation
+ *    by Iqama, take the most recent one per worker, and treat 'Completed'
+ *    (their last placement actually ended, with nothing newer since) as
+ *    "available again." A Draft/PendingReview/Rejected most-recent record
+ *    was never a real placement, so that worker doesn't appear here at all
+ *    — a known, deliberate simplification for a first version, not a
+ *    lookup failure: a worker whose newest record is Rejected genuinely IS
+ *    free, but re-deriving "the next most recent Completed one" for that
+ *    case is a real second query per rejected worker, not a one-line
+ *    addition — left for a follow-up if it turns out to matter in
+ *    practice.
+ */
+export async function getStandbyWorkforce() {
+  const workerLoginEmployeeIds = await User.find({ role: 'Worker', employee: { $ne: null } }).distinct('employee');
+  const ownEmployees = await Employee.find({
+    _id: { $in: workerLoginEmployeeIds },
+    type: 'Own',
+    status: { $ne: 'Exited' },
+    currentClient: null,
+  })
+    .select('fullName employeeId designation mobile nationality')
+    .sort({ fullName: 1 })
+    .lean();
+
+  const latestPerWorker = await Mobilisation.aggregate([
+    { $match: { workerType: { $ne: 'Employee' }, iqamaNumber: { $ne: null } } },
+    { $sort: { mobilisationDate: -1, createdAt: -1 } },
+    { $group: { _id: '$iqamaNumber', latest: { $first: '$$ROOT' } } },
+    { $replaceRoot: { newRoot: '$latest' } },
+    { $match: { status: 'Completed' } },
+    { $sort: { mobilisationDate: -1 } },
+  ]);
+
+  // The authoritative "last day worked"/reason is the real ENDED Deployment
+  // this mobilisation produced (set by demobiliseDeployment), not
+  // Mobilisation's own unrelated `checkoutDate` field.
+  const endedDeployments = await Deployment.find({ mobilisation: { $in: latestPerWorker.map((m) => m._id) } })
+    .select('mobilisation endDate endReason')
+    .lean();
+  const endedByMobilisation = new Map(endedDeployments.map((d) => [String(d.mobilisation), d]));
+
+  const subcontractedWorkers = latestPerWorker.map((m) => {
+    const ended = endedByMobilisation.get(String(m._id));
+    return {
+      workerType: m.workerType,
+      workerName: m.workerName,
+      iqamaNumber: m.iqamaNumber,
+      nationality: m.nationality ?? null,
+      phone: m.phone ?? null,
+      subcontractorName: m.subcontractorName ?? null,
+      lastClientName: m.clientName,
+      lastEndDate: ended?.endDate ?? null,
+      lastEndReason: ended?.endReason ?? null,
+    };
+  });
+
+  return { ownEmployees, subcontractedWorkers };
 }
 
 /**
