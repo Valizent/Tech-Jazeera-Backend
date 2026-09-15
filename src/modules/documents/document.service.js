@@ -93,6 +93,11 @@ function describeStorage(version) {
 export async function createDocument({ title, category, ownerType, owner, expiryDate, file }, actor) {
   if (!file) throw new ApiError(400, 'A file is required.');
   await assertOwnerExists(ownerType, owner);
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: uploading for a
+  // foreign employee had no team-ownership check at all, unlike getDocument/
+  // resolveFile below — a Coordinator could attach a document to any
+  // employee's record, not just their own team's.
+  if (ownerType === 'Employee') await assertEmployeeVisibleToActor(owner, actor);
 
   const document = await Document.create({
     title,
@@ -119,6 +124,9 @@ export async function addVersion(id, file, actor) {
   if (!file) throw new ApiError(400, 'A file is required.');
   const document = await Document.findById(id);
   if (!document) throw new ApiError(404, 'Document not found.');
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: same missing
+  // team-ownership check as createDocument above.
+  if (document.ownerType === 'Employee') await assertEmployeeVisibleToActor(document.owner, actor);
 
   const nextVersion = document.versions[document.versions.length - 1].version + 1;
   document.versions.push(versionFromFile(file, nextVersion, actor.userId));
@@ -244,6 +252,11 @@ export async function resolveFile(id, versionNumber, actor) {
 export async function deleteDocument(id, actor) {
   const document = await Document.findById(id);
   if (!document) throw new ApiError(404, 'Document not found.');
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: deleting had NO
+  // team-ownership check at all — a Coordinator could permanently remove a
+  // foreign employee's document AND its real stored file, even though
+  // reading that same document already correctly 403s.
+  if (document.ownerType === 'Employee') await assertEmployeeVisibleToActor(document.owner, actor);
 
   const failures = [];
   await Promise.all(

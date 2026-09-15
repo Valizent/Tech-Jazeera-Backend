@@ -14,8 +14,34 @@
 import ApprovalRole from './approvalRole.model.js';
 import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
+import logger from '../../config/logger.js';
 import { logAudit } from '../audit/audit.service.js';
 import { notifyUser, notifyEmployeeUser } from '../notifications/notification.service.js';
+
+/**
+ * Never let a notification failure abort the business transition that
+ * already committed above it (fixed 2026-09-15, a real QA-audit-found gap
+ * — F2): `notifyFinal`/`notifyUser` used to be awaited inline with nothing
+ * catching a throw, so e.g. a `Notification.create` failure inside
+ * `decideApprovalStep`'s terminal Approved branch propagated straight out
+ * — meaning the CALLER's own post-decision code never ran at all, even
+ * though the decision itself had already been durably persisted just
+ * above. Concretely: mobilisation.service.js's `approveMobilisation` never
+ * reached its `createDeploymentFromMobilisation` call, since the
+ * `decideApprovalStep(...)` call it was awaiting never returned — leaving
+ * an Approved mobilisation with no Deployment and no normal retry path
+ * (the existing compensating rollback there only catches a
+ * Deployment-creation failure, not one that happened before that code was
+ * ever reached). Notifications are inherently best-effort — logged, never
+ * allowed to silently swallow an error either.
+ */
+async function notifyBestEffort(fn) {
+  try {
+    await fn();
+  } catch (err) {
+    logger.error(`[approvalEngine] notification dispatch failed: ${err.message}`);
+  }
+}
 
 /**
  * Is `actor` allowed to decide a step whose pool is `stepRoleIds`? Admin is
@@ -129,7 +155,13 @@ export async function notifySubmission(doc, buildStepNotification, legacyAllowed
     userIds = [...ids];
   }
 
-  await Promise.all(userIds.map((userId) => notifyUser(userId, notification)));
+  // Best-effort, same reasoning as decideApprovalStep's own notifyBestEffort
+  // above (2026-09-15, F2's sibling case): the request itself is already
+  // persisted by the time a caller reaches this call — a notification
+  // failure here must not turn an already-successful submission into a
+  // 500 response for the caller (or worse, invite an accidental duplicate
+  // resubmit).
+  await notifyBestEffort(() => Promise.all(userIds.map((userId) => notifyUser(userId, notification))));
 }
 
 /**
@@ -175,29 +207,42 @@ export async function decideApprovalStep({
   }
 
   // ---- Legacy path: no workflow governs this request — today's original,
-  // untouched single-level behavior. ----
+  // single-level behavior. ----
   if (!doc.workflow) {
     if (assertScope) await assertScope(actor, doc.employee);
     if (!legacyAllowedRoles.includes(actor.role)) {
       throw new ApiError(403, 'You do not have permission to perform this action.');
     }
-    doc.status = decision;
-    doc.decidedBy = actor.userId;
-    doc.decidedAt = new Date();
-    doc.decisionNote = note;
-    await doc.save();
+    // Atomic update, not read-then-save (fixed 2026-09-15, a real QA-audit-
+    // found race — F1): two concurrent decisions (even a contradictory
+    // Approved + Rejected pair) could both pass the `doc.status !==
+    // pendingStatus` check above against the same stale read, then both
+    // `.save()` — both returning 200 with their own decision, whichever
+    // write landed last silently overwriting the other's, audit log and
+    // notification included for both. This is the exact same class of race
+    // the WORKFLOW path just below already atomically guards (its own
+    // `findOneAndUpdate({status, currentStep}, ...)`) — this legacy branch
+    // predates that fix and was never brought in line with it. The filter
+    // re-checks `status: pendingStatus` against the CURRENT document at
+    // write time; only the first of two concurrent requests can match it —
+    // the loser gets `null` back instead of silently succeeding.
+    const updated = await Model.findOneAndUpdate(
+      { _id: id, status: pendingStatus },
+      { $set: { status: decision, decidedBy: actor.userId, decidedAt: new Date(), decisionNote: note } },
+      { new: true }
+    ).lean();
+    if (!updated) throw new ApiError(409, 'This request was already decided by someone else.');
 
     await logAudit({
       user: actor.userId,
       action: `${auditAction}.${decision.toLowerCase()}`,
       targetType: Model.modelName,
-      targetId: doc._id,
+      targetId: updated._id,
       meta: { decisionNote: note },
       ip: actor.ip,
     });
-    const plain = doc.toObject();
-    await notifyFinal(plain, buildFinalNotification(plain));
-    return plain;
+    await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated)));
+    return updated;
   }
 
   // ---- Workflow path ----
@@ -242,7 +287,7 @@ export async function decideApprovalStep({
       meta: { decisionNote: note, step: stepIndex, viaAdminOverride },
       ip: actor.ip,
     });
-    await notifyFinal(updated, buildFinalNotification(updated));
+    await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated)));
     return updated;
   }
 
@@ -269,7 +314,7 @@ export async function decideApprovalStep({
       const nextStep = updated.steps[updated.currentStep];
       const memberIds = await membersOfRoles(nextStep?.roles);
       const notification = buildStepNotification(updated, updated.currentStep);
-      await Promise.all(memberIds.map((userId) => notifyUser(userId, notification)));
+      await notifyBestEffort(() => Promise.all(memberIds.map((userId) => notifyUser(userId, notification))));
     }
     return updated;
   }
@@ -293,6 +338,6 @@ export async function decideApprovalStep({
     meta: { decisionNote: note, step: stepIndex, viaAdminOverride },
     ip: actor.ip,
   });
-  await notifyFinal(updated, buildFinalNotification(updated));
+  await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated)));
   return updated;
 }

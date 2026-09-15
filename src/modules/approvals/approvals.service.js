@@ -173,13 +173,12 @@ export async function resolveApprovalWorkflow(employee, requestType) {
 // step, for whoever sits in the hierarchy (not just Admin) to see "who
 // approved what."
 //
-// NOTE: SalaryAdvance/Reimbursement/Timesheet/Mobilisation all support a
-// workflow too (see their own service files) but were never added here —
-// found while wiring ExitReentry/Certificate onto the engine, flagged as a
-// separate follow-up rather than fixed in the same pass (Mobilisation in
-// particular has a different shape — its `coordinators` are Users directly,
-// not an Employee — worth verifying on its own before reusing this exact
-// query shape for it).
+// Fixed 2026-09-15, a real QA-audit-found gap — D3: this section used to
+// carry an older NOTE claiming Timesheet/SalaryAdvance/Reimbursement/
+// Mobilisation were "never added here" as a still-open follow-up —
+// contradicted by the LOG_SOURCES mapping right below it, which already
+// includes three of those four (see the 2026-09-14 fix noted just below).
+// Removed rather than left standing next to code that disproves it.
 // ---------------------------------------------------------------------------
 
 // Timesheet/SalaryAdvance/Reimbursement added 2026-09-14 (a real QA-audit-
@@ -191,16 +190,23 @@ export async function resolveApprovalWorkflow(employee, requestType) {
 // line below doesn't apply to it the same way; folding it in needs its own
 // pass, not a blind copy-paste (flagged when Timesheet/etc. were originally
 // deferred too — still true, not a new gap).
+// `pendingStatus` (added 2026-09-15, a real QA-audit-found gap — F9): each
+// source model's own literal "awaiting decision" status value — they are
+// NOT all the same string (Leave's is 'PendingReview', Timesheet's is
+// 'Submitted', every other source's is 'Pending'). listApprovalLog
+// translates the client's normalized `status=Pending` into whichever of
+// these applies per source type it's currently querying; 'Approved'/
+// 'Rejected' need no such table, every source uses those exact literals.
 const LOG_SOURCES = {
-  Leave: { Model: LeaveRequest, typeNameField: 'leaveTypeName' },
-  ExitReentry: { Model: ExitReentryRequest, typeNameField: 'visaType' },
-  Certificate: { Model: CertificateRequest, typeNameField: 'type' },
+  Leave: { Model: LeaveRequest, typeNameField: 'leaveTypeName', pendingStatus: 'PendingReview' },
+  ExitReentry: { Model: ExitReentryRequest, typeNameField: 'visaType', pendingStatus: 'Pending' },
+  Certificate: { Model: CertificateRequest, typeNameField: 'type', pendingStatus: 'Pending' },
   // No natural short "sub-type" label exists on these two — typeName
   // resolves to undefined for them (item[null] is a safe no-op, not a
   // crash), same as if the field were simply absent from a document.
-  Timesheet: { Model: Timesheet, typeNameField: null },
-  SalaryAdvance: { Model: SalaryAdvance, typeNameField: null },
-  Reimbursement: { Model: ReimbursementClaim, typeNameField: 'category' },
+  Timesheet: { Model: Timesheet, typeNameField: null, pendingStatus: 'Submitted' },
+  SalaryAdvance: { Model: SalaryAdvance, typeNameField: null, pendingStatus: 'Pending' },
+  Reimbursement: { Model: ReimbursementClaim, typeNameField: 'category', pendingStatus: 'Pending' },
 };
 
 /** Is this user a member of ANY approval role — the dynamic "sits somewhere
@@ -250,7 +256,7 @@ export async function listApprovalLog({ type, status, employee, from, to, page, 
     // this log is about the configurable hierarchy, not the legacy
     // single-decision flow (which every review screen already shows).
     const filter = { workflow: { $ne: null } };
-    if (status) filter.status = status;
+    if (status) filter.status = status === 'Pending' ? source.pendingStatus : status;
     if (employee) filter.employee = employee;
     if (from || to) {
       filter.createdAt = {};

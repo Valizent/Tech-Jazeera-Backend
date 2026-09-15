@@ -45,11 +45,22 @@ export const updateApprovalWorkflowSchema = z.object({
 
 export const approvalWorkflowIdParamSchema = z.object({ id: objectId('approval workflow') });
 
+// Fixed 2026-09-15, a real QA-audit-found gap — F9: this hardcoded
+// 'PendingReview' — Leave's own literal pending status — as THE pending
+// value for every source type in the log, even though Timesheet's real
+// pending status is 'Submitted' and Certificate/ExitReentry/SalaryAdvance/
+// Reimbursement's is 'Pending'. `status=PendingReview` silently returned
+// zero results for those types; asking for a type's own real pending
+// status (e.g. `status=Submitted`) 400'd outright, since it wasn't even in
+// this enum. 'Pending' is now a normalized value approvals.service.js's
+// listApprovalLog translates per source type — see LOG_SOURCES there.
+// 'Approved'/'Rejected' need no translation: every source type's model
+// uses those exact literal strings for its own terminal states.
 export const approvalLogQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   type: z.preprocess(emptyToUndef, z.enum(APPROVAL_REQUEST_TYPES).optional()),
-  status: z.preprocess(emptyToUndef, z.enum(['PendingReview', 'Approved', 'Rejected']).optional()),
+  status: z.preprocess(emptyToUndef, z.enum(['Pending', 'Approved', 'Rejected']).optional()),
   employee: z.preprocess(emptyToUndef, objectId('employee').optional()),
   from: z.preprocess(emptyToUndef, z.coerce.date().optional()),
   to: z.preprocess(emptyToUndef, z.coerce.date().optional()),

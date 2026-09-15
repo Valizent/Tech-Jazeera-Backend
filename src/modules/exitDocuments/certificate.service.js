@@ -13,6 +13,7 @@ import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 
 /** The ORIGINAL decide-route role gate — preserved exactly as the
  *  authorization used whenever no ApprovalWorkflow governs a request. */
@@ -80,10 +81,24 @@ export async function cancelCertificate(employeeId, id, actor) {
   });
 }
 
+// Fixed 2026-09-15, a real QA-audit-found gap — A2: this module had NO
+// Coordinator team-scoping anywhere (unlike Leave/Settlement/Deployment/
+// Documents/Assets, all fixed in earlier passes) — not here, not in
+// decideCertificate, not in resolveCertificateForPdf below. Same pattern
+// as listSettlements/listLeaveRequests: an explicit `?employee=` foreign to
+// the Coordinator's team 403s; no filter falls back to their team only.
 export async function listCertificates({ page, limit, status, employee }, actor) {
   const filter = {};
   if (status) filter.status = status;
   if (employee) filter.employee = employee;
+  if (actor?.role === 'Coordinator') {
+    if (employee) {
+      await assertEmployeeVisibleToActor(employee, actor);
+    } else {
+      const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+      filter.employee = { $in: teamIds };
+    }
+  }
   const [rawItems, total] = await Promise.all([
     CertificateRequest.find(filter)
       .sort({ createdAt: -1 })
@@ -113,6 +128,10 @@ export async function decideCertificate(id, { status, decisionNote }, actor) {
     actor,
     pendingStatus: 'Pending',
     legacyAllowedRoles: LEGACY_DECIDE_ROLES,
+    // Fixed 2026-09-15, a real QA-audit-found gap — A2, same as
+    // listCertificates above: only ever run on the legacy (no-workflow)
+    // path, where step-role membership isn't already doing this job.
+    assertScope: assertEmployeeVisibleToActor,
     notFoundMessage: 'Certificate request not found.',
     auditAction: 'certificate',
     buildFinalNotification: (doc) => ({
@@ -150,12 +169,23 @@ export async function markCertificateIssued(id, actor) {
  * letter-type requests may be rendered — never Pending (nothing to hand out
  * before HR actually approves it) and never the attestation type (there is
  * no document for this app to generate — see certificate.model.js).
+ *
+ * Two independent, non-overlapping scoping paths, matching the two real
+ * callers: `requesterEmployeeId` is the ESS self-ownership check (a Worker
+ * may only ever see their OWN request); `actor` is the staff-side
+ * Coordinator-team check (fixed 2026-09-15, a real QA-audit-found gap —
+ * A2: the staff route passed neither, so ANY staff member with
+ * `exitDocuments` read — including a real cross-team salary certificate —
+ * could pull ANY employee's PDF, with no ownership check whatsoever).
  */
-export async function resolveCertificateForPdf(id, requesterEmployeeId = null) {
+export async function resolveCertificateForPdf(id, requesterEmployeeId = null, actor = null) {
   const request = await CertificateRequest.findById(id).lean();
   if (!request) throw new ApiError(404, 'Certificate request not found.');
   if (requesterEmployeeId && request.employee.toString() !== requesterEmployeeId) {
     throw new ApiError(404, 'Certificate request not found.');
+  }
+  if (!requesterEmployeeId && actor) {
+    await assertEmployeeVisibleToActor(request.employee, actor);
   }
   if (!CERTIFICATE_TYPES_WITH_PDF.includes(request.type)) {
     throw new ApiError(400, 'This request type does not generate a document — its status is tracked instead.');

@@ -2,11 +2,11 @@
  * Salary advance service — submit/decide/repay. Money is always rounded and
  * server-computed, same discipline as quotation totals.
  */
+import mongoose from 'mongoose';
 import Employee from '../employees/employee.model.js';
 import SalaryAdvance from './advance.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
-import { notifyEmployeeUser } from '../notifications/notification.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
@@ -187,16 +187,52 @@ export async function addRepayment(id, data, actor) {
   // the same stale read, then both save, over-repaying the advance. `$expr`
   // re-sums the CURRENT `repayments` array live in the filter, so it's
   // checked atomically against the real total at write time, not a value
-  // read moments earlier.
+  // read moments earlier. Both sides are rounded to 2dp (fixed 2026-09-15,
+  // a real QA-audit-found bug — F5): raw IEEE-754 addition can land a cent
+  // or two off zero (1.10 + 0.10 = 1.2000000000000002 in JS/BSON double
+  // math), so an exact `$lte` against the unrounded sum could reject a
+  // legitimate final repayment that pays the balance down to exactly zero.
+  // `$literal` around the appended repayment (fixed 2026-09-15, a real
+  // QA-audit-found injection — S1, same class as invoice.service.js's
+  // recordPayment): this is a PIPELINE update, so every value in it is
+  // otherwise evaluated as an aggregation expression — a validated-as-a-
+  // string `note` like "$reason" was silently resolved against the CURRENT
+  // document instead of stored as the literal text the user typed.
+  // `recordedBy` is also explicitly cast to ObjectId — a pipeline update
+  // bypasses Mongoose's normal schema-driven casting entirely.
   const updated = await SalaryAdvance.findOneAndUpdate(
     {
       _id: id,
       status: 'Approved',
-      $expr: { $lte: [{ $add: [{ $sum: '$repayments.amount' }, data.amount] }, '$amount'] },
+      $expr: {
+        $lte: [
+          { $round: [{ $add: [{ $sum: '$repayments.amount' }, data.amount] }, 2] },
+          { $round: ['$amount', 2] },
+        ],
+      },
     },
     [
-      { $set: { repayments: { $concatArrays: ['$repayments', [{ ...data, recordedBy: actor.userId }]] } } },
-      { $set: { status: { $cond: [{ $eq: [{ $sum: '$repayments.amount' }, '$amount'] }, 'Closed', '$status'] } } },
+      {
+        $set: {
+          repayments: {
+            $concatArrays: [
+              '$repayments',
+              [{ $literal: { ...data, recordedBy: new mongoose.Types.ObjectId(actor.userId) } }],
+            ],
+          },
+        },
+      },
+      {
+        $set: {
+          status: {
+            $cond: [
+              { $eq: [{ $round: [{ $sum: '$repayments.amount' }, 2] }, { $round: ['$amount', 2] }] },
+              'Closed',
+              '$status',
+            ],
+          },
+        },
+      },
     ],
     { new: true }
   );

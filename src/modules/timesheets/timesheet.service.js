@@ -15,7 +15,6 @@ import AttendanceModel from '../attendance/attendance.model.js';
 import Employee from '../employees/employee.model.js';
 import Timesheet from './timesheet.model.js';
 import { resolveWeeklyCap } from '../ramadan/ramadanPeriod.service.js';
-import { notifyEmployeeUser } from '../notifications/notification.service.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';

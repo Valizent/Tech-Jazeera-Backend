@@ -136,22 +136,39 @@ const daysUntil = (date) => Math.ceil((new Date(date).getTime() - Date.now()) / 
  * legacy-role logic a third time — one extra ApprovalRole-membership query
  * per module, cheap at this data volume.
  */
+// `sectionKey` (added 2026-09-15, a real QA-audit-found gap — D1): the
+// REAL decide route for Leave/Timesheet/SalaryAdvance/Reimbursement also
+// requires Section Access write on this key — see leave.routes.js's
+// canWriteLeaveRequests, timesheet.routes.js's canWrite,
+// advance.service.js's own already-fixed `listAdvances` (2026-09-14, the
+// exact same class of gap, just never carried over to this dashboard
+// widget). `annotateCanDecide` alone only knows about ApprovalRole/
+// legacy-role membership, so its hint could say "yes" for a role match
+// (e.g. Manager) even after an Admin narrows the real Section Access grant
+// to exclude them — the dashboard kept showing "Waiting on you" for an
+// action that would actually 403. `null` for Mobilisation is intentional,
+// not an oversight: its `/decide` route has no Section Access gate at all
+// (deliberately left out of the Section Access rollout — see
+// docs/RBAC-notes.md), so annotateCanDecide's own check is already the
+// complete, accurate signal for it.
 const PENDING_ACTION_MODULES = [
-  { label: 'Leave requests', url: '/leave', Model: LeaveRequest, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin', 'Manager', 'HR', 'Coordinator'] },
-  { label: 'Timesheets', url: '/timesheets', Model: Timesheet, pendingStatus: 'Submitted', legacyAllowedRoles: ['Admin', 'Manager', 'HR'] },
-  { label: 'Salary advances', url: '/financial-requests', Model: SalaryAdvance, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'] },
-  { label: 'Reimbursements', url: '/financial-requests', Model: ReimbursementClaim, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'] },
-  { label: 'Mobilisations', url: '/mobilisations', Model: Mobilisation, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin'] },
+  { label: 'Leave requests', url: '/leave', Model: LeaveRequest, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin', 'Manager', 'HR', 'Coordinator'], sectionKey: 'leaveRequests' },
+  { label: 'Timesheets', url: '/timesheets', Model: Timesheet, pendingStatus: 'Submitted', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'timesheetRequests' },
+  { label: 'Salary advances', url: '/financial-requests', Model: SalaryAdvance, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'financialRequests' },
+  { label: 'Reimbursements', url: '/financial-requests', Model: ReimbursementClaim, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'financialRequests' },
+  { label: 'Mobilisations', url: '/mobilisations', Model: Mobilisation, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin'], sectionKey: null },
 ];
 
 async function getMyPendingActions(actor) {
   if (!actor?.userId) return [];
   const perModule = await Promise.all(
-    PENDING_ACTION_MODULES.map(async ({ label, url, Model, pendingStatus, legacyAllowedRoles }) => {
+    PENDING_ACTION_MODULES.map(async ({ label, url, Model, pendingStatus, legacyAllowedRoles, sectionKey }) => {
       const items = await Model.find({ status: pendingStatus }).select('workflow currentStep steps status').lean();
       if (items.length === 0) return { label, url, count: 0 };
       const annotated = await annotateCanDecide(items, actor, { pendingStatus, legacyAllowedRoles });
-      return { label, url, count: annotated.filter((i) => i.canDecideCurrentStep).length };
+      const hasSectionWrite = sectionKey ? await canAccessSection(sectionKey, actor, 'write') : true;
+      const count = hasSectionWrite ? annotated.filter((i) => i.canDecideCurrentStep).length : 0;
+      return { label, url, count };
     })
   );
   return perModule.filter((m) => m.count > 0);

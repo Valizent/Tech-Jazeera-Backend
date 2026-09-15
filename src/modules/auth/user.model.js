@@ -103,15 +103,30 @@ const userSchema = new mongoose.Schema(
     employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
     // Set on every password change/reset (self-service or Admin-initiated),
     // never on any other update (added 2026-09-14, a real QA-audit-found
-    // gap): requireAuth compares this against an access token's own `iat`
-    // claim and rejects a token issued before the last password change. A
-    // reset previously only revoked refresh sessions — an already-issued
-    // access token stayed valid until its own short expiry regardless, so
-    // "reset because this credential is compromised" didn't actually
-    // guarantee the credential stopped working immediately. `null` (no
-    // password change on record yet, e.g. seed-admin's first run) never
-    // rejects anything — see requireAuth's own comment on the null check.
+    // gap) — kept as a plain audit/display timestamp. `null` (no password
+    // change on record yet, e.g. seed-admin's first run) is normal.
     passwordChangedAt: { type: Date, default: null },
+    // The actual access-token revocation mechanism (added 2026-09-15,
+    // replacing the 2026-09-14 fix above's own approach — a real QA-audit-
+    // found gap, F8): requireAuth used to compare `passwordChangedAt`
+    // (millisecond precision) against the access token's `iat` claim
+    // (jsonwebtoken always floors this to whole SECONDS, a JWT/JOSE spec
+    // requirement, not a bug in that library) — a token issued a fraction
+    // of a second after a password reset, in the SAME calendar second,
+    // read as "issued before" the reset and was wrongly rejected,
+    // including on the very login that reset just enabled. Comparing two
+    // clocks of different precision has no safe rounding direction (the
+    // report that found this confirmed rounding the other way just
+    // reauthorizes a genuinely-old same-second token instead) — a
+    // monotonic counter sidesteps clock precision entirely. Every
+    // newly-issued access token embeds the CURRENT `tokenVersion`
+    // (auth.service.js's issueTokens); every password change/reset
+    // increments it; requireAuth rejects a token whose embedded value
+    // doesn't match. A token from before this field existed carries no
+    // `tokenVersion` claim, treated as 0 — the same as this field's own
+    // default — so no already-logged-in session is force-invalidated by
+    // this fix shipping.
+    tokenVersion: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

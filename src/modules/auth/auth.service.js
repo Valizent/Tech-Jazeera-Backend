@@ -97,9 +97,14 @@ async function getEssEligibility(user) {
 
 /** Mint both tokens and persist the refresh token's hash as a session row. */
 async function issueTokens(user) {
-  const accessToken = jwt.sign({ sub: user._id.toString(), role: user.role }, env.jwtAccessSecret, {
-    expiresIn: ACCESS_TOKEN_TTL,
-  });
+  // `tokenVersion` (fixed 2026-09-15, F8 — see user.model.js's own doc
+  // comment for the full reasoning) is the actual revocation mechanism now;
+  // `?? 0` covers a `user` fetched before this field existed on the schema.
+  const accessToken = jwt.sign(
+    { sub: user._id.toString(), role: user.role, tokenVersion: user.tokenVersion ?? 0 },
+    env.jwtAccessSecret,
+    { expiresIn: ACCESS_TOKEN_TTL }
+  );
   // jti (random UUID) makes every refresh token unique BY CONSTRUCTION.
   // Without it, two tokens for the same user signed in the same second have
   // identical claims → identical JWT string → tokenHash unique-index clash.
@@ -226,6 +231,9 @@ export async function changePassword({ userId, currentPassword, newPassword }, i
 
   user.passwordHash = await hashPassword(newPassword);
   user.passwordChangedAt = new Date();
+  // The real revocation signal for an already-issued access token — see
+  // user.model.js's tokenVersion doc comment (F8, 2026-09-15).
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
   await RefreshToken.deleteMany({ user: user._id });
 
