@@ -13,6 +13,21 @@ const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefine
 const optionalStr = (max) => z.preprocess(emptyToUndef, z.string().trim().max(max).optional());
 const monthStr = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Enter a month as YYYY-MM.');
 
+// Fixed 2026-09-15, a real QA-audit-found gap — F7: `z.coerce.boolean()`
+// coerces via plain JS truthiness of the RAW input, before any type check —
+// a nonempty string is always truthy, so the literal string "false" (a
+// perfectly reasonable thing to send from a raw HTTP client, even though
+// the real checkbox always sends a genuine JSON boolean) coerced to `true`.
+// This only ever accepts a real boolean or the exact strings "true"/
+// "false"; anything else is left as-is so the inner z.boolean() rejects it
+// with a normal validation error instead of silently coercing it.
+const strictOptionalBoolean = z.preprocess((v) => {
+  if (v === undefined || typeof v === 'boolean') return v;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  return v;
+}, z.boolean().optional());
+
 export const listDeploymentsSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -97,6 +112,6 @@ export const decideMonthlyHoursSchema = z.object({
 export const demobiliseDeploymentSchema = z.object({
   releaseDate: z.coerce.date({ error: 'Demobilisation date is required.' }),
   reason: z.enum(DEMOBILISATION_REASONS, { error: 'Choose a reason.' }),
-  exitOutcome: z.coerce.boolean().optional(),
+  exitOutcome: strictOptionalBoolean,
   releaseNote: optionalStr(1000),
 });

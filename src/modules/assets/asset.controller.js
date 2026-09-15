@@ -7,7 +7,7 @@ import * as assetService from './asset.service.js';
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
 
 export async function list(req, res) {
-  const data = await assetService.listAssets(req.query);
+  const data = await assetService.listAssets(req.query, actor(req));
   res.json(new ApiResponse('Assets.', data));
 }
 

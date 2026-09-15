@@ -13,9 +13,9 @@
 import Employee from '../employees/employee.model.js';
 import LeaveType from './leaveType.model.js';
 import LeaveRequest from './leaveRequest.model.js';
+import LeaveSubmissionLock from './leaveSubmissionLock.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
-import { notifyEmployeeUser } from '../notifications/notification.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
 import { signedDownloadUrl } from '../../middleware/upload.js';
@@ -343,76 +343,101 @@ export async function submitLeaveRequest(employeeId, { leaveType: leaveTypeId, s
     );
   }
 
-  const overlap = await LeaveRequest.findOne({
-    employee: employee._id,
-    status: { $in: ['AutoApproved', 'Approved', 'PendingReview'] },
-    startDate: { $lte: endDate },
-    endDate: { $gte: startDate },
-  }).lean();
-  if (overlap) throw new ApiError(409, 'A leave request already exists that overlaps these dates.');
-
-  const evaluation = await evaluateEligibility(employee, leaveType, days);
-  const status = evaluation.eligible && evaluation.autoApprovable ? 'AutoApproved' : 'PendingReview';
-
-  // Only a request that will actually go through decide() needs a workflow —
-  // an auto-approved request is never decided, so resolving one for it would
-  // be dead weight. null (no configured workflow) is the normal case; the
-  // legacy single-level flow runs unchanged in decideLeaveRequest().
-  let workflowFields = {};
-  if (status === 'PendingReview') {
-    const workflow = await resolveApprovalWorkflow(employee, 'Leave');
-    if (workflow) {
-      workflowFields = {
-        workflow: workflow._id,
-        workflowName: workflow.name,
-        steps: workflow.steps,
-        currentStep: 0,
-      };
+  // Fixed 2026-09-15, a real QA-audit-found gap — F3: the overlap check and
+  // the entitlement evaluation below (and the create that follows) used to
+  // run as plain, unserialized reads-then-write — two concurrent
+  // submissions for the SAME employee could both read "no overlap" / "days
+  // remaining" against the same pre-either-request snapshot, then both
+  // create, leaving two overlapping requests and combined approved days
+  // exceeding the real entitlement. Neither check has an existing document
+  // to run an atomic conditional update against (there's no LeaveRequest
+  // yet to compare against), so a real serialization point is needed — see
+  // leaveSubmissionLock.model.js's own doc comment for the full reasoning.
+  // Acquired here, released in `finally` below, however this function
+  // exits (success, a thrown ApiError, or an unexpected error).
+  try {
+    await LeaveSubmissionLock.create({ employee: employee._id });
+  } catch (err) {
+    if (err?.code === 11000) {
+      throw new ApiError(409, 'Another leave submission for this employee is already being processed — try again in a moment.');
     }
+    throw err;
   }
 
-  const request = await LeaveRequest.create({
-    employee: employee._id,
-    leaveType: leaveType._id,
-    leaveTypeName: leaveType.name,
-    startDate,
-    endDate,
-    days,
-    reason,
-    attachment: file ? attachmentFromFile(file) : undefined,
-    status,
-    eligibility: {
-      continuousServiceMonths: evaluation.continuousServiceMonths,
-      entitlementDays: evaluation.entitlementDays,
-      usedDays: evaluation.usedDays,
-      remainingDays: evaluation.remainingDays,
-      ruleApplied: evaluation.ruleApplied,
-      // Only 'Sick' requests ever populate this — see evaluateSick().
-      payBreakdown: evaluation.payBreakdown?.length ? evaluation.payBreakdown : undefined,
-    },
-    ...workflowFields,
-  });
+  try {
+    const overlap = await LeaveRequest.findOne({
+      employee: employee._id,
+      status: { $in: ['AutoApproved', 'Approved', 'PendingReview'] },
+      startDate: { $lte: endDate },
+      endDate: { $gte: startDate },
+    }).lean();
+    if (overlap) throw new ApiError(409, 'A leave request already exists that overlaps these dates.');
 
-  await logAudit({
-    user: actor.userId,
-    action: status === 'AutoApproved' ? 'leave.request.auto_approved' : 'leave.request.submitted',
-    targetType: 'LeaveRequest',
-    targetId: request._id,
-    meta: { employeeId: employee.employeeId, leaveType: leaveType.name, days, status },
-    ip: actor.ip,
-  });
+    const evaluation = await evaluateEligibility(employee, leaveType, days);
+    const status = evaluation.eligible && evaluation.autoApprovable ? 'AutoApproved' : 'PendingReview';
 
-  const plain = request.toObject();
-  // An AutoApproved request has nobody left to notify — it's already done.
-  if (status === 'PendingReview') {
-    await notifySubmission(
-      plain,
-      buildLeaveStepNotification,
-      LEGACY_DECIDE_ROLES,
-      employee.coordinator ? [employee.coordinator] : []
-    );
+    // Only a request that will actually go through decide() needs a workflow —
+    // an auto-approved request is never decided, so resolving one for it would
+    // be dead weight. null (no configured workflow) is the normal case; the
+    // legacy single-level flow runs unchanged in decideLeaveRequest().
+    let workflowFields = {};
+    if (status === 'PendingReview') {
+      const workflow = await resolveApprovalWorkflow(employee, 'Leave');
+      if (workflow) {
+        workflowFields = {
+          workflow: workflow._id,
+          workflowName: workflow.name,
+          steps: workflow.steps,
+          currentStep: 0,
+        };
+      }
+    }
+
+    const request = await LeaveRequest.create({
+      employee: employee._id,
+      leaveType: leaveType._id,
+      leaveTypeName: leaveType.name,
+      startDate,
+      endDate,
+      days,
+      reason,
+      attachment: file ? attachmentFromFile(file) : undefined,
+      status,
+      eligibility: {
+        continuousServiceMonths: evaluation.continuousServiceMonths,
+        entitlementDays: evaluation.entitlementDays,
+        usedDays: evaluation.usedDays,
+        remainingDays: evaluation.remainingDays,
+        ruleApplied: evaluation.ruleApplied,
+        // Only 'Sick' requests ever populate this — see evaluateSick().
+        payBreakdown: evaluation.payBreakdown?.length ? evaluation.payBreakdown : undefined,
+      },
+      ...workflowFields,
+    });
+
+    await logAudit({
+      user: actor.userId,
+      action: status === 'AutoApproved' ? 'leave.request.auto_approved' : 'leave.request.submitted',
+      targetType: 'LeaveRequest',
+      targetId: request._id,
+      meta: { employeeId: employee.employeeId, leaveType: leaveType.name, days, status },
+      ip: actor.ip,
+    });
+
+    const plain = request.toObject();
+    // An AutoApproved request has nobody left to notify — it's already done.
+    if (status === 'PendingReview') {
+      await notifySubmission(
+        plain,
+        buildLeaveStepNotification,
+        LEGACY_DECIDE_ROLES,
+        employee.coordinator ? [employee.coordinator] : []
+      );
+    }
+    return plain;
+  } finally {
+    await LeaveSubmissionLock.deleteOne({ employee: employee._id });
   }
-  return plain;
 }
 
 /**
@@ -538,10 +563,17 @@ export async function getMyAttachmentFile(employeeId, id) {
   return resolveAttachment(request);
 }
 
-/** An attachment for staff review — any request. */
-export async function getAttachmentFile(id) {
+/** An attachment for staff review, team-scoped exactly like listLeaveRequests/
+ *  decideLeaveRequest above. Fixed 2026-09-15, a real QA-audit-found gap —
+ *  A2: the controller never passed an actor here at all, so a Coordinator
+ *  who correctly gets 403 listing a foreign employee's requests could still
+ *  pull that request's attachment bytes directly by id — the Worker
+ *  self-service equivalent (getOwnAttachmentFile above) already scopes
+ *  correctly by comparing against the caller's own employee id. */
+export async function getAttachmentFile(id, actor) {
   const request = await LeaveRequest.findById(id).lean();
   if (!request) throw new ApiError(404, 'Leave request not found.');
+  await assertEmployeeScope(actor, request.employee);
   return resolveAttachment(request);
 }
 

@@ -12,6 +12,7 @@ import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 
 /** The ORIGINAL decide-route role gate — preserved exactly as the
  *  authorization used whenever no ApprovalWorkflow governs a request. */
@@ -90,10 +91,21 @@ export async function cancelExitReentry(employeeId, id, actor) {
   return request.toObject();
 }
 
+// Fixed 2026-09-15, a real QA-audit-found gap — A2's sibling case
+// (certificate.service.js's own equivalent fix has the full reasoning):
+// this module had no Coordinator team-scoping anywhere either.
 export async function listExitReentry({ page, limit, status, employee }, actor) {
   const filter = {};
   if (status) filter.status = status;
   if (employee) filter.employee = employee;
+  if (actor?.role === 'Coordinator') {
+    if (employee) {
+      await assertEmployeeVisibleToActor(employee, actor);
+    } else {
+      const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+      filter.employee = { $in: teamIds };
+    }
+  }
   const [rawItems, total] = await Promise.all([
     ExitReentryRequest.find(filter)
       .sort({ createdAt: -1 })
@@ -132,6 +144,7 @@ export async function decideExitReentry(id, { status, decisionNote }, actor) {
     actor,
     pendingStatus: 'Pending',
     legacyAllowedRoles: LEGACY_DECIDE_ROLES,
+    assertScope: assertEmployeeVisibleToActor,
     notFoundMessage: 'Exit re-entry request not found.',
     auditAction: 'exitReentry',
     buildFinalNotification: (doc) => ({

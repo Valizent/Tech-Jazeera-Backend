@@ -148,6 +148,10 @@ export async function returnAsset(assetId, data, actor) {
   if (!asset) throw new ApiError(404, 'Asset not found.');
   const active = await AssetAssignment.findOne({ asset: assetId, status: 'Active' });
   if (!active) throw new ApiError(400, 'This asset is not currently assigned.');
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: same missing
+  // team-ownership check as assignAsset above (which already had it) —
+  // returning had none at all, unassigning a foreign employee's asset.
+  await assertEmployeeVisibleToActor(active.employee, actor);
 
   const session = await mongoose.startSession();
   try {
@@ -172,13 +176,23 @@ export async function returnAsset(assetId, data, actor) {
   }
 }
 
-export async function listAssets({ page, limit, category, status, search }) {
+// Fixed 2026-09-15, a real QA-audit-found gap — A1: this had no actor-based
+// scoping at all, unlike getAsset below — a Coordinator could list every
+// asset including who's currently holding each one, even though opening a
+// foreign employee's own assigned asset correctly 403s. Same pattern as
+// listDocuments/listEmployeeAssignments: an unassigned asset (nobody's) is
+// always visible; one assigned to a foreign employee is not.
+export async function listAssets({ page, limit, category, status, search }, actor) {
   const conditions = [];
   if (category) conditions.push({ category });
   if (status) conditions.push({ status });
   if (search) {
     const rx = { $regex: escapeRegex(search), $options: 'i' };
     conditions.push({ $or: [{ assetTag: rx }, { name: rx }] });
+  }
+  if (actor?.role === 'Coordinator') {
+    const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+    conditions.push({ $or: [{ currentEmployee: null }, { currentEmployee: { $in: teamIds } }] });
   }
   const filter = conditions.length > 0 ? { $and: conditions } : {};
 

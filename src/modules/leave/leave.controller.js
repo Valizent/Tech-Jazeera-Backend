@@ -57,7 +57,7 @@ export async function submit(req, res) {
 
 /** GET /api/leave/:id/attachment — streams the attachment (staff review). */
 export async function attachment(req, res) {
-  const fileData = await leaveService.getAttachmentFile(req.params.id);
+  const fileData = await leaveService.getAttachmentFile(req.params.id, actor(req));
   await streamAttachment(fileData, res);
 }
 

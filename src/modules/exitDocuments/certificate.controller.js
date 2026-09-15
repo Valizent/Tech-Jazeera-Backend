@@ -46,7 +46,7 @@ export async function markIssued(req, res) {
 
 /** GET /api/exit-documents/certificates/:id/pdf — staff, any employee's request. */
 export async function pdf(req, res) {
-  const resolved = await certificateService.resolveCertificateForPdf(req.params.id);
+  const resolved = await certificateService.resolveCertificateForPdf(req.params.id, null, actor(req));
   await sendCertificatePdf(resolved, res);
 }
 

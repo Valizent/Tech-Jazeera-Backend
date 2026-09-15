@@ -3,6 +3,7 @@
  * list/get/delete. Money is always server-computed, same discipline as
  * quotation totals.
  */
+import mongoose from 'mongoose';
 import Quotation from '../quotations/quotation.model.js';
 import { nextSequence } from '../quotations/counter.model.js';
 import Invoice from './invoice.model.js';
@@ -115,10 +116,31 @@ export async function recordPayment(id, data, actor) {
   // time — MongoDB guarantees only one concurrent writer can match it once
   // the balance drops below the next payment's amount, so a losing request
   // gets `null` back instead of silently succeeding.
+  //
+  // `$literal` around the appended payment (fixed 2026-09-15, a real
+  // QA-audit-found injection — S1): this is a PIPELINE update ([...] array
+  // form), not a plain update document — Mongo evaluates every value in it
+  // as an aggregation expression, so a validated-as-a-string `reference` or
+  // `method` like "$clientName" or "$$ROOT" was silently resolved against
+  // the CURRENT document instead of stored as the literal text the user
+  // typed. `$literal` tells Mongo to store its argument verbatim, dollar
+  // signs and all. `recordedBy` is also explicitly cast to ObjectId here —
+  // a pipeline update bypasses Mongoose's normal schema-driven casting
+  // entirely, so the bare `actor.userId` string was being stored with the
+  // wrong BSON type for a `ref: 'User'` field.
   const updated = await Invoice.findOneAndUpdate(
     { _id: id, status: { $ne: 'Paid' }, balanceDue: { $gte: data.amount } },
     [
-      { $set: { payments: { $concatArrays: ['$payments', [{ ...data, recordedBy: actor.userId }]] } } },
+      {
+        $set: {
+          payments: {
+            $concatArrays: [
+              '$payments',
+              [{ $literal: { ...data, recordedBy: new mongoose.Types.ObjectId(actor.userId) } }],
+            ],
+          },
+        },
+      },
       {
         $set: {
           amountPaid: { $round: [{ $add: ['$amountPaid', data.amount] }, 2] },

@@ -78,6 +78,9 @@ export async function resetStaffPassword(id, actor) {
   const tempPassword = generateTempPassword();
   user.passwordHash = await hashPassword(tempPassword);
   user.passwordChangedAt = new Date();
+  // The real revocation signal for an already-issued access token — see
+  // user.model.js's tokenVersion doc comment (F8, 2026-09-15).
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
   await RefreshToken.deleteMany({ user: user._id });
 

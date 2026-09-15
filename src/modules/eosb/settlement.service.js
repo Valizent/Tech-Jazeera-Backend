@@ -78,6 +78,10 @@ async function unusedLeaveDaysAsOf(employee, exitDate) {
 export async function createSettlement(data, actor) {
   const employee = await Employee.findById(data.employee).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: computing (and
+  // persisting real wage data for) a settlement had no team-ownership check
+  // at all, unlike getSettlement/listSettlements below.
+  await assertEmployeeVisibleToActor(employee._id, actor);
   if (!employee.joiningDate) throw new ApiError(400, 'This employee has no joining date on file.');
   if (!employee.salary) throw new ApiError(400, 'This employee has no salary on file.');
 
@@ -164,8 +168,13 @@ export async function getSettlement(id, actor) {
 }
 
 export async function deleteSettlement(id, actor) {
-  const settlement = await Settlement.findByIdAndDelete(id).lean();
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: this deleted straight
+  // off the id with no ownership check whatsoever — worse than the other
+  // A1 gaps, since it never even fetched the record first to check against.
+  const settlement = await Settlement.findById(id).lean();
   if (!settlement) throw new ApiError(404, 'Settlement not found.');
+  await assertEmployeeVisibleToActor(settlement.employee, actor);
+  await Settlement.deleteOne({ _id: id });
   await logAudit({
     user: actor.userId,
     action: 'eosb.settlement.delete',

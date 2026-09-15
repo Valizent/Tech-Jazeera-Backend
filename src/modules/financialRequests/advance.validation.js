@@ -18,8 +18,20 @@ export const decideAdvanceSchema = z.object({
   decisionNote: z.preprocess(emptyToUndef, z.string().trim().max(500).optional()),
 });
 
+// Fixed 2026-09-15, a real QA-audit-found gap — F4's sibling case (a
+// sub-cent repayment would desync the repayments ledger from the derived
+// outstanding balance the exact same way a sub-cent invoice payment did;
+// see invoice.validation.js's money2dp for the full reasoning). Scoped to
+// this field only — submitAdvanceSchema's `amount` above never flows
+// through the ledger-append pipeline this fixes, so it's untouched.
+const money2dp = (message) =>
+  z.coerce
+    .number({ error: 'Amount is required.' })
+    .min(0.01)
+    .refine((n) => Number(n.toFixed(2)) === n, { message });
+
 export const addRepaymentSchema = z.object({
-  amount: z.coerce.number({ error: 'Amount is required.' }).min(0.01),
+  amount: money2dp('Amount cannot have more than 2 decimal places.'),
   date: z.coerce.date({ error: 'Date is required.' }),
   note: z.preprocess(emptyToUndef, z.string().trim().max(200).optional()),
 });

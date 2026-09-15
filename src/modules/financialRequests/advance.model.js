@@ -1,17 +1,21 @@
 /**
  * SalaryAdvance — a worker's own request for an advance against future
  * salary (PRD Module 4). Repayment is tracked here MANUALLY (a ledger of
- * recorded payments) rather than auto-deducted from payroll — there is no
- * Payroll module yet (see docs/PHASE2-PLAN.md P2-M5). Once Payroll exists,
- * it becomes the natural place to post repayments automatically instead of
- * a staff member recording them by hand; this model doesn't need to change
- * shape for that, only who calls addRepayment().
+ * recorded payments), never auto-deducted from Payroll — a deliberate,
+ * still-current design choice (Payroll itself has existed since P2-M5;
+ * unlike Deployment's own client-timesheet deductions, which DO flow
+ * automatically into a PayrollRun's `otherDeductions`, nothing wires a
+ * SalaryAdvance repayment into Payroll the same way — a staff member still
+ * records each one by hand here). This model doesn't need to change shape
+ * if that's ever revisited, only who calls addRepayment().
  *
- * No multi-level approval matrix: same decision as the deferred timesheet
- * signing flow (P2-M3) — a concrete multi-level hierarchy needs a real
- * threshold/level spec from the user, not an invented one. Single-level
- * Submit -> Approve/Reject today; upgradeable later without breaking this
- * shape (see docs/P3-C-notes.md).
+ * Single-level Submit -> Approve/Reject is only the LEGACY fallback now —
+ * SalaryAdvance runs through the same Configurable Approval Hierarchy
+ * engine as Leave/Reimbursement/Timesheet (see approvalEngine.service.js),
+ * so an Admin can configure a real multi-step workflow for it; this
+ * model's `workflow`/`steps`/`currentStep`/`approvalTrail` fields are that
+ * engine's standard shape. `null` workflow (the default until an Admin
+ * configures one) still runs the original single-level flow unchanged.
  */
 import mongoose from 'mongoose';
 

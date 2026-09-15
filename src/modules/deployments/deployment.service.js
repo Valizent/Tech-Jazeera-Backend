@@ -81,6 +81,29 @@ function sumWorkedHours(dailyHours) {
   return dailyHours.reduce((total, d) => total + (d.status === 'Worked' ? d.hours ?? 0 : 0), 0);
 }
 
+/** A 'Worked' day must fall within the deployment's ACTUAL placement dates
+ *  — fixed 2026-09-15, a real QA-audit-found gap — F6: the checks above
+ *  only ever bound the whole MONTH (e.g. `data.month <= endMonth` for an
+ *  Ended deployment), never individual days within a partial start/end
+ *  month, so a deployment demobilised mid-month could still have every
+ *  remaining day of that calendar month billed as Worked hours. `endDate`
+ *  is the inclusive last real day (the demobilisation date itself is still
+ *  a placement day). Only 'Worked' is checked — Off/Sick/Absent don't bill
+ *  anything and aren't a claim about a day the worker was actually placed
+ *  there. */
+function assertWorkedDaysWithinPlacement(deployment, month, dailyHours) {
+  const total = daysInMonth(month);
+  const firstDay = month === monthStrOf(deployment.startDate) ? new Date(deployment.startDate).getDate() : 1;
+  const lastDay =
+    deployment.endDate && month === monthStrOf(deployment.endDate) ? new Date(deployment.endDate).getDate() : total;
+  dailyHours.forEach((day, i) => {
+    const dayOfMonth = i + 1;
+    if (day.status === 'Worked' && (dayOfMonth < firstDay || dayOfMonth > lastDay)) {
+      throw new ApiError(400, `Day ${dayOfMonth} of ${month} falls outside this deployment's actual placement dates.`);
+    }
+  });
+}
+
 /**
  * Called once by mobilisation.service.js's approveMobilisation, the moment a
  * mobilisation reaches its terminal 'Approved' state — never a route of its
@@ -154,6 +177,12 @@ export async function addMonthlyHours(deploymentId, data, actor) {
 
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: this endpoint only
+  // ever checked the Section Access grant, never whether the deployment's
+  // worker is actually this Coordinator's own — the same team-ownership
+  // check getDeployment already enforces for a single read (a no-op for
+  // any non-Coordinator role).
+  await assertEmployeeVisibleToActor(deployment.worker, actor);
   // An Ended deployment can still get its own FINAL month entered, as long
   // as that month is one it was actually active for — fixed 2026-09-14, a
   // real QA-audit-found gap — F5: a placement that ends mid-month (e.g.
@@ -179,6 +208,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   if (data.dailyHours.length !== expectedDays) {
     throw new ApiError(400, `${data.month} has ${expectedDays} days — enter hours for each one.`);
   }
+  assertWorkedDaysWithinPlacement(deployment, data.month, data.dailyHours);
 
   const contractHours = deployment.requiredTimesheetHours ?? 0;
   const actualHours = sumWorkedHours(data.dailyHours);
@@ -263,6 +293,9 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
 
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: same missing
+  // team-ownership check as addMonthlyHours above.
+  await assertEmployeeVisibleToActor(deployment.worker, actor);
   const entry = deployment.monthlyHours.id(entryId);
   if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
   if (entry.status === 'Approved' && !isDecider) {
@@ -272,6 +305,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   if (data.dailyHours.length !== expectedDays) {
     throw new ApiError(400, `${entry.month} has ${expectedDays} days — enter hours for each one.`);
   }
+  assertWorkedDaysWithinPlacement(deployment, entry.month, data.dailyHours);
   const wasRejected = entry.status === 'Rejected';
   const wasApproved = entry.status === 'Approved';
   const before = { actualHours: entry.actualHours, otAmount: entry.otAmount, deductionAmount: entry.deductionAmount, notes: entry.notes };
@@ -407,7 +441,22 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
 export async function demobiliseDeployment(deploymentId, data, actor) {
   const deployment = await Deployment.findById(deploymentId).lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: 'deploymentsRelease'
+  // write defaults to ['Coordinator', 'Manager'] (see deployment.routes.js),
+  // so without this check ANY Coordinator could demobilise — and, for an
+  // Exit-outcome reason, mark Exited — an employee on a completely
+  // different team, out of the box, no extra grant required. Same
+  // team-ownership check as the read-side getDeployment already enforces.
+  await assertEmployeeVisibleToActor(deployment.worker, actor);
   if (deployment.status !== 'Active') throw new ApiError(400, 'This deployment has already ended.');
+  // Fixed 2026-09-15, a real QA-audit-found gap — F6: nothing stopped a
+  // demobilisation date before the deployment's own start date — physically
+  // impossible (a placement can't end before it began), same bug class as
+  // the cross-mobilisation date-overlap gap fixed in mobilisation.service.js
+  // 2026-09-13.
+  if (data.releaseDate < deployment.startDate) {
+    throw new ApiError(400, 'Demobilisation date cannot be before this deployment started.');
+  }
 
   const isEmployeeOnlyReason = EMPLOYEE_ONLY_DEMOBILISATION_REASONS.includes(data.reason);
   if (isEmployeeOnlyReason && deployment.workerType !== 'Employee') {
@@ -561,6 +610,13 @@ export async function getStandbyWorkforce() {
  * Filters: worker, client, status. Worker/mobilisation are populated for display.
  */
 export async function listDeployments({ page, limit, worker, client, status, sortOrder }, actor) {
+  // Fixed 2026-09-15, a real QA-audit-found gap — A1: `?worker=` accepted
+  // any employee id with no ownership check, unlike the single-record read
+  // right below (getDeployment) — a Coordinator could pull a foreign
+  // employee's whole placement history through the list filter even though
+  // opening one of those deployments directly correctly 403s. A no-op for
+  // any non-Coordinator role.
+  if (worker) await assertEmployeeVisibleToActor(worker, actor);
   const filter = {};
   if (worker) filter.worker = worker;
   if (client) filter.client = client;
