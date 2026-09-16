@@ -67,6 +67,25 @@ export const SECTION_KEYS = [
   'timesheetRequests',
   'exitDocuments',
   'holidays',
+  // Added 2026-09-15, the user's own ask (a Coordinator/Manager/HR
+  // cost-and-profit view): gates the Dashboard's company-wide profit
+  // figure (Revenue from invoices − Payroll cost − Expenses) on its OWN
+  // key, independent from needing raw read access to Invoices/Payroll/
+  // Expenses individually — same "a derived figure gets its own narrower
+  // authorization, decoupled from the raw underlying fields' own access
+  // grants" precedent Mobilisation/Deployment's own `profit` field already
+  // follows. Before this, the widget required read on all three of those
+  // sections at once — correct for data-integrity (never show a partial
+  // figure) but meant seeing one aggregate number required exposure to
+  // every individual invoice/payroll run/expense line. See
+  // dashboard.service.js's getDashboard.
+  'dashboardProfit',
+  // Added 2026-09-15, the QA audit's own suggestion #6 ("add reconciliation
+  // checks for ledger totals, finalized payroll, and deployments missing
+  // from approved mobilisations") — a read-only oversight report, same
+  // shape as 'auditLog': no write action, Admin-only until granted. See
+  // reconciliation.service.js.
+  'reconciliation',
 ];
 
 const sectionAccessSchema = new mongoose.Schema(

@@ -261,7 +261,12 @@ export async function addMonthlyHours(deploymentId, data, actor) {
       })
     )
   );
-  const canSeeCommercial = await canAccessSection('deploymentsHoursDecide', actor);
+  // 'read' (fixed 2026-09-15, the user's own ask — a Coordinator/Manager/HR
+  // cost-and-profit view): visibility no longer requires the WRITE grant
+  // that also carries decide power — a Read-only grant on this same key now
+  // suffices to see the figure. `hasWrite` still implies `hasRead` in
+  // canAccessSection, so an existing decider's access is unaffected.
+  const canSeeCommercial = await canAccessSection('deploymentsHoursDecide', actor, 'read');
   return stripCommercialMonthlyHours(updated.toObject(), canSeeCommercial);
 }
 
@@ -637,7 +642,8 @@ export async function listDeployments({ page, limit, worker, client, status, sor
   // isn't currently rendered anywhere on the client, but never send it to a
   // non-decider regardless, same "never even send it" rule as the
   // single-record read.
-  const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor) : false;
+  // 'read' — see the sibling comment in updateMonthlyHours above.
+  const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor, 'read') : false;
   const strippedItems = canSeeCommercial
     ? items
     : items.map((d) => ({ ...d, monthlyHours: d.monthlyHours.map(({ otAmount, ...rest }) => rest) }));
@@ -765,7 +771,8 @@ export async function getDeployment(id, actor) {
   // shouldn't have" rather than just hiding it in the UI. `serialNumber` is
   // kept regardless — the "View mobilisation" link needs it and it's not
   // commercial.
-  const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor) : false;
+  // 'read' — see the sibling comment in updateMonthlyHours above.
+  const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor, 'read') : false;
   deployment.monthlyHours = deployment.monthlyHours.map((entry) => {
     if (canSeeCommercial) return { ...entry, profit: computeMonthlyProfit(entry, deployment.mobilisation) };
     const { otAmount, ...rest } = entry;

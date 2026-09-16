@@ -18,6 +18,7 @@ import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import { signedDownloadUrl } from '../../middleware/upload.js';
 
 /** The ORIGINAL decide-route role gate for Leave — preserved exactly as the
@@ -478,10 +479,21 @@ export async function listLeaveRequests({ page, limit, status, employee }, actor
   // Real, server-computed "can this viewer decide it" per row — see
   // approvalEngine.service.js. Convenience for the UI only; decideLeaveRequest
   // remains the actual gate.
-  const items = await annotateCanDecide(rawItems, actor, {
+  const annotated = await annotateCanDecide(rawItems, actor, {
     pendingStatus: 'PendingReview',
     legacyAllowedRoles: LEGACY_DECIDE_ROLES,
   });
+  // Fixed 2026-09-15, the same class of gap the 2026-09-14 audit found and
+  // fixed for financialRequests only (advance.service.js's listAdvances) —
+  // never carried over here. The real route gate
+  // (leave.routes.js's canWriteLeaveRequests) requires Section Access write
+  // for EVERY decide, workflow-governed or not — annotateCanDecide only
+  // knows about ApprovalRole/legacy-role membership, so its hint could say
+  // "yes" for a legacy-role match (e.g. Manager) even after an Admin
+  // narrows the real 'leaveRequests' grant to exclude them, rendering an
+  // Approve/Reject button whose click would 403.
+  const hasSectionWrite = actor ? await canAccessSection('leaveRequests', actor, 'write') : false;
+  const items = annotated.map((item) => ({ ...item, canDecideCurrentStep: item.canDecideCurrentStep && hasSectionWrite }));
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 

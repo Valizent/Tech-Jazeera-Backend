@@ -59,6 +59,7 @@ import jobTitleRoutes from './modules/jobTitles/jobTitle.routes.js';
 import mobilisationRoutes from './modules/mobilisations/mobilisation.routes.js';
 import mobilisationSettingsRoutes from './modules/mobilisationSettings/mobilisationSettings.routes.js';
 import sectionAccessRoutes from './modules/sectionAccess/sectionAccess.routes.js';
+import reconciliationRoutes from './modules/reconciliation/reconciliation.routes.js';
 
 const app = express();
 
@@ -131,6 +132,7 @@ app.use('/api/job-titles', jobTitleRoutes);
 app.use('/api/mobilisations', mobilisationRoutes);
 app.use('/api/mobilisation-settings', mobilisationSettingsRoutes);
 app.use('/api/section-access', sectionAccessRoutes);
+app.use('/api/reconciliation', reconciliationRoutes);
 
 // Public NFC tap pages — server-rendered HTML, NOT under /api (no auth, own
 // rate limiter). Must be mounted before the 404 handler.

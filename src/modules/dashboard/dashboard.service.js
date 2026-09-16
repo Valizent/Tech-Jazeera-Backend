@@ -192,14 +192,21 @@ async function getMyPendingActions(actor) {
  *      dashboard completely unconditionally, contradicting Executive's own
  *      deny-by-default design elsewhere). Every widget below now checks the
  *      SAME `canAccessSection(key, actor, 'read')` real grant its own module
- *      page is gated by — Admin always passes, same as everywhere else. A
- *      widget built from MULTIPLE sections (`profit` = Invoices + Payroll +
- *      Expenses) requires read on ALL of them, not any one — a profit figure
- *      built from only some of its real inputs would be an actual number
- *      that means something else entirely, worse than just not showing it
- *      (the user's own explicit call). `expiringDocuments` is a list, not a
- *      derived figure, so its two sources (Employee identity docs vs.
- *      generic Documents) are gated independently instead of all-or-nothing.
+ *      page is gated by — Admin always passes, same as everywhere else.
+ *      `expiringDocuments` is a list, not a derived figure, so its two
+ *      sources (Employee identity docs vs. generic Documents) are gated
+ *      independently instead of all-or-nothing. `profit` used to require
+ *      read on all three of Invoices/Payroll/Expenses at once (a profit
+ *      figure built from only some of its real inputs would be an actual
+ *      number that means something else entirely) — replaced 2026-09-15
+ *      (the user's own ask, a Coordinator/Manager/HR cost-and-profit view)
+ *      with its own dedicated `dashboardProfit` key: still the exact same
+ *      server-computed figure (nothing about the math changed), but an
+ *      Admin can now grant a role visibility into the AGGREGATE number
+ *      without handing them read access to every individual invoice,
+ *      payroll run, and expense line — the same "a derived figure gets its
+ *      own narrower authorization" precedent Mobilisation/Deployment's own
+ *      `profit` fields already follow.
  *   2. SCOPING — unchanged, and orthogonal to (1): when actor.role is
  *      'Coordinator', whatever they CAN read is further narrowed to their
  *      own team (deployments, workforce, the clients their team is placed
@@ -239,21 +246,17 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     canReadClients,
     canReadQuotations,
     canReadPayroll,
-    canReadInvoices,
-    canReadExpenses,
+    canSeeProfit,
     canReadAuditLog,
     canReadAttendance,
     canReadDocuments,
   ] = actor
     ? await Promise.all(
-        ['employeeCreate', 'deploymentsRelease', 'clientsManage', 'quotationsManage', 'payroll', 'invoices', 'expenses', 'auditLog', 'attendanceRecords', 'documentsManage'].map(
+        ['employeeCreate', 'deploymentsRelease', 'clientsManage', 'quotationsManage', 'payroll', 'dashboardProfit', 'auditLog', 'attendanceRecords', 'documentsManage'].map(
           (key) => canAccessSection(key, actor, 'read')
         )
       )
-    : Array(10).fill(false);
-  // Profit is built from all three of these — see this function's own doc
-  // comment on why a partial figure is worse than none at all.
-  const canSeeProfit = canReadInvoices && canReadPayroll && canReadExpenses;
+    : Array(9).fill(false);
 
   const employeeExpiryFilter = { status: { $ne: 'Exited' }, $or: identityExpiryOr };
   if (teamIds) employeeExpiryFilter._id = { $in: teamIds };
@@ -335,8 +338,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // markedTodayFilter when applicable, same as every other team-scoped
     // query above.
     canReadAttendance ? Attendance.countDocuments(markedTodayFilter) : Promise.resolve(0),
-    // P2-M8 real profit — requires read on all three contributing sections
-    // (see canSeeProfit above).
+    // P2-M8 real profit — gated by its own 'dashboardProfit' key (see
+    // canSeeProfit above and this function's own doc comment).
     canSeeProfit ? getProfitOverview(month) : Promise.resolve(null),
     // A Manager's "pending quotations" is personal (their own Drafts) — see
     // this function's own doc comment. Only computed once the quotations
@@ -426,8 +429,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       monthlyPayroll: canReadPayroll ? (payrollAgg[0]?.total ?? 0) : null,
       // P2-M8 — real profit for the selected month (revenue from actually
       // issued invoices, cost from a finalized payroll run and recorded
-      // expenses) plus a trailing 6-month trend. null unless the viewer can
-      // read Invoices, Payroll, AND Expenses — see canSeeProfit above.
+      // expenses) plus a trailing 6-month trend. null unless the viewer
+      // holds the 'dashboardProfit' grant — see canSeeProfit above.
       profit: profitOverview,
     },
     workforceByStatus: canReadEmployees ? workforceByStatus : null,

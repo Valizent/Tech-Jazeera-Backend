@@ -194,7 +194,6 @@ router.get(
 /** Same orphaned-upload cleanup as document.routes.js — the leave and
  *  reimbursement POSTs above are the only routes that set req.file on
  *  this router. */
-// eslint-disable-next-line no-unused-vars
 router.use((err, req, res, next) => {
   if (req.file?.filename) {
     destroyDocumentFile(req.file.filename).catch((cleanupErr) =>
