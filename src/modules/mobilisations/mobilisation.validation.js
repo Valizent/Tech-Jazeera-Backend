@@ -218,6 +218,18 @@ export const mobilisationIqamaLookupQuerySchema = z.object({
   iqamaNumber: z.string().trim().regex(iqamaRegex, 'Iqama number must be exactly 10 digits.'),
 });
 
+/** GET /mobilisations/previous-workers?workerType=&subcontractor=... — the
+ *  list version of the Iqama lookup above, for MobilisationForm's own
+ *  "pick from history" helper (2026-09-16, the user's own ask). SupplierEmployee
+ *  requires a subcontractor (the whole point is "who have we supplied
+ *  through THIS subcontractor before"); Freelancer has no subcontractor at
+ *  all, so it's a plain company-wide list — see mobilisation.service.js's
+ *  listPreviousWorkers. */
+export const mobilisationPreviousWorkersQuerySchema = z.object({
+  workerType: z.enum(['SupplierEmployee', 'Freelancer']),
+  subcontractor: z.preprocess(emptyToUndef, id('subcontractor').optional()),
+});
+
 export const mobilisationCoordinatorParamSchema = z.object({
   id: id('mobilisation'),
   userId: id('user'),

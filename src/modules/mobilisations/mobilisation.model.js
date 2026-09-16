@@ -80,10 +80,11 @@ export const WORKER_TYPES = ['Employee', 'SupplierEmployee', 'Freelancer'];
 
 // What the `fta` amount actually covers — the user's own ask (2026-09-16):
 // a plain number gave no way to tell Food/Travel/Accommodation apart later.
-// 'FTA' means all three combined; 'FoodOnly'/'TravelOnly' are the individual
+// 'FTA' means all three combined; 'FoodOnly'/'TravelOnly'/'AccommodationOnly'
+// (the last one added 2026-09-16, same-day follow-up) are the individual
 // components. Required only once a real `fta` amount is entered — see
 // mobilisation.validation.js's withFtaTypeRefine.
-export const FTA_TYPES = ['FoodOnly', 'TravelOnly', 'FTA'];
+export const FTA_TYPES = ['FoodOnly', 'TravelOnly', 'AccommodationOnly', 'FTA'];
 
 /** One uploaded file (M5). _id kept (default) — deleted individually by id,
  *  unlike Document.versions' append-only history. */

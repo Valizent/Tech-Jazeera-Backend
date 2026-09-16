@@ -285,6 +285,48 @@ export async function lookupWorkerByIqama(iqamaNumber) {
   };
 }
 
+/**
+ * "Who have we mobilised before?" — the LIST version of lookupWorkerByIqama
+ * above, for the form's own "pick from history" helper (2026-09-16, the
+ * user's own ask): pick a subcontractor (or, for a Freelancer, nothing at
+ * all — they have no grouping entity) and see everyone matching, click one
+ * to auto-fill instead of re-typing/re-Iqama-ing a worker who's been here
+ * before. SupplierEmployee is scoped to the given subcontractor (the whole
+ * point — "who has THIS subcontractor supplied us before"); Freelancer is
+ * company-wide, same "any coordinator, not scoped to my own" posture as
+ * lookupWorkerByIqama. One entry per distinct Iqama, using that worker's
+ * own most recent mobilisation snapshot as their current known details.
+ */
+export async function listPreviousWorkers(workerType, subcontractorId) {
+  const filter = { workerType, iqamaNumber: { $nin: [null, ''] } };
+  if (workerType === 'SupplierEmployee') {
+    if (!subcontractorId) return [];
+    filter.subcontractor = subcontractorId;
+  }
+  const records = await Mobilisation.find(filter)
+    .sort({ createdAt: -1 })
+    .select('workerName iqamaNumber nationality phone subcontractor subcontractorName')
+    .limit(1000)
+    .lean();
+  const seen = new Set();
+  const results = [];
+  for (const record of records) {
+    if (seen.has(record.iqamaNumber)) continue;
+    seen.add(record.iqamaNumber);
+    results.push({
+      workerName: record.workerName,
+      iqamaNumber: record.iqamaNumber,
+      nationality: record.nationality,
+      phone: record.phone,
+      subcontractor: record.subcontractor,
+      subcontractorName: record.subcontractorName,
+    });
+    if (results.length >= 300) break;
+  }
+  results.sort((a, b) => a.workerName.localeCompare(b.workerName));
+  return results;
+}
+
 /** A worker may have at most one ACTIVE placement at a time — Draft/
  *  PendingReview/Approved all count; Rejected/Completed don't (a rejected
  *  one is dead until resubmitted, a completed one has already released the
