@@ -8,7 +8,7 @@
  * `mobilisationFields.partial()` below).
  */
 import { z } from 'zod';
-import { REJECTION_TARGETS } from './mobilisation.model.js';
+import { REJECTION_TARGETS, FTA_TYPES } from './mobilisation.model.js';
 
 const emptyToUndef = (value) =>
   typeof value === 'string' && value.trim() === '' ? undefined : value;
@@ -96,7 +96,9 @@ const mobilisationFields = {
   clientRate: requiredNonNegNumber('Client rate is required.'),
   clientCommission: optionalNonNegNumber,
   fta: optionalNonNegNumber,
+  ftaType: z.preprocess(emptyToUndef, z.enum(FTA_TYPES).optional()),
   allowance: optionalNonNegNumber,
+  allowanceRemark: optionalStr(200),
 
   subcontractor: z.preprocess(emptyToUndef, id('subcontractor').optional()),
   subcontractorRate: optionalNonNegNumber,
@@ -145,7 +147,23 @@ function withWorkerTypeRefine(schema) {
   });
 }
 
-export const createMobilisationSchema = withWorkerTypeRefine(z.object(mobilisationFields));
+/** A real `fta` amount with no `ftaType` is meaningless — same "if you're
+ *  entering it, say what it is" requirement the client form enforces by
+ *  disabling the amount field until a type is picked (2026-09-16, the
+ *  user's own ask). Only fires when `fta` is actually present in THIS
+ *  payload — same partial-update tradeoff as withWorkerTypeRefine below
+ *  (the real UI always resubmits both fields together as one form; a
+ *  direct PATCH of `fta` alone without `ftaType`, while one already exists
+ *  on the document, is a purely theoretical gap this doesn't cover). */
+function withFtaTypeRefine(schema) {
+  return schema.superRefine((data, ctx) => {
+    if (data.fta && !data.ftaType) {
+      ctx.addIssue({ code: 'custom', path: ['ftaType'], message: 'Select what this FTA amount is for.' });
+    }
+  });
+}
+
+export const createMobilisationSchema = withFtaTypeRefine(withWorkerTypeRefine(z.object(mobilisationFields)));
 
 /** PATCH: any subset of the same fields — only while Draft (enforced in the
  *  service). `.partial()` makes every field including `client` optional
@@ -155,7 +173,7 @@ export const createMobilisationSchema = withWorkerTypeRefine(z.object(mobilisati
  *  undefined here too, so withWorkerTypeRefine's checks only fire when the
  *  caller is actually changing worker identity — the service falls back to
  *  the existing document's workerType otherwise. */
-export const updateMobilisationSchema = withWorkerTypeRefine(z.object(mobilisationFields).partial());
+export const updateMobilisationSchema = withFtaTypeRefine(withWorkerTypeRefine(z.object(mobilisationFields).partial()));
 
 export const listMobilisationsSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
