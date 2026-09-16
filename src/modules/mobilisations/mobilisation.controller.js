@@ -32,6 +32,13 @@ export async function lookupByIqama(req, res) {
   res.json(new ApiResponse(worker ? 'Worker found.' : 'No previous mobilisation for this Iqama.', worker));
 }
 
+/** GET /api/mobilisations/previous-workers?workerType=&subcontractor=... —
+ *  200 → data: worker[] */
+export async function previousWorkers(req, res) {
+  const workers = await mobilisationService.listPreviousWorkers(req.query.workerType, req.query.subcontractor);
+  res.json(new ApiResponse('Previous workers.', workers));
+}
+
 /** GET /api/mobilisations — 200 → data: { items, total, page, pages } */
 export async function list(req, res) {
   const data = await mobilisationService.listMobilisations(req.query, actor(req));

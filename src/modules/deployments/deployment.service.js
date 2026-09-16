@@ -613,6 +613,7 @@ export async function getStandbyWorkforce() {
       iqamaNumber: m.iqamaNumber,
       nationality: m.nationality ?? null,
       phone: m.phone ?? null,
+      subcontractor: m.subcontractor ?? null,
       subcontractorName: m.subcontractorName ?? null,
       lastClientName: m.clientName,
       lastEndDate: ended?.endDate ?? null,
