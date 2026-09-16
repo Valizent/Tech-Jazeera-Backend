@@ -43,6 +43,8 @@ const SECTION_LABELS = {
   timesheetRequests: 'Timesheet requests',
   exitDocuments: 'Exit & Documents',
   holidays: 'Holidays',
+  dashboardProfit: 'Dashboard — company profit figure',
+  reconciliation: 'Data Reconciliation',
 };
 
 /** What each section IS FOR, in plain English — not what Read/Write
@@ -86,6 +88,8 @@ const SECTION_DESCRIPTIONS = {
   timesheetRequests: 'Weekly timesheets submitted for approval.',
   exitDocuments: 'Exit re-entry visa and certificate requests.',
   holidays: 'The company holiday calendar.',
+  dashboardProfit: "The dashboard's real monthly profit figure (revenue minus payroll cost minus expenses) — without granting the underlying Invoices/Payroll/Expenses sections themselves.",
+  reconciliation: 'A standing integrity report: ledger totals that no longer add up, an Approved mobilisation with no deployment, a placement double-booked.',
 };
 
 function defaultFor(sectionKey) {
@@ -145,27 +149,56 @@ export async function canAccessSection(sectionKey, actor, level = 'write') {
   return settings.readApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.readApprovalRoles));
 }
 
-/** Every section this actor can at least read, and the (smaller) subset
- *  they can write to — for `user.sectionAccess` (read, drives nav
- *  visibility) and `user.sectionAccessWrite` (write, drives action
- *  buttons) in the login/refresh response. One DB read per section
- *  regardless of tier count — Admin short-circuits without touching the
- *  database at all, same as canAccessSection does per-call. */
+/**
+ * Every section this actor can at least read, and the (smaller) subset
+ * they can write to — for `user.sectionAccess` (read, drives nav
+ * visibility) and `user.sectionAccessWrite` (write, drives action
+ * buttons) in the login/refresh response — called on every login AND every
+ * token refresh, so its cost is paid constantly.
+ *
+ * Batched (fixed 2026-09-15, a real QA-audit-found perf issue): the naive
+ * per-key loop this replaced ran up to 2 queries PER SECTION_KEY (one
+ * SectionAccess read, up to one ApprovalRole membership check) — measured
+ * at 45 queries / ~140ms for a company this size, on the hottest path in
+ * the app. Now exactly 2 queries total, independent of how many section
+ * keys exist: every SectionAccess document at once, then a single
+ * ApprovalRole query for which of the roles referenced ANYWHERE across all
+ * of them this actor is an ACTIVE member of — everything else below is an
+ * in-memory Set lookup. Still queries fresh on every call (nothing is
+ * cached beyond this one request) — an Admin revoking a grant mid-session
+ * still takes effect on that user's very next request, unchanged.
+ */
 export async function getMySectionAccess(actor) {
   if (!STAFF_ROLES.includes(actor.role) && actor.role !== 'Executive') return { read: [], write: [] };
   if (actor.role === 'Admin') return { read: [...SECTION_KEYS], write: [...SECTION_KEYS] };
 
+  const docs = await SectionAccess.find({}).lean();
+  const bySectionKey = new Map(docs.map((d) => [d.sectionKey, d]));
+
+  const allRoleIds = new Set();
+  for (const doc of docs) {
+    for (const id of doc.readApprovalRoles) allRoleIds.add(id.toString());
+    for (const id of doc.writeApprovalRoles) allRoleIds.add(id.toString());
+  }
+
+  const myRoles = allRoleIds.size
+    ? await ApprovalRole.find({ _id: { $in: [...allRoleIds] }, members: actor.userId, isActive: true })
+        .select('_id')
+        .lean()
+    : [];
+  const myRoleIds = new Set(myRoles.map((r) => r._id.toString()));
+
   const read = [];
   const write = [];
   for (const key of SECTION_KEYS) {
-    const settings = await getSectionAccess(key);
-    const hasWrite = settings.writeApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.writeApprovalRoles));
+    const settings = bySectionKey.get(key) ?? defaultFor(key);
+    const hasWrite = settings.writeApprovalRoles.some((id) => myRoleIds.has(id.toString()));
     if (hasWrite) {
       write.push(key);
       read.push(key);
       continue;
     }
-    const hasRead = settings.readApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.readApprovalRoles));
+    const hasRead = settings.readApprovalRoles.some((id) => myRoleIds.has(id.toString()));
     if (hasRead) read.push(key);
   }
   return { read, write };

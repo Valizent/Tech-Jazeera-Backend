@@ -132,7 +132,6 @@ router.get(
 
 /** Same orphaned-upload cleanup as document.routes.js/financialRequests.routes.js
  *  — only the documents POST above ever sets req.files on this router. */
-// eslint-disable-next-line no-unused-vars
 router.use((err, req, res, next) => {
   if (req.files?.length) {
     for (const file of req.files) {

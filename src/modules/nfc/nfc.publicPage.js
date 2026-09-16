@@ -36,12 +36,6 @@ const digits = (v) => String(v ?? '').replace(/[^\d]/g, '');
 const ensureHttp = (url) => (!url ? '' : /^https?:\/\//i.test(url) ? url : `https://${url}`);
 const safeHex = (c) => (/^#[0-9a-fA-F]{6}$/.test(c || '') ? c : '#1f9e78');
 
-/** Two-letter initials for the monogram fallback. */
-function initials(name) {
-  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
-  return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || '?';
-}
-
 const ICON = {
   phone: 'M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z',
   whatsapp: 'M12 2.25c-5.385 0-9.75 4.365-9.75 9.75 0 1.72.446 3.336 1.228 4.74L2.25 21.75l5.13-1.2A9.7 9.7 0 0012 21.75c5.385 0 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25z',

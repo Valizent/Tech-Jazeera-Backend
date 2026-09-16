@@ -158,9 +158,8 @@ export async function login({ email, password, ip }) {
 export async function refresh({ refreshToken, ip }) {
   if (!refreshToken) throw new ApiError(401, 'Not logged in.');
 
-  let payload;
   try {
-    payload = jwt.verify(refreshToken, env.jwtRefreshSecret);
+    jwt.verify(refreshToken, env.jwtRefreshSecret);
   } catch {
     throw new ApiError(401, 'Session expired. Please log in again.');
   }

@@ -1237,7 +1237,7 @@ async function approveMobilisation(id, decisionNote, actor) {
   if (result.status === 'Approved') {
     try {
       await createDeploymentFromMobilisation(result, actor);
-    } catch (err) {
+    } catch {
       // Compensate, don't leave it stuck (fixed 2026-09-14, a real QA-audit-
       // found gap — F3): decideApprovalStep above already persisted
       // 'Approved' before this ran, so a deployment-creation failure used to

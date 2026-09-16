@@ -14,6 +14,7 @@ import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 /** The ORIGINAL decide-route role gate — preserved exactly as the
  *  authorization used whenever no ApprovalWorkflow governs a request. */
@@ -112,10 +113,15 @@ export async function listCertificates({ page, limit, status, employee }, actor)
       .lean(),
     CertificateRequest.countDocuments(filter),
   ]);
-  const items = await annotateCanDecide(rawItems, actor, {
+  const annotated = await annotateCanDecide(rawItems, actor, {
     pendingStatus: 'Pending',
     legacyAllowedRoles: LEGACY_DECIDE_ROLES,
   });
+  // Fixed 2026-09-15, the same class of gap the 2026-09-14 audit found and
+  // fixed for financialRequests only — never carried over here. See
+  // leave.service.js's listLeaveRequests for the full reasoning.
+  const hasSectionWrite = actor ? await canAccessSection('exitDocuments', actor, 'write') : false;
+  const items = annotated.map((item) => ({ ...item, canDecideCurrentStep: item.canDecideCurrentStep && hasSectionWrite }));
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 

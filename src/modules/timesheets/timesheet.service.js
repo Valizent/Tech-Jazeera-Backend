@@ -19,6 +19,7 @@ import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -189,9 +190,16 @@ export async function listTimesheets({ page, limit, status, employee }, actor) {
       .lean(),
     Timesheet.countDocuments(filter),
   ]);
-  const items = actor
-    ? await annotateCanDecide(rawItems, actor, { pendingStatus: 'Submitted', legacyAllowedRoles: LEGACY_DECIDE_ROLES })
-    : rawItems;
+  let items = rawItems;
+  if (actor) {
+    const annotated = await annotateCanDecide(rawItems, actor, { pendingStatus: 'Submitted', legacyAllowedRoles: LEGACY_DECIDE_ROLES });
+    // Fixed 2026-09-15, the same class of gap the 2026-09-14 audit found
+    // and fixed for financialRequests only (advance.service.js's
+    // listAdvances) — never carried over here. See leave.service.js's
+    // listLeaveRequests for the full reasoning; same fix, same root cause.
+    const hasSectionWrite = await canAccessSection('timesheetRequests', actor, 'write');
+    items = annotated.map((item) => ({ ...item, canDecideCurrentStep: item.canDecideCurrentStep && hasSectionWrite }));
+  }
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
@@ -246,7 +254,6 @@ export async function bulkApproveTimesheets(ids, actor) {
       continue;
     }
     try {
-      // eslint-disable-next-line no-await-in-loop
       await decideApprovalStep({
         Model: Timesheet,
         id,

@@ -108,7 +108,6 @@ router.patch(
 
 /** Same orphaned-upload cleanup as document.routes.js/financialRequests.routes.js
  *  — only the leave POST above ever sets req.file on this router. */
-// eslint-disable-next-line no-unused-vars
 router.use((err, req, res, next) => {
   if (req.file?.filename) {
     destroyDocumentFile(req.file.filename).catch((cleanupErr) =>

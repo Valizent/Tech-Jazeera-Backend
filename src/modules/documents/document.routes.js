@@ -83,7 +83,6 @@ router.delete(
  * failed, into an empty callback, leaving every rejected upload stored forever
  * with no database row left to find it by.
  */
-// eslint-disable-next-line no-unused-vars
 router.use((err, req, res, next) => {
   if (req.file?.filename) {
     destroyDocumentFile(req.file.filename).catch((cleanupErr) =>
