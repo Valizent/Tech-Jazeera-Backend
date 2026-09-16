@@ -113,21 +113,28 @@ const monthlyHoursSchema = new mongoose.Schema(
   {
     month: { type: String, required: true, match: /^\d{4}-(0[1-9]|1[0-2])$/ }, // 'YYYY-MM'
     contractHours: { type: Number, required: true, min: 0 },
-    // One entry per calendar day of `month` (index 0 = day 1), added
-    // 2026-09-12 so the client's real day-by-day timesheet can be entered
-    // directly — same idea as Attendance's own day-by-day grid — instead of
-    // only ever typing one aggregate number for the whole month. Each day
-    // is `{status, hours}` (see DAILY_ENTRY_STATUSES above) — widened the
-    // same day, before any real data existed in this shape yet, once a
-    // plain worked-hours number per day turned out not to be enough.
-    // `actualHours` is the sum of every 'Worked' day's `hours`, always
-    // server-computed from this array (never trust a client-submitted
-    // total when the real breakdown is right there — same rule as every
-    // other derived financial figure in this app). A legacy entry from
-    // before this existed has an empty `dailyHours` and keeps its own
-    // already-stored `actualHours`.
+    // Day-by-day entry (added 2026-09-12) was REVERTED 2026-09-16, the
+    // user's own ask — back to two typed totals transcribed straight off
+    // the client's own timesheet, the shape this app originally used
+    // (see docs/MOBILISATION-notes.md's 2026-09-12 follow-up). `dailyHours`
+    // stays defined ONLY so an already-entered record from that window
+    // keeps showing its real per-day breakdown (view-only — see
+    // DeploymentDetailPage.jsx) until someone actually corrects it, at
+    // which point deployment.service.js's updateMonthlyHours clears it back
+    // to `[]`; no NEW entry ever populates it again. `actualHours` is now
+    // directly typed ("client timesheet hours") for any entry with an empty
+    // `dailyHours`, trusted as-is (whoever transcribes the client's
+    // timesheet already knows the number — same posture as
+    // `deductionAmount` below) — only ever summed from `dailyHours` for a
+    // pre-2026-09-16 record that still has it.
     dailyHours: { type: [dailyEntrySchema], default: [] },
     actualHours: { type: Number, required: true, min: 0 },
+    // How many real days the client's timesheet shows as worked that month
+    // — added 2026-09-16, a second headline number a real timesheet always
+    // carries alongside total hours. Informational/cross-check only, not
+    // part of the otHours formula below. `0` on a pre-2026-09-16 record
+    // that predates this field (never invented after the fact).
+    daysWorked: { type: Number, default: 0, min: 0, max: 31 },
     otHours: { type: Number, required: true, min: 0 }, // server-computed = max(0, actualHours - contractHours)
     otAmount: { type: Number, default: 0, min: 0 }, // server-computed = otHours × Mobilisation.otClientRate — see module doc comment
     // A deduction the CLIENT applied on their own timesheet (their most

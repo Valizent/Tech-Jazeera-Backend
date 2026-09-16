@@ -75,33 +75,36 @@ function daysInMonth(monthStr) {
   return new Date(y, m, 0).getDate();
 }
 
-/** Only a 'Worked' day contributes hours — Off/Sick/Absent are explicitly
- *  non-working days (see deployment.model.js's DAILY_ENTRY_STATUSES). */
-function sumWorkedHours(dailyHours) {
-  return dailyHours.reduce((total, d) => total + (d.status === 'Worked' ? d.hours ?? 0 : 0), 0);
-}
-
-/** A 'Worked' day must fall within the deployment's ACTUAL placement dates
- *  — fixed 2026-09-15, a real QA-audit-found gap — F6: the checks above
- *  only ever bound the whole MONTH (e.g. `data.month <= endMonth` for an
- *  Ended deployment), never individual days within a partial start/end
- *  month, so a deployment demobilised mid-month could still have every
- *  remaining day of that calendar month billed as Worked hours. `endDate`
- *  is the inclusive last real day (the demobilisation date itself is still
- *  a placement day). Only 'Worked' is checked — Off/Sick/Absent don't bill
- *  anything and aren't a claim about a day the worker was actually placed
- *  there. */
-function assertWorkedDaysWithinPlacement(deployment, month, dailyHours) {
+/** How many real calendar days of `month` this deployment actually
+ *  covered — accounts for a deployment that started or ended mid-month
+ *  (`endDate` is the inclusive last real day: the demobilisation date
+ *  itself is still a placement day). Reused by the days-worked sanity
+ *  check below. */
+function realPlacementDaysInMonth(deployment, month) {
   const total = daysInMonth(month);
   const firstDay = month === monthStrOf(deployment.startDate) ? new Date(deployment.startDate).getDate() : 1;
   const lastDay =
     deployment.endDate && month === monthStrOf(deployment.endDate) ? new Date(deployment.endDate).getDate() : total;
-  dailyHours.forEach((day, i) => {
-    const dayOfMonth = i + 1;
-    if (day.status === 'Worked' && (dayOfMonth < firstDay || dayOfMonth > lastDay)) {
-      throw new ApiError(400, `Day ${dayOfMonth} of ${month} falls outside this deployment's actual placement dates.`);
-    }
-  });
+  return lastDay - firstDay + 1;
+}
+
+/** `daysWorked` can never exceed how many real days the deployment actually
+ *  covered that month — reverted 2026-09-16 (the user's own ask) from a
+ *  full day-by-day breakdown (originally added 2026-09-15 as F6's fix, see
+ *  git history for `assertWorkedDaysWithinPlacement`) back to two typed
+ *  totals, the shape this app originally used before the daily grid
+ *  existed (see docs/MOBILISATION-notes.md's 2026-09-12 follow-up). This
+ *  is the lighter replacement for the same class of mistake the old,
+ *  per-day check caught (claiming hours for a day the worker genuinely
+ *  wasn't there) — without needing the day-by-day detail itself. */
+function assertDaysWorkedWithinPlacement(deployment, month, daysWorked) {
+  const maxDays = realPlacementDaysInMonth(deployment, month);
+  if (daysWorked > maxDays) {
+    throw new ApiError(
+      400,
+      `${month} only had ${maxDays} real placement day(s) for this deployment — days worked can't exceed that.`
+    );
+  }
 }
 
 /**
@@ -183,42 +186,37 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   // check getDeployment already enforces for a single read (a no-op for
   // any non-Coordinator role).
   await assertEmployeeVisibleToActor(deployment.worker, actor);
-  // An Ended deployment can still get its own FINAL month entered, as long
-  // as that month is one it was actually active for — fixed 2026-09-14, a
-  // real QA-audit-found gap — F5: a placement that ends mid-month (e.g.
-  // demobilised August 15th, before anyone entered August's hours) could
-  // never have its first-and-only August entry made at all, since the
-  // blanket `status !== 'Active'` check ran before the ordinary "wait for
-  // the month to end" flow ever got a chance. `endDate`'s own month is the
-  // real upper bound for an Ended deployment — a month AFTER that is still
-  // correctly refused (the worker genuinely wasn't there), unchanged.
-  if (deployment.status !== 'Active') {
-    const endMonth = deployment.endDate ? monthStrOf(deployment.endDate) : null;
-    if (deployment.status !== 'Ended' || !endMonth || data.month > endMonth) {
-      throw new ApiError(400, 'Only an active deployment — or an ended one, for a month within its actual placement dates — can have hours entered.');
+  // Fixed 2026-09-16 (the user's own ask): waiting for the real calendar
+  // month to elapse only makes sense for a worker STILL mobilised that
+  // month — an Ended deployment is already history, so every month from
+  // its start through its own real end is fair game immediately, even the
+  // current still-in-progress calendar month. (Originally fixed
+  // 2026-09-14 — F5 — to at least allow the FINAL month once it had
+  // elapsed; this widens that to not need elapsing at all once Ended.)
+  if (deployment.status === 'Active') {
+    if (data.month >= currentMonthStr()) {
+      throw new ApiError(400, 'You can only enter hours for a month that has already ended.');
     }
-  }
-  if (data.month >= currentMonthStr()) {
-    throw new ApiError(400, 'You can only enter hours for a month that has already ended.');
+  } else {
+    const endMonth = deployment.endDate ? monthStrOf(deployment.endDate) : null;
+    if (!endMonth || data.month > endMonth) {
+      throw new ApiError(400, "Only a month within this deployment's actual placement dates can have hours entered.");
+    }
   }
   if (data.month < monthStrOf(deployment.startDate)) {
     throw new ApiError(400, 'This deployment had not started yet in that month.');
   }
-  const expectedDays = daysInMonth(data.month);
-  if (data.dailyHours.length !== expectedDays) {
-    throw new ApiError(400, `${data.month} has ${expectedDays} days — enter hours for each one.`);
-  }
-  assertWorkedDaysWithinPlacement(deployment, data.month, data.dailyHours);
+  assertDaysWorkedWithinPlacement(deployment, data.month, data.daysWorked);
 
   const contractHours = deployment.requiredTimesheetHours ?? 0;
-  const actualHours = sumWorkedHours(data.dailyHours);
+  const actualHours = data.actualHours;
   const otHours = Math.max(0, actualHours - contractHours);
   const otAmount = await computeOtAmount(deployment.mobilisation, otHours);
   const newEntry = {
     month: data.month,
     contractHours,
-    dailyHours: data.dailyHours,
     actualHours,
+    daysWorked: data.daysWorked,
     otHours,
     otAmount,
     deductionAmount: data.deductionAmount ?? 0,
@@ -247,7 +245,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     action: 'deployment.monthlyHours.add',
     targetType: 'Deployment',
     targetId: updated._id,
-    meta: { month: data.month, actualHours, otHours, otAmount },
+    meta: { month: data.month, actualHours, daysWorked: data.daysWorked, otHours, otAmount },
     ip: actor.ip,
   });
 
@@ -306,19 +304,28 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   if (entry.status === 'Approved' && !isDecider) {
     throw new ApiError(400, 'This month is already approved and can no longer be edited.');
   }
-  const expectedDays = daysInMonth(entry.month);
-  if (data.dailyHours.length !== expectedDays) {
-    throw new ApiError(400, `${entry.month} has ${expectedDays} days — enter hours for each one.`);
-  }
-  assertWorkedDaysWithinPlacement(deployment, entry.month, data.dailyHours);
+  assertDaysWorkedWithinPlacement(deployment, entry.month, data.daysWorked);
   const wasRejected = entry.status === 'Rejected';
   const wasApproved = entry.status === 'Approved';
-  const before = { actualHours: entry.actualHours, otAmount: entry.otAmount, deductionAmount: entry.deductionAmount, notes: entry.notes };
+  const before = {
+    actualHours: entry.actualHours,
+    daysWorked: entry.daysWorked,
+    otAmount: entry.otAmount,
+    deductionAmount: entry.deductionAmount,
+    notes: entry.notes,
+  };
   const previousEnteredBy = entry.enteredBy.toString();
 
-  const actualHours = sumWorkedHours(data.dailyHours);
-  entry.dailyHours = data.dailyHours;
+  const actualHours = data.actualHours;
+  // A legacy entry's own real dailyHours breakdown (see deployment.model.js)
+  // stays visible exactly as originally entered UNTIL it's actually
+  // corrected — the moment someone edits it, the new totals-only shape
+  // (2026-09-16, the user's own ask) is now the entry's real data, so the
+  // old per-day array is cleared rather than left stale/inconsistent next
+  // to numbers that no longer match it.
+  entry.dailyHours = [];
   entry.actualHours = actualHours;
+  entry.daysWorked = data.daysWorked;
   entry.otHours = Math.max(0, actualHours - entry.contractHours);
   entry.otAmount = await computeOtAmount(deployment.mobilisation, entry.otHours);
   entry.deductionAmount = data.deductionAmount ?? 0;
@@ -344,7 +351,13 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
     meta: {
       month: entry.month,
       before,
-      after: { actualHours: entry.actualHours, otAmount: entry.otAmount, deductionAmount: entry.deductionAmount, notes: entry.notes },
+      after: {
+        actualHours: entry.actualHours,
+        daysWorked: entry.daysWorked,
+        otAmount: entry.otAmount,
+        deductionAmount: entry.deductionAmount,
+        notes: entry.notes,
+      },
       otHours: entry.otHours,
     },
     ip: actor.ip,
