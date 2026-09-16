@@ -15,6 +15,7 @@
     "migrate:section-access-tiers": "node src/scripts/migrate-section-access-tiers.js",
     "migrate:section-access-approval-roles": "node src/scripts/migrate-section-access-approval-roles.js",
     "grant:profit-visibility": "node src/scripts/grant-profit-visibility.js",
+    "grant:deployments-edit": "node src/scripts/grant-deployments-edit.js",
     "generate:vapid": "node src/scripts/generate-vapid-keys.js",
     "test": "vitest run",
     "test:watch": "vitest",

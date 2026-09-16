@@ -24,6 +24,12 @@ export async function get(req, res) {
   res.json(new ApiResponse('Deployment.', deployment));
 }
 
+/** PATCH /api/deployments/:id — 200 → data: deployment */
+export async function update(req, res) {
+  const deployment = await deploymentService.updateDeployment(req.params.id, req.body, actor(req));
+  res.json(new ApiResponse('Deployment updated.', deployment));
+}
+
 /** POST /api/deployments/:id/monthly-hours — 201 → data: deployment */
 export async function addMonthlyHours(req, res) {
   const deployment = await deploymentService.addMonthlyHours(req.params.id, req.body, actor(req));
