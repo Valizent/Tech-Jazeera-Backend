@@ -28,11 +28,16 @@
  * (POST /:id/demobilise, formerly "Release" — the Section Access key name
  * itself, 'deploymentsRelease', is unchanged) is 'deploymentsRelease' at
  * 'write', default ['Coordinator', 'Manager'] — Office Secretary never
- * demobilises. Deployments have no create/edit route at all —
- * they're born automatically from an Approved Mobilisation (see
- * mobilisation.service.js's approveMobilisation) — EXCEPT for a TEMPORARY
- * Admin-only DELETE added for pre-production cleanup; remove it before
- * going live (see the note on that route below).
+ * demobilises. Deployments have no CREATE route at all — they're born
+ * automatically from an Approved Mobilisation (see mobilisation.service.js's
+ * approveMobilisation) — EXCEPT for a TEMPORARY Admin-only DELETE added for
+ * pre-production cleanup; remove it before going live (see the note on that
+ * route below). PATCH /:id (2026-09-16, the user's own ask) is a real,
+ * permanent edit — gated by its own new key, 'deploymentsEdit', at 'write',
+ * scoped narrowly to the descriptive fields alone (see
+ * deployment.validation.js's updateDeploymentSchema) — Admin-only until
+ * granted; MM granted write immediately (see
+ * src/scripts/grant-deployments-edit.js).
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
@@ -44,6 +49,7 @@ import {
   listDeploymentsSchema,
   deploymentIdParamSchema,
   monthlyHoursEntryParamSchema,
+  updateDeploymentSchema,
   addMonthlyHoursSchema,
   updateMonthlyHoursSchema,
   decideMonthlyHoursSchema,
@@ -75,6 +81,12 @@ router.get(
   canReadDeployments,
   validate({ params: deploymentIdParamSchema }),
   asyncHandler(deploymentController.get)
+);
+router.patch(
+  '/:id',
+  requireSectionAccess('deploymentsEdit', 'write'),
+  validate({ params: deploymentIdParamSchema, body: updateDeploymentSchema }),
+  asyncHandler(deploymentController.update)
 );
 router.post(
   '/:id/monthly-hours',

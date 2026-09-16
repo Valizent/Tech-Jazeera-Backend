@@ -163,6 +163,59 @@ export async function createDeploymentFromMobilisation(mobilisation, actor) {
 }
 
 /**
+ * Correct a deployment's own recorded details (2026-09-16, the user's own
+ * ask) — gated by the 'deploymentsEdit' Section Access key (Admin-only until
+ * granted; MM granted write immediately per the user's own instruction, see
+ * src/scripts/grant-deployments-edit.js). No Office Secretary bypass here —
+ * unlike hours entry, this was never one of her hardcoded business-rule
+ * exceptions; access is purely through the Section Access grant.
+ *
+ * Scope is deliberately narrow — see updateDeploymentSchema's own doc
+ * comment for exactly which fields this can and can't touch and why. Works
+ * regardless of `status` (Active or Ended) — fixing a typo on an already-
+ * ended placement is just as legitimate as on a live one, and this never
+ * touches the lifecycle fields Demobilise owns.
+ */
+export async function updateDeployment(deploymentId, data, actor) {
+  const allowed = await canAccessSection('deploymentsEdit', actor);
+  if (!allowed) throw new ApiError(403, 'You do not have permission to edit this deployment.');
+
+  const deployment = await Deployment.findById(deploymentId);
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  await assertEmployeeVisibleToActor(deployment.worker, actor);
+
+  const before = {
+    site: deployment.site,
+    workerName: deployment.workerName,
+    requiredTimesheetHours: deployment.requiredTimesheetHours,
+    notes: deployment.notes,
+  };
+  if (data.site !== undefined) deployment.site = data.site;
+  if (data.workerName !== undefined) deployment.workerName = data.workerName;
+  if (data.requiredTimesheetHours !== undefined) deployment.requiredTimesheetHours = data.requiredTimesheetHours;
+  if (data.notes !== undefined) deployment.notes = data.notes;
+  await deployment.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'deployment.update',
+    targetType: 'Deployment',
+    targetId: deployment._id,
+    meta: {
+      before,
+      after: {
+        site: deployment.site,
+        workerName: deployment.workerName,
+        requiredTimesheetHours: deployment.requiredTimesheetHours,
+        notes: deployment.notes,
+      },
+    },
+    ip: actor.ip,
+  });
+  return deployment.toObject();
+}
+
+/**
  * Add this month's actual client-timesheet hours — only for a month that has
  * fully ended (so "mobilised in September" unlocks September's entry on
  * October 1st) and no earlier than the deployment's own start month. Office

@@ -39,6 +39,32 @@ export const listDeploymentsSchema = z.object({
 
 export const deploymentIdParamSchema = z.object({ id });
 
+/**
+ * Correcting a deployment's own recorded details (2026-09-16, the user's own
+ * ask) — gated by the new 'deploymentsEdit' Section Access key, see
+ * deployment.routes.js. Deliberately narrow: only the free-typed SNAPSHOT
+ * fields Deployment already carries independently of any other system
+ * (`site`/`workerName`/`requiredTimesheetHours`/`notes`) — never `client`/
+ * `subcontractor` (re-pointing either would strand Employee.currentClient,
+ * the active-placement uniqueness guard, and every already-entered month's
+ * OT-rate lookup, which all still resolve through the ORIGINAL client/
+ * subcontractor), never `worker`/`workerType`/`mobilisation` (identity is
+ * decided once, at creation, by which Mobilisation produced this Deployment
+ * — reassigning it here would silently rewrite history), and never
+ * `startDate`/`endDate`/`status`/`endReason`/`demobilisationOutcome`/
+ * `releaseNote` (the dedicated Demobilise action owns the entire lifecycle
+ * side of this record; this endpoint only ever touches the descriptive
+ * fields sitting beside it). All optional — PATCH semantics, omitting a
+ * field leaves it as-is, same convention as every other endpoint in this
+ * app.
+ */
+export const updateDeploymentSchema = z.object({
+  site: optionalStr(150),
+  workerName: optionalStr(150),
+  requiredTimesheetHours: z.preprocess(emptyToUndef, z.coerce.number().min(0).max(1000).optional()),
+  notes: optionalStr(1000),
+});
+
 export const monthlyHoursEntryParamSchema = z.object({ id, entryId: id });
 
 // Fixed 2026-09-14, a real QA-audit-found gap: `.min(0)` with no upper bound
