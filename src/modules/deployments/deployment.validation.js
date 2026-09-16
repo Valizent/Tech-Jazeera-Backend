@@ -4,7 +4,7 @@
  * read filters, a monthly-hours entry/correction, or a Release.
  */
 import { z } from 'zod';
-import { DEPLOYMENT_STATUSES, DEMOBILISATION_REASONS, DAILY_ENTRY_STATUSES } from './deployment.model.js';
+import { DEPLOYMENT_STATUSES, DEMOBILISATION_REASONS } from './deployment.model.js';
 
 const DECISIONS = ['Approved', 'Rejected'];
 
@@ -41,46 +41,30 @@ export const deploymentIdParamSchema = z.object({ id });
 
 export const monthlyHoursEntryParamSchema = z.object({ id, entryId: id });
 
-// One entry per calendar day of the month — the exact array LENGTH (must
-// equal that month's real day count) is checked in deployment.service.js,
-// which knows the target month for both add (from the body) and update
-// (from the existing entry) — one shared check (daysInMonth) instead of
-// duplicating the month-aware part here. Each day is either a real worked
-// day (`hours` required, 0-24) or an explicit Off/Sick/Absent mark (`hours`
-// must be absent — see deployment.model.js's DAILY_ENTRY_STATUSES doc
-// comment: these three BLOCK hours entirely, never both).
-const dailyEntry = z
-  .object({
-    status: z.enum(DAILY_ENTRY_STATUSES, { error: 'Invalid day status.' }),
-    hours: z.coerce.number().min(0, 'Hours cannot be negative.').max(24, 'A single day cannot exceed 24 hours.').optional(),
-  })
-  .superRefine((val, ctx) => {
-    if (val.status === 'Worked' && val.hours == null) {
-      ctx.addIssue({ code: 'custom', path: ['hours'], message: 'Enter hours for a worked day.' });
-    }
-    if (val.status !== 'Worked' && val.hours != null) {
-      ctx.addIssue({ code: 'custom', path: ['hours'], message: 'An Off/Sick/Absent day cannot also have hours.' });
-    }
-  });
-const dailyHours = z.array(dailyEntry).min(1, "Enter each day's status.");
-
-/** Add this month's actual client-timesheet hours, one day at a time —
- *  `actualHours` is never in this payload at all, it's always the
- *  server-computed sum of `dailyHours` (see deployment.model.js's doc
- *  comment). `otAmount` isn't in this payload either, for the same reason —
- *  it's always server-computed from `otHours` × the source Mobilisation's
- *  `otClientRate`, never client-submitted. `deductionAmount` IS accepted
- *  here, unlike those two — it's whatever the client's own timesheet says,
- *  no in-app formula to recompute it from (same posture as GOSI). */
 // Fixed 2026-09-14, a real QA-audit-found gap: `.min(0)` with no upper bound
 // accepted 1e308, which then produced non-finite profit/totalProfit once
 // subtracted through — capped at the same order of magnitude every other
 // money field in this app tops out at (e.g. quotation unitPrice).
 const deductionAmount = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(1_000_000).optional());
 
+// Reverted 2026-09-16 (the user's own ask) from the day-by-day grid back to
+// two typed totals, transcribed straight off the client's own paper/PDF
+// timesheet — the same shape this app originally used on Mobilisation
+// before the daily grid existed (see docs/MOBILISATION-notes.md's
+// 2026-09-12 follow-up: `otHours = max(0, clientTimesheetHours -
+// requiredTimesheetHours)`, unchanged here, just renamed `actualHours` to
+// match the field this app already had). `daysWorked` is new — a second
+// headline number a real client timesheet always carries alongside total
+// hours; purely informational/cross-check, not part of the OT formula.
+// Bounded loosely (a month has at most 31 real days) — the tighter, real
+// bound (can't exceed the deployment's actual placement days that month)
+// needs the deployment/month context this file doesn't have, so it's
+// checked in deployment.service.js instead, same reasoning the old
+// day-count check already used for exactly this file/service split.
 export const addMonthlyHoursSchema = z.object({
   month: monthStr,
-  dailyHours,
+  actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
+  daysWorked: z.coerce.number({ error: 'Enter the number of days worked.' }).int('Whole days only.').min(0).max(31),
   deductionAmount,
   notes: optionalStr(500),
 });
@@ -88,7 +72,8 @@ export const addMonthlyHoursSchema = z.object({
 /** Correcting an already-entered month — same shape, month itself is fixed
  *  (it identifies which entry, never changes on an edit). */
 export const updateMonthlyHoursSchema = z.object({
-  dailyHours,
+  actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
+  daysWorked: z.coerce.number({ error: 'Enter the number of days worked.' }).int('Whole days only.').min(0).max(31),
   deductionAmount,
   notes: optionalStr(500),
 });
