@@ -365,39 +365,43 @@ async function deploymentPeriodsFor(workerType, { workerId, iqamaNumber }) {
  * (or any earlier one), which is physically impossible: a worker can only
  * be in one place at a time, even with backdated data.
  *
+ * `proposedEndDate` (2026-09-16, the user's own ask — entering backlog data
+ * kept tripping this) is OPTIONAL: omitted, the new mobilisation's own
+ * interval is treated as open-ended (`[proposedStartDate, ∞)`), same as
+ * before this date existed on the form — the correct assumption for a real,
+ * still-ongoing placement being created going forward, where the real end
+ * genuinely isn't known yet. Given, it's treated as a REAL closed interval
+ * (`[proposedStartDate, proposedEndDate)`), which only conflicts with a
+ * period that genuinely overlaps it — the exact case a backlog entry needs:
+ * you already know both ends of an old placement, so a later, already-
+ * recorded one starting after this one truly finished shouldn't block it.
+ * The client's own "Clear" control next to Checkout date (MobilisationForm)
+ * is how a caller deliberately goes back to "still ongoing" after having
+ * picked a date — same reasoning in reverse.
+ *
  * Same-day handoffs ARE allowed (confirmed with the user): demobilised from
- * Client A on day X, mobilised to Client B also on day X. So the boundary
- * is inclusive of a period's own start (a new mobilisation can't start
- * exactly when another one already did) and exclusive of its end (a new
- * one CAN start exactly when the old one ended).
+ * Client A on day X, mobilised to Client B also on day X. So each boundary
+ * is inclusive of its own interval's start and exclusive of its own end —
+ * standard half-open-interval overlap: two intervals `[a1,a2)`/`[b1,b2)`
+ * overlap iff `a1 < b2 && b1 < a2` (a null end stands in for +∞, so the
+ * comparison against it is always true).
  */
-async function assertNoDateOverlap(workerType, identity, proposedDate) {
+async function assertNoDateOverlap(workerType, identity, proposedStartDate, proposedEndDate) {
   const periods = await deploymentPeriodsFor(workerType, identity);
-  const proposed = new Date(proposedDate).getTime();
+  const proposedStart = new Date(proposedStartDate).getTime();
+  const proposedEnd = proposedEndDate ? new Date(proposedEndDate).getTime() : null;
   for (const period of periods) {
-    const end = period.endDate ? new Date(period.endDate).getTime() : null;
-    // Fixed 2026-09-14, a real QA-audit-found gap — F4: the old condition
-    // ALSO required `proposed >= start`, which only ever caught the new
-    // date falling INSIDE an existing period. A brand-new mobilisation is
-    // open-ended (no end date yet), so its own interval is really
-    // [proposed, ∞) — an existing period entirely AFTER `proposed` (i.e.
-    // `start > proposed`) still physically conflicts with that open span,
-    // but `proposed >= start` was false for it, so it slipped through
-    // untouched. The new mobilisation's interval overlaps an existing one
-    // iff that period hasn't fully ended by `proposed` — `end === null ||
-    // proposed < end` — which is both necessary and sufficient for two
-    // intervals where one is open-ended; `start` doesn't need checking
-    // separately. Same inclusive-start/exclusive-end boundary as before
-    // (same-day handoffs still allowed): proposed === end still doesn't
-    // overlap, proposed === start still does (proposed < end is true
-    // whenever proposed === start, since start < end always).
-    const overlaps = end === null || proposed < end;
+    const periodStart = new Date(period.startDate).getTime();
+    const periodEnd = period.endDate ? new Date(period.endDate).getTime() : null;
+    const thisStartsBeforeThatEnds = periodEnd === null || proposedStart < periodEnd;
+    const thatStartsBeforeThisEnds = proposedEnd === null || periodStart < proposedEnd;
+    const overlaps = thisStartsBeforeThatEnds && thatStartsBeforeThisEnds;
     if (overlaps) {
       const startLabel = new Date(period.startDate).toLocaleDateString('en-GB');
-      const rangeLabel = end ? `${startLabel} to ${new Date(period.endDate).toLocaleDateString('en-GB')}` : `${startLabel} (still active)`;
+      const rangeLabel = periodEnd ? `${startLabel} to ${new Date(period.endDate).toLocaleDateString('en-GB')}` : `${startLabel} (still active)`;
       throw new ApiError(
         409,
-        `This worker was already deployed at ${period.clientName} from ${rangeLabel} — choose a mobilisation date outside that period.`
+        `This worker was already deployed at ${period.clientName} from ${rangeLabel} — choose dates outside that period.`
       );
     }
   }
@@ -430,10 +434,10 @@ export async function createMobilisation(data, actor) {
       throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
     }
     await assertNoActivePlacement(data.worker);
-    await assertNoDateOverlap('Employee', { workerId: data.worker }, data.mobilisationDate);
+    await assertNoDateOverlap('Employee', { workerId: data.worker }, data.mobilisationDate, data.checkoutDate);
   } else {
     await assertNoActiveNonEmployeePlacement(workerSnapshot.iqamaNumber);
-    await assertNoDateOverlap(data.workerType, { iqamaNumber: workerSnapshot.iqamaNumber }, data.mobilisationDate);
+    await assertNoDateOverlap(data.workerType, { iqamaNumber: workerSnapshot.iqamaNumber }, data.mobilisationDate, data.checkoutDate);
   }
   const clientDoc = await Client.findById(data.client).lean();
   if (!clientDoc) throw new ApiError(404, 'Client not found.');
@@ -804,6 +808,7 @@ export async function updateMobilisation(id, data, actor) {
   const originalWorker = mobilisation.worker;
   const originalIqama = mobilisation.iqamaNumber;
   const originalMobilisationDate = mobilisation.mobilisationDate;
+  const originalCheckoutDate = mobilisation.checkoutDate;
 
   // workerType changing (or being resent) re-resolves worker identity in
   // full — same "only touch it if the caller sent it" discipline as
@@ -868,23 +873,33 @@ export async function updateMobilisation(id, data, actor) {
   // Date-overlap re-check (2026-09-13, a real gap the user found) — same
   // reasoning as createMobilisation/approveMobilisation's own calls (see
   // assertNoDateOverlap's doc comment): retargeting a Draft/Rejected/
-  // PendingReview mobilisation's worker OR its date could land it inside a
+  // PendingReview mobilisation's worker OR its dates could land it inside a
   // period the (possibly new) worker was already deployed during. Runs
   // once, after every block above has resolved its final values, and only
-  // when the worker identity or the date actually changed from what was
+  // when the worker identity or either date actually changed from what was
   // already stored — a routine resend of unchanged values must never
   // collide with the mobilisation's own existing (or, once Approved, its
-  // own resulting Deployment's) period.
+  // own resulting Deployment's) period. checkoutDate included (2026-09-16)
+  // now that it actually affects the outcome (see assertNoDateOverlap) —
+  // clearing a previously-set one back to "still ongoing" needs the same
+  // re-check as setting or changing it does.
+  const sameOptionalDate = (a, b) => (!a && !b) || (a && b && new Date(a).getTime() === new Date(b).getTime());
   const identityOrDateChanged =
     mobilisation.workerType !== originalWorkerType ||
     String(mobilisation.worker ?? '') !== String(originalWorker ?? '') ||
     (mobilisation.iqamaNumber ?? '') !== (originalIqama ?? '') ||
-    new Date(mobilisation.mobilisationDate).getTime() !== new Date(originalMobilisationDate).getTime();
+    new Date(mobilisation.mobilisationDate).getTime() !== new Date(originalMobilisationDate).getTime() ||
+    !sameOptionalDate(mobilisation.checkoutDate, originalCheckoutDate);
   if (identityOrDateChanged) {
     if (mobilisation.workerType === 'Employee') {
-      await assertNoDateOverlap('Employee', { workerId: mobilisation.worker }, mobilisation.mobilisationDate);
+      await assertNoDateOverlap('Employee', { workerId: mobilisation.worker }, mobilisation.mobilisationDate, mobilisation.checkoutDate);
     } else {
-      await assertNoDateOverlap(mobilisation.workerType, { iqamaNumber: mobilisation.iqamaNumber }, mobilisation.mobilisationDate);
+      await assertNoDateOverlap(
+        mobilisation.workerType,
+        { iqamaNumber: mobilisation.iqamaNumber },
+        mobilisation.mobilisationDate,
+        mobilisation.checkoutDate
+      );
     }
   }
 
@@ -1192,12 +1207,12 @@ export async function saveCommercialDetails(id, data, actor) {
  * ones already passed once.
  */
 async function approveMobilisation(id, decisionNote, actor) {
-  const pending = await Mobilisation.findById(id).select('workerType worker iqamaNumber mobilisationDate').lean();
+  const pending = await Mobilisation.findById(id).select('workerType worker iqamaNumber mobilisationDate checkoutDate').lean();
   if (pending) {
     if (pending.workerType === 'Employee') {
-      await assertNoDateOverlap('Employee', { workerId: pending.worker }, pending.mobilisationDate);
+      await assertNoDateOverlap('Employee', { workerId: pending.worker }, pending.mobilisationDate, pending.checkoutDate);
     } else {
-      await assertNoDateOverlap(pending.workerType, { iqamaNumber: pending.iqamaNumber }, pending.mobilisationDate);
+      await assertNoDateOverlap(pending.workerType, { iqamaNumber: pending.iqamaNumber }, pending.mobilisationDate, pending.checkoutDate);
     }
   }
   const result = await decideApprovalStep({
