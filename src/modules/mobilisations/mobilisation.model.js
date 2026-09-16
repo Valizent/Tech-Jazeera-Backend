@@ -78,6 +78,13 @@ export const MOBILISATION_DOCUMENT_CATEGORIES = ['Contract', 'IDCopy', 'Other'];
 // rate/commission fields only ever apply to 'SupplierEmployee'.
 export const WORKER_TYPES = ['Employee', 'SupplierEmployee', 'Freelancer'];
 
+// What the `fta` amount actually covers — the user's own ask (2026-09-16):
+// a plain number gave no way to tell Food/Travel/Accommodation apart later.
+// 'FTA' means all three combined; 'FoodOnly'/'TravelOnly' are the individual
+// components. Required only once a real `fta` amount is entered — see
+// mobilisation.validation.js's withFtaTypeRefine.
+export const FTA_TYPES = ['FoodOnly', 'TravelOnly', 'FTA'];
+
 /** One uploaded file (M5). _id kept (default) — deleted individually by id,
  *  unlike Document.versions' append-only history. */
 const mobilisationDocumentSchema = new mongoose.Schema({
@@ -136,7 +143,9 @@ const mobilisationSchema = new mongoose.Schema(
     clientRate: { type: Number, default: 0, min: 0 }, // per hour
     clientCommission: { type: Number, default: 0, min: 0 }, // per hour
     fta: { type: Number, default: 0, min: 0 }, // per month — Food/Travel/Accommodation, company-paid
+    ftaType: { type: String, enum: FTA_TYPES, default: null }, // what the amount above actually covers
     allowance: { type: Number, default: 0, min: 0 }, // per month, company-paid
+    allowanceRemark: { type: String, trim: true, maxlength: 200, default: null }, // free-typed: what this allowance is for
     requiredTimesheetHours: { type: Number, default: null, min: 0 }, // contracted/target hours, set by the Coordinator
 
     // --- Section 1: subcontractor — only when workerType === 'SupplierEmployee' ---
