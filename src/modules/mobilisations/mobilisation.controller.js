@@ -39,6 +39,26 @@ export async function previousWorkers(req, res) {
   res.json(new ApiResponse('Previous workers.', workers));
 }
 
+/** GET /api/mobilisations/worker-history?iqamaNumber=... — 200 → data:
+ *  worker history | null (never a 404 — "nothing found for this Iqama" is
+ *  a normal, expected search result, not an error). */
+export async function getWorkerHistory(req, res) {
+  const history = await mobilisationService.getWorkerHistory(req.query.iqamaNumber);
+  res.json(new ApiResponse(history ? 'Worker history.' : 'No mobilisations found for this Iqama.', history));
+}
+
+/** POST /api/mobilisations/worker-history/archive — 200 → data: null */
+export async function archiveWorker(req, res) {
+  await mobilisationService.archiveWorkerData(req.body.iqamaNumber, actor(req));
+  res.json(new ApiResponse('Worker data archived.'));
+}
+
+/** POST /api/mobilisations/worker-history/unarchive — 200 → data: null */
+export async function unarchiveWorker(req, res) {
+  await mobilisationService.unarchiveWorkerData(req.body.iqamaNumber, actor(req));
+  res.json(new ApiResponse('Worker data restored.'));
+}
+
 /** GET /api/mobilisations — 200 → data: { items, total, page, pages } */
 export async function list(req, res) {
   const data = await mobilisationService.listMobilisations(req.query, actor(req));

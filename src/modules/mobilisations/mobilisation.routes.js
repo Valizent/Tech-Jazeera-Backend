@@ -30,6 +30,8 @@ import {
   mobilisationSuggestionQuerySchema,
   mobilisationIqamaLookupQuerySchema,
   mobilisationPreviousWorkersQuerySchema,
+  workerHistoryQuerySchema,
+  workerIqamaBodySchema,
 } from './mobilisation.validation.js';
 import * as mobilisationController from './mobilisation.controller.js';
 
@@ -55,6 +57,28 @@ router.get(
   '/previous-workers',
   validate({ query: mobilisationPreviousWorkersQuerySchema }),
   asyncHandler(mobilisationController.previousWorkers)
+);
+// Worker-data archive (2026-09-17, the user's own ask) — Admin-only, same
+// posture as the temporary hard-delete below but reversible and never
+// destructive. Before the /:id catch-all, same reasoning as every other
+// literal route above.
+router.get(
+  '/worker-history',
+  requireRoles('Admin'),
+  validate({ query: workerHistoryQuerySchema }),
+  asyncHandler(mobilisationController.getWorkerHistory)
+);
+router.post(
+  '/worker-history/archive',
+  requireRoles('Admin'),
+  validate({ body: workerIqamaBodySchema }),
+  asyncHandler(mobilisationController.archiveWorker)
+);
+router.post(
+  '/worker-history/unarchive',
+  requireRoles('Admin'),
+  validate({ body: workerIqamaBodySchema }),
+  asyncHandler(mobilisationController.unarchiveWorker)
 );
 router.get(
   '/export',

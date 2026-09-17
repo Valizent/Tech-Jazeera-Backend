@@ -8,6 +8,7 @@
  *     commercial-field stripping for a plain Coordinator once Approved.
  * M5: multi-file documents.
  */
+import mongoose from 'mongoose';
 import Mobilisation from './mobilisation.model.js';
 import Employee from '../employees/employee.model.js';
 import Client from '../clients/client.model.js';
@@ -271,7 +272,7 @@ export async function getFieldSuggestions(field) {
  * nobody by this Iqama has ever been mobilised.
  */
 export async function lookupWorkerByIqama(iqamaNumber) {
-  const found = await Mobilisation.findOne({ iqamaNumber, workerType: { $ne: 'Employee' } })
+  const found = await Mobilisation.findOne({ iqamaNumber, workerType: { $ne: 'Employee' }, archived: { $ne: true } })
     .sort({ createdAt: -1 })
     .select('workerName nationality phone workerType subcontractor subcontractorName')
     .lean();
@@ -299,7 +300,7 @@ export async function lookupWorkerByIqama(iqamaNumber) {
  * own most recent mobilisation snapshot as their current known details.
  */
 export async function listPreviousWorkers(workerType, subcontractorId) {
-  const filter = { workerType, iqamaNumber: { $nin: [null, ''] } };
+  const filter = { workerType, iqamaNumber: { $nin: [null, ''] }, archived: { $ne: true } };
   if (workerType === 'SupplierEmployee') {
     if (!subcontractorId) return [];
     filter.subcontractor = subcontractorId;
@@ -573,7 +574,7 @@ export async function createMobilisation(data, actor) {
  */
 async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
   const { status, client, worker, search, sortBy, sortOrder } = query;
-  const conditions = [];
+  const conditions = [{ archived: { $ne: true } }];
   if (status) conditions.push({ status });
   if (client) conditions.push({ client });
   if (worker) conditions.push({ worker });
@@ -1503,6 +1504,146 @@ export async function decideMobilisation(id, { status, decisionNote, rejectionTa
     return rejectMobilisation(id, { decisionNote, rejectionTarget }, actor);
   }
   return approveMobilisation(id, decisionNote, actor);
+}
+
+/**
+ * Worker-data archive (2026-09-17, the user's own ask — "how do I delete a
+ * freelancer's/subcontractor employee's data"). A Freelancer/SupplierEmployee
+ * worker has no Employee record of their own to exit or deactivate — their
+ * only footprint in this app is every Mobilisation (and any Deployment it
+ * produced) sharing their Iqama number. Archiving hides all of it from
+ * every list/lookup/autofill surface (findVisibleMobilisations,
+ * listPreviousWorkers, lookupWorkerByIqama, deployment.service.js's
+ * findDeployments/getStandbyWorkforce — all now filter `archived: true`
+ * out by default) WITHOUT deleting anything — a real, deliberate choice put
+ * to the user directly: real approved financial history (profit, client
+ * billing) stays intact for audit/reporting (a Saudi PDPL-friendly posture,
+ * and unlike the TEMPORARY hard-delete below, fully reversible via
+ * unarchiveWorkerData). A single-record GET by id is unaffected either
+ * way — archived data stays directly reachable, just hidden from lists.
+ *
+ * Scoped to workerType SupplierEmployee/Freelancer only — an Employee-type
+ * mobilisation's `iqamaNumber` (when present) is just a display snapshot of
+ * the real Employee record, which has its own separate lifecycle
+ * (Employee.status) this deliberately never touches.
+ */
+async function findWorkerMobilisations(iqamaNumber) {
+  return Mobilisation.find({ iqamaNumber, workerType: { $in: ['SupplierEmployee', 'Freelancer'] } })
+    .sort({ mobilisationDate: -1, createdAt: -1 })
+    .lean();
+}
+
+/** Everything known about one Freelancer/SupplierEmployee worker, archived
+ *  or not — the Worker Data page's own single data source. Returns `null`
+ *  if this Iqama has never been mobilised at all. */
+export async function getWorkerHistory(iqamaNumber) {
+  const mobilisations = await findWorkerMobilisations(iqamaNumber);
+  if (mobilisations.length === 0) return null;
+
+  const deployments = await Deployment.find({ mobilisation: { $in: mobilisations.map((m) => m._id) } })
+    .select('mobilisation status archived endDate endReason')
+    .lean();
+  const deploymentByMobilisation = new Map(deployments.map((d) => [String(d.mobilisation), d]));
+
+  const records = mobilisations.map((m) => {
+    const deployment = deploymentByMobilisation.get(String(m._id)) ?? null;
+    return {
+      mobilisationId: m._id,
+      serialNumber: m.serialNumber,
+      status: m.status,
+      archived: m.archived,
+      clientName: m.clientName,
+      mobilisationDate: m.mobilisationDate,
+      deployment: deployment
+        ? { id: deployment._id, status: deployment.status, archived: deployment.archived, endDate: deployment.endDate, endReason: deployment.endReason }
+        : null,
+    };
+  });
+
+  const latest = mobilisations[0];
+  return {
+    workerName: latest.workerName,
+    iqamaNumber: latest.iqamaNumber,
+    nationality: latest.nationality,
+    phone: latest.phone,
+    workerType: latest.workerType,
+    subcontractorName: latest.subcontractorName,
+    // A currently active engagement blocks archiving below — a worker still
+    // genuinely placed shouldn't just disappear from every list.
+    hasActiveEngagement:
+      mobilisations.some((m) => ['Draft', 'PendingReview', 'Approved'].includes(m.status)) ||
+      deployments.some((d) => d.status === 'Active'),
+    allArchived: mobilisations.every((m) => m.archived),
+    records,
+  };
+}
+
+/** Archives every Mobilisation (and its resulting Deployment, if any) for
+ *  one Freelancer/SupplierEmployee worker in a single atomic action. */
+export async function archiveWorkerData(iqamaNumber, actor) {
+  const mobilisations = await findWorkerMobilisations(iqamaNumber);
+  if (mobilisations.length === 0) throw new ApiError(404, 'No mobilisations found for this Iqama number.');
+  const mobilisationIds = mobilisations.map((m) => m._id);
+
+  const hasActiveMobilisation = mobilisations.some((m) => ['Draft', 'PendingReview', 'Approved'].includes(m.status));
+  const activeDeploymentCount = await Deployment.countDocuments({
+    mobilisation: { $in: mobilisationIds },
+    status: 'Active',
+  });
+  if (hasActiveMobilisation || activeDeploymentCount > 0) {
+    throw new ApiError(
+      409,
+      'This worker still has an active mobilisation or deployment — demobilise/complete it first.'
+    );
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const stamp = { archived: true, archivedAt: new Date(), archivedBy: actor.userId };
+      await Mobilisation.updateMany({ _id: { $in: mobilisationIds } }, stamp, { session });
+      await Deployment.updateMany({ mobilisation: { $in: mobilisationIds } }, stamp, { session });
+    });
+  } finally {
+    session.endSession();
+  }
+
+  await logAudit({
+    user: actor.userId,
+    action: 'worker.archive',
+    targetType: 'Mobilisation',
+    targetId: mobilisationIds[0],
+    meta: { iqamaNumber, workerName: mobilisations[0].workerName, mobilisationCount: mobilisationIds.length },
+    ip: actor.ip,
+  });
+}
+
+/** Reverses archiveWorkerData above — restores every Mobilisation/
+ *  Deployment for this worker back to normal visibility. */
+export async function unarchiveWorkerData(iqamaNumber, actor) {
+  const mobilisations = await findWorkerMobilisations(iqamaNumber);
+  if (mobilisations.length === 0) throw new ApiError(404, 'No mobilisations found for this Iqama number.');
+  const mobilisationIds = mobilisations.map((m) => m._id);
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const stamp = { archived: false, archivedAt: null, archivedBy: null };
+      await Mobilisation.updateMany({ _id: { $in: mobilisationIds } }, stamp, { session });
+      await Deployment.updateMany({ mobilisation: { $in: mobilisationIds } }, stamp, { session });
+    });
+  } finally {
+    session.endSession();
+  }
+
+  await logAudit({
+    user: actor.userId,
+    action: 'worker.unarchive',
+    targetType: 'Mobilisation',
+    targetId: mobilisationIds[0],
+    meta: { iqamaNumber, workerName: mobilisations[0].workerName, mobilisationCount: mobilisationIds.length },
+    ip: actor.ip,
+  });
 }
 
 // ---------------------------------------------------------------------------
