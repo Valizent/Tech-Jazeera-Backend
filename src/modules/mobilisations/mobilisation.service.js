@@ -23,6 +23,7 @@ import {
   resolveStepAuthority,
   membersOfRoles,
   annotateCanDecide,
+  notifySubmission,
 } from '../approvals/approvalEngine.service.js';
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
 import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.js';
@@ -1064,6 +1065,35 @@ export async function confirmCoordinator(id, userId, actor) {
   return mobilisation.toObject();
 }
 
+/**
+ * Real bug fix (2026-09-16, a user-reported inconsistency): "needs your
+ * review" for the CURRENT step — shared by submitMobilisation
+ * (notifySubmission, below) and approveMobilisation's own `decideApprovalStep`
+ * call (`buildStepNotification`), same "one builder, reused everywhere, so
+ * the text can never drift" convention every sibling module (Leave/
+ * Timesheet/SalaryAdvance/Reimbursement/ExitReentry/Certificate) already
+ * follows for this exact reason.
+ *
+ * Root cause of the report: Mobilisation was the ONE request type in this
+ * app that never adopted that convention. `submitMobilisation` hand-rolled
+ * its own step-0 notification (which is why Office Secretary correctly saw
+ * a notification the moment a mobilisation was first submitted), but
+ * `approveMobilisation` never passed `buildStepNotification` to
+ * `decideApprovalStep` at all — that parameter is OPTIONAL there specifically
+ * because most callers don't have anything to notify on a mid-workflow step
+ * advance-less request, but every multi-step one does and must supply it.
+ * The result: nobody was EVER notified when a mobilisation advanced past
+ * step 0 to whichever role holds step 1 (Marketing Manager in this
+ * company's real workflow) — not a permissions gap, a missing wire-up.
+ */
+function buildMobilisationStepNotification(doc) {
+  return {
+    type: 'RequestStatus',
+    title: `A mobilisation for ${doc.workerName} needs your review`,
+    url: `/mobilisations/${doc._id}`,
+  };
+}
+
 /** Draft/Rejected → PendingReview. 400 unless every coordinator has
  *  confirmed. Resolves the company-wide 'Mobilisation' ApprovalWorkflow
  *  fresh each time (no per-employee override concept here — the `worker`
@@ -1144,19 +1174,14 @@ export async function submitMobilisation(id, actor) {
     meta: { targetedResubmit },
     ip: actor.ip,
   });
-  const notifyStepRoles = targetedResubmit ? mobilisation.steps?.[mobilisation.currentStep]?.roles : workflow?.steps[0]?.roles;
-  if (notifyStepRoles) {
-    const memberIds = await membersOfRoles(notifyStepRoles);
-    await Promise.all(
-      memberIds.map((userId) =>
-        notifyUser(userId, {
-          type: 'RequestStatus',
-          title: `A mobilisation for ${mobilisation.workerName} needs your review`,
-          url: `/mobilisations/${mobilisation._id}`,
-        })
-      )
-    );
-  }
+  // legacyAllowedRoles: ['Admin'] — same fallback approveMobilisation's own
+  // legacy path already uses, so a company that hasn't configured a real
+  // 'Mobilisation' ApprovalWorkflow yet at least notifies whoever CAN
+  // configure one, instead of silently notifying nobody (this file's own
+  // previous hand-rolled version did exactly that — `workflow?.steps[0]`
+  // is undefined when there's no workflow, so the notification was always
+  // skipped entirely in that case).
+  await notifySubmission(mobilisation.toObject(), buildMobilisationStepNotification, ['Admin']);
   return mobilisation.toObject();
 }
 
@@ -1277,6 +1302,7 @@ async function approveMobilisation(id, decisionNote, actor) {
       const memberIds = doc.coordinators.map((c) => (c.user._id ?? c.user).toString());
       await Promise.all(memberIds.map((userId) => notifyUser(userId, notification)));
     },
+    buildStepNotification: buildMobilisationStepNotification,
   });
 
   // Approving a non-last step leaves status PendingReview and advances

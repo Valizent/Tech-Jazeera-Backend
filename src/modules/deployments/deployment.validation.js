@@ -28,9 +28,27 @@ const strictOptionalBoolean = z.preprocess((v) => {
   return v;
 }, z.boolean().optional());
 
+// `limit` max raised 5000 (2026-09-16, the user's own ask) — the client's
+// own paginated register still only ever requests 20 at a time; the new
+// "Overview" modal (DeploymentOverviewModal.jsx) is the one real caller
+// that asks for everything at once, to filter/browse it like a spreadsheet
+// client-side. Same ceiling as EXPORT_MAX_ROWS in deployment.service.js —
+// both exist purely as a sanity bound, not a real pagination need at this
+// company's actual scale.
 export const listDeploymentsSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  limit: z.coerce.number().int().min(1).max(5000).default(20),
+  worker: id.optional(),
+  client: id.optional(),
+  status: z.preprocess(emptyToUndef, z.enum(DEPLOYMENT_STATUSES).optional()),
+  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+});
+
+/** Same filters as listDeploymentsSchema, minus pagination — an export
+ *  fetches every matching row at once (see deployment.service.js's
+ *  exportDeployments / EXPORT_MAX_ROWS), same convention
+ *  mobilisation.validation.js's own exportMobilisationsSchema uses. */
+export const exportDeploymentsSchema = z.object({
   worker: id.optional(),
   client: id.optional(),
   status: z.preprocess(emptyToUndef, z.enum(DEPLOYMENT_STATUSES).optional()),
