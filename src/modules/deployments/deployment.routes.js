@@ -37,7 +37,10 @@
  * scoped narrowly to the descriptive fields alone (see
  * deployment.validation.js's updateDeploymentSchema) — Admin-only until
  * granted; MM granted write immediately (see
- * src/scripts/grant-deployments-edit.js).
+ * src/scripts/grant-deployments-edit.js). GET /export (2026-09-16, the
+ * user's own ask) is gated the same as the register itself
+ * (`canReadDeployments`) — same filters, no pagination, downloads a .xlsx
+ * instead of JSON (see deployment.export.js).
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
@@ -47,6 +50,7 @@ import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.
 import { validate } from '../../middleware/validate.js';
 import {
   listDeploymentsSchema,
+  exportDeploymentsSchema,
   deploymentIdParamSchema,
   monthlyHoursEntryParamSchema,
   updateDeploymentSchema,
@@ -74,8 +78,14 @@ const canReadDeployments = asyncHandler(async (req, res, next) => {
 });
 
 router.get('/', canReadDeployments, validate({ query: listDeploymentsSchema }), asyncHandler(deploymentController.list));
-// Before the /:id catch-all, or "standby" is read as a deployment id.
+// Before the /:id catch-all, or "standby"/"export" are read as a deployment id.
 router.get('/standby', canReadDeployments, asyncHandler(deploymentController.standby));
+router.get(
+  '/export',
+  canReadDeployments,
+  validate({ query: exportDeploymentsSchema }),
+  asyncHandler(deploymentController.exportAll)
+);
 router.get(
   '/:id',
   canReadDeployments,

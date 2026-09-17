@@ -677,11 +677,11 @@ export async function getStandbyWorkforce() {
   return { ownEmployees, subcontractedWorkers };
 }
 
-/**
- * List deployments (the register / a worker's history / a client's placements).
- * Filters: worker, client, status. Worker/mobilisation are populated for display.
- */
-export async function listDeployments({ page, limit, worker, client, status, sortOrder }, actor) {
+/** Shared by listDeployments and exportDeployments — the actual filter/
+ *  visibility/commercial-stripping logic neither should duplicate, same
+ *  "one real query builder, callers just differ on pagination" convention
+ *  mobilisation.service.js's own findVisibleMobilisations already follows. */
+async function findDeployments({ worker, client, status, sortOrder }, actor, { skip, limit } = {}) {
   // Fixed 2026-09-15, a real QA-audit-found gap — A1: `?worker=` accepted
   // any employee id with no ownership check, unlike the single-record read
   // right below (getDeployment) — a Coordinator could pull a foreign
@@ -695,14 +695,11 @@ export async function listDeployments({ page, limit, worker, client, status, sor
   if (status) filter.status = status;
 
   const sort = { startDate: sortOrder === 'asc' ? 1 : -1, _id: -1 };
+  let query = Deployment.find(filter).sort(sort);
+  if (skip) query = query.skip(skip);
+  if (limit) query = query.limit(limit);
   const [items, total] = await Promise.all([
-    Deployment.find(filter)
-      .sort(sort)
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .populate('worker', 'fullName employeeId')
-      .populate('mobilisation', 'serialNumber')
-      .lean(),
+    query.populate('worker', 'fullName employeeId').populate('mobilisation', 'serialNumber').lean(),
     Deployment.countDocuments(filter),
   ]);
   // otAmount is commercial (see getDeployment's own doc comment) — this list
@@ -714,7 +711,29 @@ export async function listDeployments({ page, limit, worker, client, status, sor
   const strippedItems = canSeeCommercial
     ? items
     : items.map((d) => ({ ...d, monthlyHours: d.monthlyHours.map(({ otAmount, ...rest }) => rest) }));
-  return { items: strippedItems, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+  return { items: strippedItems, total };
+}
+
+/**
+ * List deployments (the register / a worker's history / a client's placements).
+ * Filters: worker, client, status. Worker/mobilisation are populated for display.
+ */
+export async function listDeployments({ page, limit, ...filters }, actor) {
+  const { items, total } = await findDeployments(filters, actor, { skip: (page - 1) * limit, limit });
+  return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+}
+
+// A sanity bound, not a real pagination need at this company's actual
+// scale — same value/reasoning as mobilisation.service.js's own
+// EXPORT_MAX_ROWS.
+const DEPLOYMENT_EXPORT_MAX_ROWS = 5000;
+
+/** Every deployment matching the caller's current filters/visibility, one
+ *  row each, no pagination — for the downloadable Excel workbook
+ *  (deployment.export.js). */
+export async function exportDeployments(filters, actor) {
+  const { items } = await findDeployments(filters, actor, { limit: DEPLOYMENT_EXPORT_MAX_ROWS });
+  return items;
 }
 
 /**

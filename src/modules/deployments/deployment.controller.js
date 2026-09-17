@@ -3,6 +3,7 @@
  */
 import ApiResponse from '../../utils/ApiResponse.js';
 import * as deploymentService from './deployment.service.js';
+import { buildDeploymentsListXlsx } from './deployment.export.js';
 
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
 
@@ -10,6 +11,20 @@ const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip }
 export async function list(req, res) {
   const data = await deploymentService.listDeployments(req.query, actor(req));
   res.json(new ApiResponse('Deployments.', data));
+}
+
+/** GET /api/deployments/export?... — downloads a .xlsx, one row per
+ *  deployment matching the caller's current filters/visibility (same rules
+ *  as `list`). */
+export async function exportAll(req, res) {
+  const deployments = await deploymentService.exportDeployments(req.query, actor(req));
+  const buffer = await buildDeploymentsListXlsx(deployments);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="deployments_${new Date().toISOString().slice(0, 10)}.xlsx"`
+  );
+  res.send(buffer);
 }
 
 /** GET /api/deployments/standby — 200 → data: { ownEmployees, subcontractedWorkers } */
