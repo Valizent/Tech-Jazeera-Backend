@@ -677,6 +677,49 @@ export async function getStandbyWorkforce() {
   return { ownEmployees, subcontractedWorkers };
 }
 
+// Every Mobilisation field the Overview modal/Excel export show
+// (2026-09-17, the user's own ask — "need every single data entered in
+// mobilisation" surfaced in the register's own Overview, not just this
+// deployment's own snapshot fields). Mirrors mobilisation.export.js's own
+// WORKER_COLUMNS + RATE_COLUMNS field list exactly — the set that module
+// already treats as export-worthy — MINUS whatever's a pure duplicate of a
+// field Deployment already snapshots (workerName/workerType/clientName/
+// subcontractorName/site/requiredTimesheetHours/mobilisationDate, the last
+// being byte-for-byte Deployment.startDate — see deployment.model.js's own
+// doc comment). `coordinators`/`documents`/the quotation-PO reference fields/
+// `remark` are deliberately left out too — mobilisation.export.js's own
+// established column list already excludes them, so this stays consistent
+// with what THIS app already calls "the exportable mobilisation data",
+// rather than inventing a broader definition just for this view.
+const MOBILISATION_OVERVIEW_FIELDS =
+  'serialNumber jobTitle iqamaNumber nationality phone checkoutDate fta ftaType allowance allowanceRemark ' +
+  'clientRate clientCommission subcontractorRate subcontractorCommission ' +
+  'otClientRate otEmployeeRate profitPerHour profitPerMonth otProfitPerHour';
+
+// The commercial subset of the above — stripped from the populated
+// `mobilisation` sub-object for anyone without 'deploymentsHoursDecide' read
+// access, same sensitivity class and same gate as otAmount/profit elsewhere
+// in this file (see stripCommercialMonthlyHours/getDeployment). Never trust
+// the client, and never even send what an unauthorized viewer shouldn't have.
+const MOBILISATION_COMMERCIAL_KEYS = [
+  'clientRate',
+  'clientCommission',
+  'subcontractorRate',
+  'subcontractorCommission',
+  'otClientRate',
+  'otEmployeeRate',
+  'profitPerHour',
+  'profitPerMonth',
+  'otProfitPerHour',
+];
+
+function stripMobilisationCommercial(mobilisation) {
+  if (!mobilisation) return mobilisation;
+  const clean = { ...mobilisation };
+  for (const key of MOBILISATION_COMMERCIAL_KEYS) delete clean[key];
+  return clean;
+}
+
 /** Shared by listDeployments and exportDeployments — the actual filter/
  *  visibility/commercial-stripping logic neither should duplicate, same
  *  "one real query builder, callers just differ on pagination" convention
@@ -699,18 +742,26 @@ async function findDeployments({ worker, client, status, sortOrder }, actor, { s
   if (skip) query = query.skip(skip);
   if (limit) query = query.limit(limit);
   const [items, total] = await Promise.all([
-    query.populate('worker', 'fullName employeeId').populate('mobilisation', 'serialNumber').lean(),
+    query
+      .populate('worker', 'fullName employeeId')
+      .populate('mobilisation', MOBILISATION_OVERVIEW_FIELDS)
+      .lean(),
     Deployment.countDocuments(filter),
   ]);
-  // otAmount is commercial (see getDeployment's own doc comment) — this list
-  // isn't currently rendered anywhere on the client, but never send it to a
-  // non-decider regardless, same "never even send it" rule as the
-  // single-record read.
+  // otAmount/mobilisation's own commercial fields are both commercial data
+  // (see getDeployment's own doc comment) — this list isn't currently
+  // rendered anywhere but the Overview modal/Excel export, but never send
+  // either to a non-decider regardless, same "never even send it" rule as
+  // the single-record read.
   // 'read' — see the sibling comment in updateMonthlyHours above.
   const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor, 'read') : false;
   const strippedItems = canSeeCommercial
     ? items
-    : items.map((d) => ({ ...d, monthlyHours: d.monthlyHours.map(({ otAmount, ...rest }) => rest) }));
+    : items.map((d) => ({
+        ...d,
+        monthlyHours: d.monthlyHours.map(({ otAmount, ...rest }) => rest),
+        mobilisation: stripMobilisationCommercial(d.mobilisation),
+      }));
   return { items: strippedItems, total };
 }
 
