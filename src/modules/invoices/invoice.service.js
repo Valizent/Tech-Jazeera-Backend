@@ -9,32 +9,7 @@ import { nextSequence } from '../quotations/counter.model.js';
 import Invoice from './invoice.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
-
-const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
-
-/** Identical math to quotation.service.js's computeTotals — kept local
- *  since an invoice freezes its own totals at creation, never recomputed
- *  from a quotation that might change afterward. */
-function computeTotals(lineItems) {
-  let subtotal = 0;
-  let discountTotal = 0;
-  let taxTotal = 0;
-  for (const li of lineItems) {
-    const gross = li.quantity * li.unitPrice;
-    const discount = gross * ((li.discount ?? 0) / 100);
-    const net = gross - discount;
-    const tax = net * ((li.taxRate ?? 0) / 100);
-    subtotal += gross;
-    discountTotal += discount;
-    taxTotal += tax;
-  }
-  return {
-    subtotal: money(subtotal),
-    discountTotal: money(discountTotal),
-    taxTotal: money(taxTotal),
-    grandTotal: money(subtotal - discountTotal + taxTotal),
-  };
-}
+import { computeTotals } from '../../utils/moneyMath.js';
 
 async function newInvoiceNumber() {
   const seq = await nextSequence('invoice');

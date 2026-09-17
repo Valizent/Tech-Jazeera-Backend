@@ -5,10 +5,7 @@ import Subcontractor from './subcontractor.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 export async function listSubcontractors({ page, limit, search, status, sortBy, sortOrder }) {
   const conditions = [];

@@ -6,13 +6,12 @@
  */
 import PDFDocument from 'pdfkit';
 import { drawLetterhead, LETTERHEAD_HEIGHT } from '../companySettings/letterhead.pdf.js';
+import { formatMoney as money } from '../../utils/pdfFormat.js';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
-
-const money = (n) => `SAR ${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** `company`/`logo` are optional — a payslip generated before any company
  *  profile is filled in still works, just without a letterhead. */

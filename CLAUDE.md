@@ -1322,3 +1322,32 @@ when requested):**
   branches sitting in it (confirmed identical to each other and not unique
   unmerged work) — both are GitHub-visible/destructive-ish actions awaiting
   the user's explicit go-ahead, not done in this pass.
+- **Duplicate-code cleanup, 12 of ~16 findings COMPLETE** — the same
+  external audit's duplication table, worked through item by item (not one
+  giant refactor), each extraction independently verified: `escapeRegex`
+  (9 files), PDF money/date formatting, the `money2dp` Zod refinement,
+  image-upload error/filter middleware, and — the financially significant
+  one — `computeTotals`/`lineAmount` (Invoice/Quotation's authoritative
+  money math), all consolidated into new `server/src/utils/` files. On the
+  client: `fileSize`/`profitClass` formatters, a shared `ProfileField` UI
+  component (3 profile pages), a shared `useEmployeePicker` query hook (4
+  of 5 pickers — the 5th branches between two different entity types, not
+  worth restructuring for one line of overlap), a shared list-sort-toggle
+  helper, and a shared outside-click-detection hook (the avatar menu in
+  both staff/ESS layouts). `computeTotals` had an explicit prior "kept
+  local on purpose" comment reasoning that sharing it would create live
+  coupling between an Invoice and its source Quotation — on inspection that
+  doesn't actually hold (a shared pure function creates no such coupling;
+  only the formula is shared, not any data), confirmed numerically before
+  merging. 4 items deliberately left alone: `monthStrOf` (audited as
+  "duplicated" but only appears once per side — nothing to actually
+  de-duplicate), the PDF table-drawing closures (stateful, document-specific
+  page-break logic — real complexity for little gain), and 2 cosmetic/
+  audit-flagged-as-low-value items. Verified: server lint+tests (38/38)
+  re-run after every group, a direct numeric check that summed per-line
+  `lineAmount()` equals `computeTotals()`'s own grand total, client
+  lint+build clean throughout, and a live browser click-through as a real
+  Admin (outside-click-to-close, both list pages' sort toggle in both
+  directions via network-request inspection, and a real Mobilisation's
+  profit figures rendering in the correct color). See
+  `docs/QA-AUDIT-2026-09-15-notes.md`'s second 2026-09-17 follow-up.

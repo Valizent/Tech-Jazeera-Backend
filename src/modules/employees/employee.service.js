@@ -11,6 +11,7 @@ import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { hashPassword, generateTempPassword } from '../auth/auth.service.js';
 import { logAudit } from '../audit/audit.service.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 /**
  * A document counts as "needs attention" when it expires within this many
@@ -47,11 +48,6 @@ const EXPIRY_FIELDS = [
   'drivingLicense.expiry',
 ];
 
-/** Escape user text before embedding it in a $regex — prevents both regex
- *  injection and accidental syntax errors from names like "O'Brien (Ops)". */
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /**
  * Paginated, searchable, sortable listing.

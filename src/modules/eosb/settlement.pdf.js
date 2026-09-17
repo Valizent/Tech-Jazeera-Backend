@@ -4,9 +4,7 @@
  */
 import PDFDocument from 'pdfkit';
 import { drawLetterhead, drawSignatoryBlock, LETTERHEAD_HEIGHT } from '../companySettings/letterhead.pdf.js';
-
-const money = (n) => `SAR ${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const shortDate = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+import { formatMoney as money, formatShortDate as shortDate } from '../../utils/pdfFormat.js';
 
 const EXIT_REASON_LABELS = {
   Resignation: 'Resignation',

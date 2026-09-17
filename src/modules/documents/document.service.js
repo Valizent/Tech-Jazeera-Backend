@@ -10,6 +10,7 @@ import Client from '../clients/client.model.js';
 import env from '../../config/env.js';
 import logger from '../../config/logger.js';
 import ApiError from '../../utils/ApiError.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 import {
   DOCUMENT_RESOURCE_TYPE,
   signedDownloadUrl,
@@ -20,10 +21,6 @@ import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 
 /** Documents expiring within this many days (or already expired) are "expiring". */
 export const EXPIRY_WARNING_DAYS = 30;
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /** Refuse to attach a document to an owner that doesn't exist. */
 async function assertOwnerExists(ownerType, owner) {

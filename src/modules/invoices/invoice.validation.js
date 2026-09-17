@@ -5,25 +5,14 @@
  */
 import { z } from 'zod';
 import { INVOICE_STATUSES } from './invoice.model.js';
+import { money2dp } from '../../utils/money2dp.js';
 
 const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id.');
 const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
 
-// Fixed 2026-09-15, a real QA-audit-found gap — F4: `min(0.01)` alone
-// accepted a sub-cent amount like 0.015, which the atomic $round updates
-// downstream then round independently for the stored payment vs. the
-// running amountPaid/balanceDue totals — two DIFFERENT numbers computed
-// from the same unrounded input, permanently desyncing the ledger from the
-// cached balance. Rejecting anything finer than a cent here is the honest
-// fix — SAR has no sub-halala denomination to round a payment amount TO in
-// the first place. `Number(n.toFixed(2)) === n` is exact for this check:
-// both sides go through the identical float rounding, so a real 2dp value
-// like 1.10 compares equal to itself, while 0.015 does not.
-const money2dp = (message) =>
-  z.coerce
-    .number({ error: 'Amount is required.' })
-    .min(0.01)
-    .refine((n) => Number(n.toFixed(2)) === n, { message });
+// Fixed 2026-09-15, a real QA-audit-found gap — F4 (see utils/money2dp.js
+// for the full reasoning): rejects any amount finer than a cent, which
+// would otherwise desync the payment ledger from the cached balance.
 
 export const createInvoiceSchema = z.object({
   quotation: id,

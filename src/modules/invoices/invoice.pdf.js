@@ -4,15 +4,8 @@
  */
 import PDFDocument from 'pdfkit';
 import { drawLetterhead, LETTERHEAD_HEIGHT } from '../companySettings/letterhead.pdf.js';
-
-const money = (n) => `SAR ${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const shortDate = (d) => (d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—');
-
-function lineAmount(li) {
-  const gross = li.quantity * li.unitPrice;
-  const net = gross - gross * ((li.discount ?? 0) / 100);
-  return net + net * ((li.taxRate ?? 0) / 100);
-}
+import { formatMoney as money, formatShortDate as shortDate } from '../../utils/pdfFormat.js';
+import { lineAmount } from '../../utils/moneyMath.js';
 
 /** `company`/`logo` are optional — a PDF generated before any company
  *  profile is filled in still works, just without a letterhead. */

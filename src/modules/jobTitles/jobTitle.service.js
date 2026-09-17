@@ -7,10 +7,7 @@ import JobTitle from './jobTitle.model.js';
 import { isApprovalRoleMember } from '../approvals/approvals.service.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 /**
  * Admin and Manager always may manage the list; beyond that, any member of

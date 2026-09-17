@@ -11,10 +11,7 @@ import Employee from '../employees/employee.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 export async function createAsset(data, actor) {
   const existing = await Asset.findOne({ assetTag: data.assetTag.toUpperCase() }).lean();

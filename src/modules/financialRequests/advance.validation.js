@@ -3,6 +3,7 @@
  */
 import { z } from 'zod';
 import { ADVANCE_STATUSES } from './advance.model.js';
+import { money2dp } from '../../utils/money2dp.js';
 
 const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id.');
 const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
@@ -18,17 +19,12 @@ export const decideAdvanceSchema = z.object({
   decisionNote: z.preprocess(emptyToUndef, z.string().trim().max(500).optional()),
 });
 
-// Fixed 2026-09-15, a real QA-audit-found gap — F4's sibling case (a
-// sub-cent repayment would desync the repayments ledger from the derived
-// outstanding balance the exact same way a sub-cent invoice payment did;
-// see invoice.validation.js's money2dp for the full reasoning). Scoped to
-// this field only — submitAdvanceSchema's `amount` above never flows
-// through the ledger-append pipeline this fixes, so it's untouched.
-const money2dp = (message) =>
-  z.coerce
-    .number({ error: 'Amount is required.' })
-    .min(0.01)
-    .refine((n) => Number(n.toFixed(2)) === n, { message });
+// F4's sibling case (a sub-cent repayment would desync the repayments
+// ledger from the derived outstanding balance the exact same way a
+// sub-cent invoice payment did — see utils/money2dp.js for the full
+// reasoning). Scoped to this field only — submitAdvanceSchema's `amount`
+// above never flows through the ledger-append pipeline this fixes, so it's
+// untouched.
 
 export const addRepaymentSchema = z.object({
   amount: money2dp('Amount cannot have more than 2 decimal places.'),

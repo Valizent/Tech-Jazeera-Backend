@@ -7,16 +7,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { cloudinary, CloudinaryStorage } from '../../config/cloudinary.js';
 import env from '../../config/env.js';
-import ApiError from '../../utils/ApiError.js';
+import { imageFileFilter, wrapImageUpload } from '../../utils/imageUpload.js';
 
 export const NFC_MEDIA_DIR = path.join(env.uploadDir, 'nfc');
 fs.mkdirSync(NFC_MEDIA_DIR, { recursive: true });
 
-const EXT = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-};
 const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
 
 const storage = new CloudinaryStorage({
@@ -27,24 +22,10 @@ const storage = new CloudinaryStorage({
   },
 });
 
-function fileFilter(req, file, cb) {
-  if (!EXT[file.mimetype]) return cb(new ApiError(400, 'Upload a PNG, JPG, or WEBP image.'));
-  cb(null, true);
-}
+const upload = multer({ storage, fileFilter: imageFileFilter, limits: { fileSize: MAX_BYTES } }).single('image');
 
-const upload = multer({ storage, fileFilter, limits: { fileSize: MAX_BYTES } }).single('image');
-
-/** Wrap multer so its errors become our standard ApiError. Field name: `image`. */
-export function uploadNfcImage(req, res, next) {
-  upload(req, res, (err) => {
-    if (!err) return next();
-    if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_SIZE') return next(new ApiError(400, 'Image is too large (maximum 2 MB).'));
-      return next(new ApiError(400, `Upload error: ${err.message}`));
-    }
-    return next(err);
-  });
-}
+/** Field name: `image`. */
+export const uploadNfcImage = wrapImageUpload(upload, '2 MB');
 
 /** Best-effort delete of a stored media file (on replace/remove). */
 export async function deleteNfcMedia(filename) {
