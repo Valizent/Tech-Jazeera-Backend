@@ -33,6 +33,16 @@ export async function createAsset(data, actor) {
 }
 
 export async function updateAsset(id, data, actor) {
+  // Fixed 2026-09-17, a follow-up QA-audit gap: getAsset already checks
+  // team ownership on a currently-assigned asset (below); update never did,
+  // so a Coordinator granted asset write could edit an asset in use by a
+  // foreign team. A no-op for any non-Coordinator role, and an unassigned
+  // asset (nobody's) stays editable, same convention as getAsset.
+  const existing = await Asset.findById(id).lean();
+  if (!existing) throw new ApiError(404, 'Asset not found.');
+  if (existing.currentEmployee) {
+    await assertEmployeeVisibleToActor(existing.currentEmployee, actor);
+  }
   const asset = await Asset.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean();
   if (!asset) throw new ApiError(404, 'Asset not found.');
   await logAudit({
@@ -214,7 +224,19 @@ export async function getAsset(id, actor) {
   if (asset.currentEmployee) {
     await assertEmployeeVisibleToActor(asset.currentEmployee._id, actor);
   }
-  const history = await AssetAssignment.find({ asset: id }).sort({ assignedAt: -1 }).lean();
+  let history = await AssetAssignment.find({ asset: id }).sort({ assignedAt: -1 }).lean();
+  // Fixed 2026-09-17, a follow-up QA-audit gap: the ownership check above
+  // only fires while the asset is CURRENTLY assigned — once returned,
+  // currentEmployee goes back to null and the full history (every past
+  // assignment, any team) was returned unfiltered. Rather than blocking the
+  // whole (now-unassigned, nobody's) asset, filter the history itself —
+  // same team lookup listAssets already does. A no-op for any
+  // non-Coordinator role.
+  if (actor?.role === 'Coordinator') {
+    const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+    const teamIdSet = new Set(teamIds.map(String));
+    history = history.filter((h) => teamIdSet.has(String(h.employee)));
+  }
   return { ...asset, history };
 }
 

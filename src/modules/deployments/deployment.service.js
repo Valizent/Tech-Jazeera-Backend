@@ -456,6 +456,12 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
 export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  // Fixed 2026-09-17, a follow-up QA-audit gap: addMonthlyHours/
+  // updateMonthlyHours both already carry this same team-ownership check
+  // (see their own 2026-09-15 fix comments) — this sibling was missed, so a
+  // Coordinator granted 'deploymentsHoursDecide' could decide a foreign
+  // team's entry. A no-op for any non-Coordinator role.
+  await assertEmployeeVisibleToActor(deployment.worker, actor);
   const entry = deployment.monthlyHours.id(entryId);
   if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
   if (entry.status !== 'Pending') {
@@ -736,6 +742,18 @@ async function findDeployments({ worker, client, status, sortOrder }, actor, { s
   if (worker) filter.worker = worker;
   if (client) filter.client = client;
   if (status) filter.status = status;
+  // Fixed 2026-09-17, a follow-up QA-audit gap: the check above only ever
+  // fired when the caller explicitly passed `?worker=`. The plain,
+  // unfiltered list/export (the normal way the register page is opened)
+  // built no ownership condition at all, so a Coordinator saw every team's
+  // deployments. Same scoping shape as listAssets' own Coordinator branch —
+  // a SupplierEmployee/Freelancer deployment has no linked Employee
+  // (`worker: null`), so there's nothing to scope for it, same convention
+  // getDeployment's own comment already established for a single read.
+  if (actor?.role === 'Coordinator') {
+    const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+    filter.$or = [{ worker: null }, { worker: { $in: teamIds } }];
+  }
 
   const sort = { startDate: sortOrder === 'asc' ? 1 : -1, _id: -1 };
   let query = Deployment.find(filter).sort(sort);
