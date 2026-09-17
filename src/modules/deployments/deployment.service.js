@@ -642,7 +642,7 @@ export async function getStandbyWorkforce() {
     .lean();
 
   const latestPerWorker = await Mobilisation.aggregate([
-    { $match: { workerType: { $ne: 'Employee' }, iqamaNumber: { $ne: null } } },
+    { $match: { workerType: { $ne: 'Employee' }, iqamaNumber: { $ne: null }, archived: { $ne: true } } },
     { $sort: { mobilisationDate: -1, createdAt: -1 } },
     { $group: { _id: '$iqamaNumber', latest: { $first: '$$ROOT' } } },
     { $replaceRoot: { newRoot: '$latest' } },
@@ -732,7 +732,7 @@ async function findDeployments({ worker, client, status, sortOrder }, actor, { s
   // opening one of those deployments directly correctly 403s. A no-op for
   // any non-Coordinator role.
   if (worker) await assertEmployeeVisibleToActor(worker, actor);
-  const filter = {};
+  const filter = { archived: { $ne: true } };
   if (worker) filter.worker = worker;
   if (client) filter.client = client;
   if (status) filter.status = status;

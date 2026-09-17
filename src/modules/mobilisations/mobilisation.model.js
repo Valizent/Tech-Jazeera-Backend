@@ -219,6 +219,22 @@ const mobilisationSchema = new mongoose.Schema(
     // the first place (see mobilisation.service.js's rejectMobilisation).
     // Always cleared back to null on a successful resubmit.
     rejectionTarget: { type: String, enum: REJECTION_TARGETS, default: null },
+    // Worker-data archive (2026-09-17, the user's own ask — a real way to
+    // remove a Freelancer/SupplierEmployee worker's data once they're no
+    // longer relevant, since they have no Employee record of their own to
+    // exit/deactivate). Deliberately a soft flag, not a delete: PDPL-style
+    // recoverability, and this record may carry real approved financial
+    // history (profit, client billing) that shouldn't just vanish. Set by
+    // mobilisation.service.js's archiveWorkerData/unarchiveWorkerData,
+    // ALWAYS together with every other Mobilisation (and any resulting
+    // Deployment) sharing the same iqamaNumber — never set on a single
+    // record in isolation. Every shared list/lookup query (findVisible
+    // Mobilisations, listPreviousWorkers, lookupWorkerByIqama) excludes
+    // `archived: true` by default; a single-record GET by id is unaffected
+    // — archived data stays reachable directly, just hidden from lists.
+    archived: { type: Boolean, default: false },
+    archivedAt: { type: Date, default: null },
+    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     workflow: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalWorkflow', default: null },
     workflowName: { type: String, default: null },
     steps: {

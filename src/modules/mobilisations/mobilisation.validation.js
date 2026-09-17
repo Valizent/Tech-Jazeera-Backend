@@ -230,6 +230,17 @@ export const mobilisationPreviousWorkersQuerySchema = z.object({
   subcontractor: z.preprocess(emptyToUndef, id('subcontractor').optional()),
 });
 
+/** GET /mobilisations/worker-history?iqamaNumber=... and the two POST
+ *  archive/unarchive actions below it — same full-10-digit-only rule as the
+ *  Iqama lookup above. See mobilisation.service.js's getWorkerHistory/
+ *  archiveWorkerData/unarchiveWorkerData. */
+export const workerHistoryQuerySchema = z.object({
+  iqamaNumber: z.string().trim().regex(iqamaRegex, 'Iqama number must be exactly 10 digits.'),
+});
+export const workerIqamaBodySchema = z.object({
+  iqamaNumber: z.string().trim().regex(iqamaRegex, 'Iqama number must be exactly 10 digits.'),
+});
+
 export const mobilisationCoordinatorParamSchema = z.object({
   id: id('mobilisation'),
   userId: id('user'),

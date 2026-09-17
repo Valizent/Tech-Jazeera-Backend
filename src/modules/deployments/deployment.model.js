@@ -207,6 +207,14 @@ const deploymentSchema = new mongoose.Schema(
     monthlyHours: { type: [monthlyHoursSchema], default: [] },
 
     notes: { type: String, trim: true, maxlength: 1000 },
+
+    // Worker-data archive — mirrors Mobilisation's own field exactly (see
+    // that model's own doc comment). Set together with the source
+    // Mobilisation by mobilisation.service.js's archiveWorkerData/
+    // unarchiveWorkerData, never independently.
+    archived: { type: Boolean, default: false },
+    archivedAt: { type: Date, default: null },
+    archivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   },
   { timestamps: true }
 );
