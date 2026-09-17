@@ -10,38 +10,7 @@ import Client from '../clients/client.model.js';
 import { nextSequence } from './counter.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
-
-/** Round to 2 decimal places (money). */
-const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
-
-/**
- * Compute quotation totals from line items.
- *   gross    = quantity × unitPrice
- *   discount = gross × discount%          (per line)
- *   net      = gross − discount
- *   tax      = net × taxRate%             (per line, on the discounted amount)
- *   grand    = subtotal − discountTotal + taxTotal
- */
-export function computeTotals(lineItems) {
-  let subtotal = 0;
-  let discountTotal = 0;
-  let taxTotal = 0;
-  for (const li of lineItems) {
-    const gross = li.quantity * li.unitPrice;
-    const discount = gross * ((li.discount ?? 0) / 100);
-    const net = gross - discount;
-    const tax = net * ((li.taxRate ?? 0) / 100);
-    subtotal += gross;
-    discountTotal += discount;
-    taxTotal += tax;
-  }
-  return {
-    subtotal: money(subtotal),
-    discountTotal: money(discountTotal),
-    taxTotal: money(taxTotal),
-    grandTotal: money(subtotal - discountTotal + taxTotal),
-  };
-}
+import { computeTotals } from '../../utils/moneyMath.js';
 
 /** Fetch a client and its name, or 404. */
 async function resolveClient(clientId) {

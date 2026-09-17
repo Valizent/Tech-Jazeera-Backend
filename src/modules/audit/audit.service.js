@@ -7,6 +7,7 @@
  */
 import AuditLog from './audit.model.js';
 import logger from '../../config/logger.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 /**
  * Record an audit event. Await it if you like — it never throws.
@@ -24,10 +25,6 @@ export async function logAudit(entry) {
   } catch (err) {
     logger.error(`Audit write failed for action "${entry.action}": ${err.message}`);
   }
-}
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**

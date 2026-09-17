@@ -31,10 +31,7 @@ import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.
 import { nextSequence } from '../quotations/counter.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import { createDeploymentFromMobilisation } from '../deployments/deployment.service.js';
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 

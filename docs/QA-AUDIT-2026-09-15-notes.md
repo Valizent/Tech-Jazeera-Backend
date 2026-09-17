@@ -675,3 +675,94 @@ All throwaway data (2 Users, 2 Employees, 2 Clients, 2 Mobilisations, 2
 Deployments, 4 Assets, 2 AssetAssignments) and the temporary verification/
 cleanup scripts were deleted afterward; confirmed zero remaining records
 matching the test's naming pattern.
+
+## Follow-up (2026-09-17): duplicate-code cleanup, 12 of ~16 findings COMPLETE
+
+The same external handoff audit's duplication table (~16 pairs/groups) plus
+its `escapeRegex`-in-9-files and 5-file employee-picker findings, worked
+through item by item rather than as one giant refactor — each extraction
+kept small and independently verified. Not everything the audit listed was
+worth doing; see Scope below for what was deliberately skipped and why.
+
+### What was extracted
+
+- **`escapeRegex`** (9 server files, byte-identical) → `server/src/utils/escapeRegex.js`.
+- **PDF money/date formatting** (`money`/`shortDate`, Invoice/Quotation/
+  Settlement/Payroll PDFs) → `server/src/utils/pdfFormat.js`.
+- **`money2dp`** (the sub-cent-rejecting Zod refinement, advance/invoice
+  validation) → `server/src/utils/money2dp.js`.
+- **Image-upload error wrapper + file-filter** (avatar/logo/NFC media
+  uploads — the NFC one used a differently-shaped but functionally
+  identical `EXT` lookup, unified into the same Set-based filter) →
+  `server/src/utils/imageUpload.js`.
+- **`computeTotals`/`lineAmount`** (the authoritative invoice/quotation
+  money math) → `server/src/utils/moneyMath.js`, reused by both services
+  and both PDF generators; `lineAmount` also extracted client-side (its own
+  file, `client/src/lib/utils.js` — client/server can't share a file across
+  repos) for the 2 view pages. This one had an explicit prior "kept local
+  on purpose" comment in invoice.service.js, reasoning that sharing the
+  function would recompute an invoice's totals from a quotation that might
+  later change — on inspection that reasoning doesn't actually hold: a
+  shared PURE function takes each caller's own already-frozen line items as
+  input and creates no live coupling between an Invoice and its source
+  Quotation; only the formula is shared, not any data. Verified numerically
+  (a real line-item set, hand-checked totals, and confirmed the sum of
+  per-line `lineAmount()` calls exactly matches `computeTotals()`'s own
+  grand total) before trusting the merge.
+- **`fileSize`/`profitClass`** (document-preview modals; Deployment
+  Overview/Mobilisation detail profit coloring) → `client/src/lib/utils.js`.
+- **The `Field` profile-row component** (Client/Employee/NFC-company
+  profile pages, byte-identical) → `client/src/components/ui/ProfileField.jsx`,
+  matching this app's existing shared-UI-primitive convention.
+- **The 5-file employee-picker query** → `client/src/lib/useEmployeePicker.js`,
+  one consistent query key so the identical request (first 100 employees,
+  sorted by name) shares one cache entry across Attendance/Assets/EOSB/
+  Timesheet-Processor instead of 4 independent fetches. `DocumentUploadModal.jsx`
+  was deliberately left out — its query branches between employees/clients
+  under one combined key depending on `ownerType`, and forcing that into
+  the shared hook would need real restructuring for one line of overlap;
+  not worth it.
+- **List-header sort toggle** (Client/Employee list pages) →
+  `createSortToggle(setParams)` in `client/src/lib/utils.js`.
+- **Avatar-menu outside-click detection** (DashboardLayout/EssLayout,
+  byte-identical) → `client/src/lib/useCloseOnOutsideClick.js`, a genuinely
+  generic pattern, not app-specific.
+
+### Scope — deliberately NOT touched
+
+- **`monthStrOf`** (deployment.service.js / DeploymentDetailPage.jsx): the
+  audit counted this as duplicated, but it only appears ONCE per side —
+  there's no actual intra-repo duplication to remove by extracting it, just
+  the same small helper independently written for two different runtimes
+  (client and server are separate repos, can't share a file). Extracting it
+  would add indirection with zero DRY benefit.
+- **PDF table-drawing closures** (`drawRow`/`totalRow` in invoice.pdf.js/
+  quotation.pdf.js): these close over mutable per-document state (`y`,
+  `cols`) and have document-specific parameters baked in (different
+  page-break thresholds, a different total-row set) — genuinely more
+  layout boilerplate than shared logic, and forcing them into one factory
+  would trade a small amount of duplication for real complexity in
+  PDF-rendering code, where a subtle bug is hard to catch without
+  eyeballing rendered output. Left as-is.
+- The 4 hub pages' identical wrapper shape, password-copy handling, plain
+  navigation-icon duplication, and Tile-icon rendering — all flagged by the
+  audit itself as low-value/intentional, or too cosmetic to be worth the
+  diff churn.
+
+### Verification
+
+- Server: `npm run lint` clean, `npm test` 38/38 passing (both re-run after
+  every extraction group, not just once at the end).
+- A direct numeric check of the extracted money math: real line items,
+  hand-computed totals, confirmed `computeTotals()`'s grand total exactly
+  equals the sum of per-line `lineAmount()` calls.
+- Client: `npm run lint` clean (0 errors, same 16 pre-existing unrelated
+  warnings throughout), `npm run build` clean.
+- Live browser click-through as a real Admin: the avatar-menu outside-click
+  still closes the menu on both the staff layout (confirmed) and shares the
+  same hook as the ESS layout; the Clients and Employees list column-sort
+  toggle confirmed both directions (network requests showed the correct
+  `sortBy`/`sortOrder` params, UI reordered correctly); a real Mobilisation
+  detail page's Profit per hour/month/OT figures rendered in the correct
+  green (`profitClass`). Throwaway Admin account created for this
+  click-through was deleted afterward.

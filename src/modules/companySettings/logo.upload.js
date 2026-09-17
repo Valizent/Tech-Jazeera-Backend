@@ -13,10 +13,9 @@
  */
 import multer from 'multer';
 import { cloudinary, CloudinaryStorage } from '../../config/cloudinary.js';
-import ApiError from '../../utils/ApiError.js';
 import logger from '../../config/logger.js';
+import { imageFileFilter, wrapImageUpload } from '../../utils/imageUpload.js';
 
-const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_BYTES = 2 * 1024 * 1024; // 2 MB — a logo, not a photo library
 
 const storage = new CloudinaryStorage({
@@ -28,26 +27,10 @@ const storage = new CloudinaryStorage({
   },
 });
 
-function fileFilter(req, file, cb) {
-  if (!ALLOWED_MIMES.has(file.mimetype)) {
-    return cb(new ApiError(400, 'Upload a PNG, JPG, or WEBP image.'));
-  }
-  cb(null, true);
-}
+const upload = multer({ storage, fileFilter: imageFileFilter, limits: { fileSize: MAX_BYTES } }).single('logo');
 
-const upload = multer({ storage, fileFilter, limits: { fileSize: MAX_BYTES } }).single('logo');
-
-/** Wrap multer so its errors become our standard ApiError. Field name: `logo`. */
-export function uploadLogoImage(req, res, next) {
-  upload(req, res, (err) => {
-    if (!err) return next();
-    if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_SIZE') return next(new ApiError(400, 'Image is too large (maximum 2 MB).'));
-      return next(new ApiError(400, `Upload error: ${err.message}`));
-    }
-    return next(err);
-  });
-}
+/** Field name: `logo`. */
+export const uploadLogoImage = wrapImageUpload(upload, '2 MB');
 
 /** Best-effort delete of the stored logo (on replace/remove) — never blocks the request on failure. */
 export async function deleteLogoMedia(url) {

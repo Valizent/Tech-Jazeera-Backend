@@ -7,11 +7,7 @@ import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { notifyUser } from '../notifications/notification.service.js';
-
-/** Escape user text before embedding it in a $regex (injection / syntax). */
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 /**
  * Paginated, searchable, sortable listing.

@@ -13,10 +13,7 @@ import env from '../../config/env.js';
 import { logAudit } from '../audit/audit.service.js';
 import { generateToken, generateTokens } from './nfc.token.js';
 import { deleteNfcMedia } from './nfc.upload.js';
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 /** The public URL a chip is written with. */
 export function cardUrl(token) {
