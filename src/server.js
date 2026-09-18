@@ -9,6 +9,7 @@
  * The server therefore never runs in a half-configured state.
  */
 import env from './config/env.js'; // side effect: validates env, may exit
+import { captureError } from './config/sentry.js'; // side effect: initializes Sentry, if configured
 import logger from './config/logger.js';
 import { connectDb } from './config/db.js';
 import app from './app.js';
@@ -22,10 +23,12 @@ import { runMobilisationStaleCheck } from './modules/notifications/mobilisationS
 // before connectDb() so a boot-time failure is caught too.
 process.on('unhandledRejection', (reason) => {
   logger.error(`Unhandled promise rejection: ${reason instanceof Error ? reason.stack : reason}`);
+  captureError(reason instanceof Error ? reason : new Error(String(reason)));
 });
 
 process.on('uncaughtException', (error) => {
   logger.error(`Uncaught exception: ${error.stack || error}`);
+  captureError(error);
   process.exit(1);
 });
 

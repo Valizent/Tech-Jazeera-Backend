@@ -4,6 +4,7 @@
  * the documented binary-response exception.
  */
 import { generatePremiumQrSvg, svgToPng } from './nfc.qr.js';
+import { buildCoreVCard } from './nfc.vcard.js';
 import ApiResponse from '../../utils/ApiResponse.js';
 import ApiError from '../../utils/ApiError.js';
 import { buildCsv } from '../../utils/csv.js';
@@ -139,5 +140,23 @@ export async function cardQr(req, res) {
   const png = await svgToPng(svg, { width: 1024, height: 1024 });
   res.setHeader('Content-Type', 'image/png');
   res.setHeader('Content-Disposition', `inline; filename="nfc_${card.token}.png"`);
+  res.send(png);
+}
+
+/**
+ * GET /api/nfc/cards/:id/qr-offline.png — same premium QR style, but encodes
+ * the person's vCard text directly instead of a URL. A scan saves the contact
+ * with zero network involved (no profile page fetch, no .vcf fetch) — the
+ * explicit "works with no internet" option next to the regular URL QR.
+ */
+export async function cardQrOffline(req, res) {
+  const card = await nfcService.getCard(req.params.id);
+  if (!card.employee) throw new ApiError(400, 'Assign this card to a person first.');
+  const brandColour = card.company?.brandColour;
+  const vcard = buildCoreVCard({ employee: card.employee, company: card.company });
+  const svg = generatePremiumQrSvg(vcard, { brandColour, size: 1024 });
+  const png = await svgToPng(svg, { width: 1024, height: 1024 });
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Content-Disposition', `inline; filename="nfc_${card.token}_offline.png"`);
   res.send(png);
 }
