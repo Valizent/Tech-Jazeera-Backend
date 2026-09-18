@@ -97,16 +97,6 @@ router.patch(
   validate({ params: mobilisationIdParamSchema, body: updateMobilisationSchema }),
   asyncHandler(mobilisationController.update)
 );
-// TEMPORARY — pre-production cleanup only, Admin-only hard delete. Remove
-// this route (and mobilisation.controller.js's `remove` /
-// mobilisation.service.js's `deleteMobilisation`) before going live.
-router.delete(
-  '/:id',
-  requireRoles('Admin'),
-  validate({ params: mobilisationIdParamSchema }),
-  asyncHandler(mobilisationController.remove)
-);
-
 // --- M2: joint coordinators + submit ---
 router.post(
   '/:id/coordinators',
