@@ -68,12 +68,3 @@ export async function demobilise(req, res) {
   await deploymentService.demobiliseDeployment(req.params.id, req.body, actor(req));
   res.json(new ApiResponse('Deployment demobilised.'));
 }
-
-// TEMPORARY — pre-production cleanup only. Remove alongside the service
-// function and route — see the note in deployment.service.js.
-
-/** DELETE /api/deployments/:id — Admin only, hard delete. */
-export async function remove(req, res) {
-  await deploymentService.deleteDeployment(req.params.id, actor(req));
-  res.json(new ApiResponse('Deployment deleted.'));
-}

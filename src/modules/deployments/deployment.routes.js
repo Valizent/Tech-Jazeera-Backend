@@ -28,11 +28,11 @@
  * (POST /:id/demobilise, formerly "Release" — the Section Access key name
  * itself, 'deploymentsRelease', is unchanged) is 'deploymentsRelease' at
  * 'write', default ['Coordinator', 'Manager'] — Office Secretary never
- * demobilises. Deployments have no CREATE route at all — they're born
- * automatically from an Approved Mobilisation (see mobilisation.service.js's
- * approveMobilisation) — EXCEPT for a TEMPORARY Admin-only DELETE added for
- * pre-production cleanup; remove it before going live (see the note on that
- * route below). PATCH /:id (2026-09-16, the user's own ask) is a real,
+ * demobilises. Deployments have no CREATE or DELETE route at all — they're
+ * born automatically from an Approved Mobilisation (see
+ * mobilisation.service.js's approveMobilisation) and are immutable history;
+ * Demobilise is the real lifecycle action. PATCH /:id (2026-09-16, the
+ * user's own ask) is a real,
  * permanent edit — gated by its own new key, 'deploymentsEdit', at 'write',
  * scoped narrowly to the descriptive fields alone (see
  * deployment.validation.js's updateDeploymentSchema) — Admin-only until
@@ -45,7 +45,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff, requireRoles } from '../../middleware/rbac.js';
+import { requireStaff } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
@@ -120,14 +120,4 @@ router.post(
   validate({ params: deploymentIdParamSchema, body: demobiliseDeploymentSchema }),
   asyncHandler(deploymentController.demobilise)
 );
-// TEMPORARY — pre-production cleanup only, Admin-only hard delete. Remove
-// this route (and deployment.controller.js's `remove` / deployment.
-// service.js's `deleteDeployment`) before going live.
-router.delete(
-  '/:id',
-  requireRoles('Admin'),
-  validate({ params: deploymentIdParamSchema }),
-  asyncHandler(deploymentController.remove)
-);
-
 export default router;

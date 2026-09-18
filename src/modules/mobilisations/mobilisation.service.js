@@ -1644,48 +1644,6 @@ export async function unarchiveWorkerData(iqamaNumber, actor) {
 }
 
 // ---------------------------------------------------------------------------
-// TEMPORARY — pre-production cleanup only. Remove this whole function, its
-// route (mobilisation.routes.js), and its controller (mobilisation.
-// controller.js's `remove`) before going live — the user asked for an
-// Admin-only way to clear out dummy/test mobilisations while building, not
-// a permanent feature (Mobilisation otherwise has no delete path on
-// purpose: Completed is the real terminal state).
-// ---------------------------------------------------------------------------
-
-/** Hard-deletes a Mobilisation outright, bypassing the normal lifecycle.
- *  Releases a worker this record was actively holding (same cleanup
- *  completeMobilisation does) and best-effort destroys any uploaded
- *  document files so nothing is orphaned in Cloudinary. Router-gated to
- *  Admin only. */
-export async function deleteMobilisation(id, actor) {
-  const mobilisation = await Mobilisation.findById(id);
-  if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
-
-  if (
-    mobilisation.workerType === 'Employee' &&
-    mobilisation.worker &&
-    ['Draft', 'PendingReview', 'Approved'].includes(mobilisation.status)
-  ) {
-    await Employee.findByIdAndUpdate(mobilisation.worker, { coordinator: null });
-  }
-
-  for (const doc of mobilisation.documents) {
-    await destroyDocumentFile(doc.fileName, doc.resourceType).catch(() => {});
-  }
-
-  await mobilisation.deleteOne();
-
-  await logAudit({
-    user: actor.userId,
-    action: 'mobilisation.delete',
-    targetType: 'Mobilisation',
-    targetId: id,
-    meta: { serialNumber: mobilisation.serialNumber, workerName: mobilisation.workerName },
-    ip: actor.ip,
-  });
-}
-
-// ---------------------------------------------------------------------------
 // M5 — documents
 // ---------------------------------------------------------------------------
 
