@@ -12,6 +12,7 @@
 import env from '../config/env.js';
 import logger from '../config/logger.js';
 import ApiError from '../utils/ApiError.js';
+import { captureError } from '../config/sentry.js';
 
 /** 404 for routes that matched nothing. Registered after all real routes. */
 export function notFoundHandler(req, res, next) {
@@ -77,12 +78,15 @@ export function errorHandler(err, req, res, next) {
 
   // Log bugs loudly with the ORIGINAL error and stack; expected failures
   // (404s, bad input) at warn level without stacks to keep logs readable.
+  // Only a genuine bug is reported to error tracking — an expected ApiError
+  // (400/403/404) isn't something anyone needs paged for.
   if (error.isOperational) {
     logger.warn(`${req.method} ${req.originalUrl} → ${error.statusCode}: ${error.message}`);
   } else {
     logger.error(`${req.method} ${req.originalUrl} → 500 unhandled error`, {
       stack: (error.cause ?? err).stack,
     });
+    captureError(error.cause ?? err, { method: req.method, url: req.originalUrl, body: req.body });
   }
 
   res.status(error.statusCode).json({

@@ -65,6 +65,7 @@ router.get('/batches/:id/cards.csv', canRead, validate({ params: idParamSchema }
 router.get('/cards', canRead, validate({ query: listCardsSchema }), asyncHandler(nfc.listCards));
 router.get('/cards/:id', canRead, validate({ params: idParamSchema }), asyncHandler(nfc.getCard));
 router.get('/cards/:id/qr.png', canRead, validate({ params: idParamSchema }), asyncHandler(nfc.cardQr));
+router.get('/cards/:id/qr-offline.png', canRead, validate({ params: idParamSchema }), asyncHandler(nfc.cardQrOffline));
 router.patch('/cards/:id', canWrite, validate({ params: idParamSchema, body: updateCardSchema }), asyncHandler(nfc.updateCard));
 router.delete('/cards/:id', canWrite, validate({ params: idParamSchema }), asyncHandler(nfc.deleteCard));
 router.post('/cards/:id/assign', canWrite, validate({ params: idParamSchema, body: assignCardSchema }), asyncHandler(nfc.assignCard));

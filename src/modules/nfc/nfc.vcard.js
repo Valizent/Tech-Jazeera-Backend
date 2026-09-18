@@ -28,3 +28,24 @@ export function buildVCard({ employee, company }) {
   lines.push('END:VCARD');
   return `${lines.join('\r\n')}\r\n`;
 }
+
+/**
+ * Core-fields-only vCard: name, org, title, phone, email. Used for the
+ * offline QR (nfc.controller.js's cardQrOffline) — that QR encodes this
+ * text directly rather than a URL, so a scan saves the contact with zero
+ * network involved. Kept deliberately shorter than buildVCard's full set
+ * (no whatsapp/linkedin/address/bio): every extra field makes the encoded
+ * QR denser and harder to scan reliably, a tradeoff the real .vcf download
+ * (buildVCard, fetched over the network, no size pressure) doesn't have.
+ */
+export function buildCoreVCard({ employee, company }) {
+  const lines = ['BEGIN:VCARD', 'VERSION:3.0'];
+  lines.push(`N:${esc(employee.name)};;;;`);
+  lines.push(`FN:${esc(employee.name)}`);
+  if (company?.companyName) lines.push(`ORG:${esc(company.companyName)}`);
+  if (employee.jobTitle) lines.push(`TITLE:${esc(employee.jobTitle)}`);
+  if (employee.phone) lines.push(`TEL;TYPE=CELL,VOICE:${esc(employee.phone)}`);
+  if (employee.email) lines.push(`EMAIL;TYPE=INTERNET:${esc(employee.email)}`);
+  lines.push('END:VCARD');
+  return `${lines.join('\r\n')}\r\n`;
+}

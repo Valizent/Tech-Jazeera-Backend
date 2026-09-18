@@ -188,7 +188,7 @@ export async function listCards({ search, status, company, batch }) {
 
 export async function getCard(id) {
   const card = await NfcCard.findById(id)
-    .populate('employee', 'name jobTitle company')
+    .populate('employee', 'name jobTitle phone email company')
     .populate('company', 'companyName brandColour')
     .populate('batch', 'label')
     .lean();

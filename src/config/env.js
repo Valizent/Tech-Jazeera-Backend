@@ -107,6 +107,9 @@ const env = Object.freeze({
   vapidPublicKey: optional('VAPID_PUBLIC_KEY', null),
   vapidPrivateKey: optional('VAPID_PRIVATE_KEY', null),
   vapidSubject: optional('VAPID_SUBJECT', null),
+  // Error tracking (self-hosted GlitchTip) — optional, same posture as VAPID
+  // above: an existing deployment without this set shouldn't fail to boot.
+  sentryDsn: optional('SENTRY_DSN', null),
   isProduction: process.env.NODE_ENV === 'production',
 });
 
