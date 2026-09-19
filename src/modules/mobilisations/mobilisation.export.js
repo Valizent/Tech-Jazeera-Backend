@@ -33,6 +33,7 @@ const RATE_COLUMNS = [
   { header: 'FTA type', key: 'ftaType', width: 12 },
   { header: 'Allowance', key: 'allowance', width: 10 },
   { header: 'Allowance remark', key: 'allowanceRemark', width: 20 },
+  { header: 'Mobilisation cost', key: 'mobilisationCost', width: 16 },
   { header: 'Required timesheet hours', key: 'requiredTimesheetHours', width: 18 },
   { header: 'Subcontractor rate', key: 'subcontractorRate', width: 14 },
   { header: 'Subcontractor commission', key: 'subcontractorCommission', width: 18 },

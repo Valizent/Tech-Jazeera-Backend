@@ -25,7 +25,9 @@
  *    deployment, is never queried on its own, and is exactly the kind of
  *    small append-mostly history this app always embeds (line items, doc
  *    versions, emergency contact). One entry per calendar month. `otHours`
- *    IS server-computed (max(0, actualHours - contractHours)), and so is
+ *    IS server-computed (SupplierEmployee: max(0, actualHours -
+ *    supplierHours); Employee/Freelancer: max(0, actualHours -
+ *    contractHours) — see deployment.service.js's computeOtHours), and so is
  *    `otAmount` (= otHours × the source Mobilisation's `otClientRate`,
  *    added 2026-09-13 per the user's own ask — never client-submitted,
  *    same "recompute financials server-side, always" rule as Mobilisation's
@@ -129,13 +131,25 @@ const monthlyHoursSchema = new mongoose.Schema(
     // pre-2026-09-16 record that still has it.
     dailyHours: { type: [dailyEntrySchema], default: [] },
     actualHours: { type: Number, required: true, min: 0 },
+    // The SUBCONTRACTOR's own timesheet hours for this same month — added
+    // 2026-09-19, the user's own ask: a real subcontractor keeps their own
+    // record, which can legitimately differ from what the client's
+    // timesheet shows (`actualHours` above). Only meaningful (and required —
+    // see deployment.service.js's addMonthlyHours) for a SupplierEmployee
+    // deployment, since only that type has a real subcontractor; stays null
+    // and unused for Employee/Freelancer, which keep the original
+    // contractHours-based OT formula below.
+    supplierHours: { type: Number, min: 0, default: null },
     // How many real days the client's timesheet shows as worked that month
     // — added 2026-09-16, a second headline number a real timesheet always
     // carries alongside total hours. Informational/cross-check only, not
     // part of the otHours formula below. `0` on a pre-2026-09-16 record
     // that predates this field (never invented after the fact).
     daysWorked: { type: Number, default: 0, min: 0, max: 31 },
-    otHours: { type: Number, required: true, min: 0 }, // server-computed = max(0, actualHours - contractHours)
+    // server-computed (deployment.service.js's computeOtHours) — SupplierEmployee:
+    // max(0, actualHours - supplierHours); Employee/Freelancer, unchanged:
+    // max(0, actualHours - contractHours).
+    otHours: { type: Number, required: true, min: 0 },
     otAmount: { type: Number, default: 0, min: 0 }, // server-computed = otHours × Mobilisation.otClientRate — see module doc comment
     // A deduction the CLIENT applied on their own timesheet (their most
     // common reason: an Absent day — see DAILY_ENTRY_STATUSES above — but

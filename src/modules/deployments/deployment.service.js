@@ -63,6 +63,21 @@ async function computeOtAmount(mobilisationId, otHours) {
   return money(otHours * (mobilisation?.otClientRate ?? 0));
 }
 
+/** OT hours — the real formula depends on worker type (2026-09-19, the
+ *  user's own ask): a SupplierEmployee deployment has a real subcontractor
+ *  keeping their OWN timesheet, which can legitimately differ from the
+ *  client's (`actualHours`), so OT there is Client hours minus Supplier
+ *  hours, floored at 0 (same safety net the original formula already had —
+ *  never a negative OT figure). Employee/Freelancer have no such second
+ *  timesheet at all, so they keep the original formula against the
+ *  deployment's own contracted hours, unchanged. */
+function computeOtHours(workerType, actualHours, supplierHours, contractHours) {
+  if (workerType === 'SupplierEmployee') {
+    return Math.max(0, actualHours - (supplierHours ?? 0));
+  }
+  return Math.max(0, actualHours - contractHours);
+}
+
 function monthStrOf(date) {
   const d = new Date(date);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -260,15 +275,23 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     throw new ApiError(400, 'This deployment had not started yet in that month.');
   }
   assertDaysWorkedWithinPlacement(deployment, data.month, data.daysWorked);
+  // Supplier timesheet hours are required for a SupplierEmployee deployment
+  // (the new OT formula needs them) and simply not applicable otherwise —
+  // see computeOtHours/deployment.model.js's own doc comment.
+  if (deployment.workerType === 'SupplierEmployee' && data.supplierHours == null) {
+    throw new ApiError(400, 'Enter the supplier timesheet hours.');
+  }
 
   const contractHours = deployment.requiredTimesheetHours ?? 0;
   const actualHours = data.actualHours;
-  const otHours = Math.max(0, actualHours - contractHours);
+  const supplierHours = deployment.workerType === 'SupplierEmployee' ? data.supplierHours : null;
+  const otHours = computeOtHours(deployment.workerType, actualHours, supplierHours, contractHours);
   const otAmount = await computeOtAmount(deployment.mobilisation, otHours);
   const newEntry = {
     month: data.month,
     contractHours,
     actualHours,
+    supplierHours,
     daysWorked: data.daysWorked,
     otHours,
     otAmount,
@@ -358,10 +381,14 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
     throw new ApiError(400, 'This month is already approved and can no longer be edited.');
   }
   assertDaysWorkedWithinPlacement(deployment, entry.month, data.daysWorked);
+  if (deployment.workerType === 'SupplierEmployee' && data.supplierHours == null) {
+    throw new ApiError(400, 'Enter the supplier timesheet hours.');
+  }
   const wasRejected = entry.status === 'Rejected';
   const wasApproved = entry.status === 'Approved';
   const before = {
     actualHours: entry.actualHours,
+    supplierHours: entry.supplierHours,
     daysWorked: entry.daysWorked,
     otAmount: entry.otAmount,
     deductionAmount: entry.deductionAmount,
@@ -370,6 +397,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   const previousEnteredBy = entry.enteredBy.toString();
 
   const actualHours = data.actualHours;
+  const supplierHours = deployment.workerType === 'SupplierEmployee' ? data.supplierHours : null;
   // A legacy entry's own real dailyHours breakdown (see deployment.model.js)
   // stays visible exactly as originally entered UNTIL it's actually
   // corrected — the moment someone edits it, the new totals-only shape
@@ -378,8 +406,9 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   // to numbers that no longer match it.
   entry.dailyHours = [];
   entry.actualHours = actualHours;
+  entry.supplierHours = supplierHours;
   entry.daysWorked = data.daysWorked;
-  entry.otHours = Math.max(0, actualHours - entry.contractHours);
+  entry.otHours = computeOtHours(deployment.workerType, actualHours, supplierHours, entry.contractHours);
   entry.otAmount = await computeOtAmount(deployment.mobilisation, entry.otHours);
   entry.deductionAmount = data.deductionAmount ?? 0;
   entry.notes = data.notes;
@@ -406,6 +435,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
       before,
       after: {
         actualHours: entry.actualHours,
+        supplierHours: entry.supplierHours,
         daysWorked: entry.daysWorked,
         otAmount: entry.otAmount,
         deductionAmount: entry.deductionAmount,
@@ -699,7 +729,7 @@ export async function getStandbyWorkforce() {
 // rather than inventing a broader definition just for this view.
 const MOBILISATION_OVERVIEW_FIELDS =
   'serialNumber jobTitle iqamaNumber nationality phone checkoutDate fta ftaType allowance allowanceRemark ' +
-  'clientRate clientCommission subcontractorRate subcontractorCommission ' +
+  'clientRate clientCommission mobilisationCost subcontractorRate subcontractorCommission ' +
   'otClientRate otEmployeeRate profitPerHour profitPerMonth otProfitPerHour';
 
 // The commercial subset of the above — stripped from the populated
@@ -710,6 +740,7 @@ const MOBILISATION_OVERVIEW_FIELDS =
 const MOBILISATION_COMMERCIAL_KEYS = [
   'clientRate',
   'clientCommission',
+  'mobilisationCost',
   'subcontractorRate',
   'subcontractorCommission',
   'otClientRate',
@@ -819,7 +850,21 @@ export async function exportDeployments(filters, actor) {
 function money(n) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
-function computeMonthlyProfit(entry, mobilisation) {
+/** The one-time Mobilisation.mobilisationCost (2026-09-19, the user's own
+ *  ask) is deducted exactly once per deployment — from whichever monthly
+ *  entry is chronologically the FIRST one actually APPROVED (by
+ *  `decidedAt`), not necessarily calendar month 1 or the first one entered:
+ *  backlog data can be entered/approved out of month order, and this must
+ *  never double-deduct or land on the wrong month just because of entry
+ *  order. Returns null when nothing is Approved yet — nothing to anchor the
+ *  one-time deduction to. */
+function firstApprovedEntryId(entries) {
+  const approved = entries.filter((e) => e.status === 'Approved' && e.decidedAt);
+  if (!approved.length) return null;
+  return approved.reduce((earliest, e) => (new Date(e.decidedAt) < new Date(earliest.decidedAt) ? e : earliest))._id?.toString();
+}
+
+function computeMonthlyProfit(entry, mobilisation, allEntries) {
   if (!mobilisation) return null;
   const isSupplier = mobilisation.workerType === 'SupplierEmployee';
   const clientSide = (mobilisation.clientRate ?? 0) - (mobilisation.clientCommission ?? 0);
@@ -829,12 +874,17 @@ function computeMonthlyProfit(entry, mobilisation) {
   const otProfitPerHour = (mobilisation.otClientRate ?? 0) - (mobilisation.otEmployeeRate ?? 0);
   const otProfitTotal = money(otProfitPerHour * entry.otHours);
 
+  const isFirstApprovedEntry =
+    Array.isArray(allEntries) && entry.status === 'Approved' && entry._id?.toString() === firstApprovedEntryId(allEntries);
+  const mobilisationCostDeduction = isFirstApprovedEntry ? mobilisation.mobilisationCost ?? 0 : 0;
+
   return money(
     profitPerHour * entry.contractHours -
       (mobilisation.fta ?? 0) -
       (mobilisation.allowance ?? 0) +
       otProfitTotal -
-      (entry.deductionAmount ?? 0)
+      (entry.deductionAmount ?? 0) -
+      mobilisationCostDeduction
   );
 }
 
@@ -896,7 +946,7 @@ function stripCommercialMonthlyHours(deployment, canSeeCommercial) {
 
 const PROFIT_RATE_FIELDS =
   'serialNumber workerType clientRate clientCommission subcontractorRate subcontractorCommission ' +
-  'otClientRate otEmployeeRate fta allowance';
+  'otClientRate otEmployeeRate fta allowance mobilisationCost';
 
 export async function getDeployment(id, actor) {
   const deployment = await Deployment.findById(id)
@@ -929,7 +979,7 @@ export async function getDeployment(id, actor) {
   // 'read' — see the sibling comment in updateMonthlyHours above.
   const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor, 'read') : false;
   deployment.monthlyHours = deployment.monthlyHours.map((entry) => {
-    if (canSeeCommercial) return { ...entry, profit: computeMonthlyProfit(entry, deployment.mobilisation) };
+    if (canSeeCommercial) return { ...entry, profit: computeMonthlyProfit(entry, deployment.mobilisation, deployment.monthlyHours) };
     const { otAmount, ...rest } = entry;
     return rest;
   });

@@ -22,6 +22,10 @@ const id = (label) => z.string().regex(/^[a-f0-9]{24}$/i, `Invalid ${label} id.`
 // much smaller ceiling than a money-total field is the honest bound.
 const optionalNonNegNumber = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(100_000).optional());
 const requiredNonNegNumber = (message) => z.coerce.number({ error: message }).min(0, 'Cannot be negative.').max(100_000);
+// mobilisationCost is a one-time lump sum (flight/agent/visa fees), not a
+// per-hour rate — same higher ceiling deployment.validation.js's own
+// deductionAmount uses, for the same reason.
+const optionalNonNegMoney = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(1_000_000).optional());
 const optionalDate = z.preprocess(emptyToUndef, z.coerce.date().optional());
 
 // Saudi Iqama numbers are exactly 10 digits. Only meaningful for a
@@ -99,6 +103,9 @@ const mobilisationFields = {
   ftaType: z.preprocess(emptyToUndef, z.enum(FTA_TYPES).optional()),
   allowance: optionalNonNegNumber,
   allowanceRemark: optionalStr(200),
+  // One-time cost of mobilising this worker (2026-09-19, the user's own
+  // ask) — see mobilisation.model.js's own doc comment on this field.
+  mobilisationCost: optionalNonNegMoney,
 
   subcontractor: z.preprocess(emptyToUndef, id('subcontractor').optional()),
   subcontractorRate: optionalNonNegNumber,
