@@ -105,9 +105,18 @@ const deductionAmount = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(
 // needs the deployment/month context this file doesn't have, so it's
 // checked in deployment.service.js instead, same reasoning the old
 // day-count check already used for exactly this file/service split.
+// Supplier timesheet hours (2026-09-19, the user's own ask) — only
+// meaningful for a SupplierEmployee deployment (see deployment.model.js's
+// own doc comment on the field); optional HERE since this schema has no
+// access to the deployment's workerType — "required for SupplierEmployee"
+// is enforced in deployment.service.js instead, same file/service split
+// this app already uses for the days-worked-within-placement check.
+const supplierHours = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(1000).optional());
+
 export const addMonthlyHoursSchema = z.object({
   month: monthStr,
   actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
+  supplierHours,
   daysWorked: z.coerce.number({ error: 'Enter the number of days worked.' }).int('Whole days only.').min(0).max(31),
   deductionAmount,
   notes: optionalStr(500),
@@ -117,6 +126,7 @@ export const addMonthlyHoursSchema = z.object({
  *  (it identifies which entry, never changes on an edit). */
 export const updateMonthlyHoursSchema = z.object({
   actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
+  supplierHours,
   daysWorked: z.coerce.number({ error: 'Enter the number of days worked.' }).int('Whole days only.').min(0).max(31),
   deductionAmount,
   notes: optionalStr(500),

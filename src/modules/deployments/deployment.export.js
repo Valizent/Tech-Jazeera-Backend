@@ -47,6 +47,7 @@ const MOBILISATION_COLUMNS = [
   { header: 'FTA type', key: 'mobFtaType', width: 16, get: (d) => d.mobilisation?.ftaType },
   { header: 'Allowance', key: 'mobAllowance', width: 10, get: (d) => d.mobilisation?.allowance },
   { header: 'Allowance remark', key: 'mobAllowanceRemark', width: 20, get: (d) => d.mobilisation?.allowanceRemark },
+  { header: 'Mobilisation cost', key: 'mobMobilisationCost', width: 16, get: (d) => d.mobilisation?.mobilisationCost },
   { header: 'Client rate', key: 'mobClientRate', width: 12, get: (d) => d.mobilisation?.clientRate },
   { header: 'Client commission', key: 'mobClientCommission', width: 14, get: (d) => d.mobilisation?.clientCommission },
   { header: 'Subcontractor rate', key: 'mobSubcontractorRate', width: 14, get: (d) => d.mobilisation?.subcontractorRate },

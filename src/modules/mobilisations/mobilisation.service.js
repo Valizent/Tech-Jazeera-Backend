@@ -106,6 +106,7 @@ const COMMERCIAL_FIELDS = [
   'allowance',
   'allowanceRemark',
   'requiredTimesheetHours',
+  'mobilisationCost',
   'subcontractorRate',
   'subcontractorCommission',
   // Moved here from REVIEW_FIELDS 2026-09-13 — the OT rates are now a
@@ -118,6 +119,20 @@ const COMMERCIAL_FIELDS = [
   'profitPerMonth',
   'otProfitPerHour',
 ];
+
+// A further restriction WITHIN "can see commercial data" (2026-09-19, the
+// user's own ask): a coordinator or anyone else who INITIATES a
+// mobilisation (a self-mobilising BDM, Office Secretary on their behalf,
+// etc.) still sees their own per-hour rate math while pre-Approval —
+// profitPerHour/otProfitPerHour, part of COMMERCIAL_FIELDS above — but the
+// rolled-up MONTHLY estimate is management-only ("MM"): visible only
+// through the same isViewer/later-step-reviewer circle COMMERCIAL_FIELDS
+// itself already treats as "the real decision-maker" (see
+// findVisibleMobilisations/getMobilisation below for exactly where this is
+// applied). Kept as its own tiny list, separate from COMMERCIAL_FIELDS,
+// since it's a strictly narrower restriction than that one, not a
+// replacement for it.
+const PROFIT_ESTIMATE_FIELDS = ['profitPerMonth'];
 
 // Section 2 — the CURRENT-STEP REVIEWER's own work (the client/sub
 // quotation-PO paper trail, their remark). A plain Coordinator never
@@ -271,7 +286,7 @@ export async function getFieldSuggestions(field) {
 export async function lookupWorkerByIqama(iqamaNumber) {
   const found = await Mobilisation.findOne({ iqamaNumber, workerType: { $ne: 'Employee' }, archived: { $ne: true } })
     .sort({ createdAt: -1 })
-    .select('workerName nationality phone workerType subcontractor subcontractorName')
+    .select('workerName nationality phone workerType subcontractor subcontractorName clientRate subcontractorRate')
     .lean();
   if (!found) return null;
   return {
@@ -281,6 +296,14 @@ export async function lookupWorkerByIqama(iqamaNumber) {
     workerType: found.workerType,
     subcontractor: found.subcontractor,
     subcontractorName: found.subcontractorName,
+    // What this worker's own MOST RECENT past mobilisation billed/paid —
+    // shown client-side as a read-only reference label next to the new
+    // mobilisation's own (independently-editable) rate inputs, 2026-09-19
+    // the user's own ask: "show the previous mobilised amounts... as
+    // labels, not inputs" — a rate can genuinely differ this time, so it's
+    // never auto-applied into the real field.
+    clientRate: found.clientRate,
+    subcontractorRate: found.subcontractorRate,
   };
 }
 
@@ -669,8 +692,15 @@ async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
           const stepZeroRoleIds = (m.steps?.[0]?.roles ?? []).map((r) => (r._id ?? r).toString());
           const isStepZeroReviewer = roleIds.some((r) => stepZeroRoleIds.includes(r.toString()));
           const isCoordinator = m.coordinators.some((c) => (c.user._id ?? c.user).toString() === actor.userId);
-          const canSeeCommercial = (isCoordinator && m.status !== 'Approved') || (isStepReviewer && !isStepZeroReviewer);
-          if (!canSeeCommercial) item = stripFields(item, COMMERCIAL_FIELDS);
+          const isLaterStepReviewer = isStepReviewer && !isStepZeroReviewer;
+          const canSeeCommercial = (isCoordinator && m.status !== 'Approved') || isLaterStepReviewer;
+          if (!canSeeCommercial) {
+            item = stripFields(item, COMMERCIAL_FIELDS);
+          } else if (!isLaterStepReviewer) {
+            // Reached only via the isCoordinator branch above — see
+            // PROFIT_ESTIMATE_FIELDS' own doc comment.
+            item = stripFields(item, PROFIT_ESTIMATE_FIELDS);
+          }
           return item;
         });
   return { items, total };
@@ -751,10 +781,14 @@ export async function getMobilisation(id, actor) {
     // still sees it — they need the rates to decide — as does a
     // 'mobilisationsViewer' member, or the coordinator who typed it
     // themselves (only before Approved, unchanged from before).
-    const canSeeCommercial =
-      isViewer || (isCoordinator && mobilisation.status !== 'Approved') || (isStepReviewer && !canEditSection1);
+    const isLaterStepReviewer = isStepReviewer && !canEditSection1;
+    const canSeeCommercial = isViewer || (isCoordinator && mobilisation.status !== 'Approved') || isLaterStepReviewer;
     if (!canSeeCommercial) {
       visible = stripFields(visible, COMMERCIAL_FIELDS);
+    } else if (!isViewer && !isLaterStepReviewer) {
+      // Reached only via "I'm the coordinator, still pre-Approval" — see
+      // PROFIT_ESTIMATE_FIELDS' own doc comment.
+      visible = stripFields(visible, PROFIT_ESTIMATE_FIELDS);
     }
   }
 
@@ -784,6 +818,7 @@ const DIRECT_FIELDS = [
   'allowance',
   'allowanceRemark',
   'requiredTimesheetHours',
+  'mobilisationCost',
   'subcontractorRate',
   'subcontractorCommission',
   // Moved to Section 1 2026-09-13 — see mobilisation.validation.js's

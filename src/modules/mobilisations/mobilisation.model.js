@@ -148,6 +148,15 @@ const mobilisationSchema = new mongoose.Schema(
     allowance: { type: Number, default: 0, min: 0 }, // per month, company-paid
     allowanceRemark: { type: String, trim: true, maxlength: 200, default: null }, // free-typed: what this allowance is for
     requiredTimesheetHours: { type: Number, default: null, min: 0 }, // contracted/target hours, set by the Coordinator
+    // One-time cost of mobilising this worker (e.g. flight/agent/visa fees) —
+    // added 2026-09-19 per the user's own ask. Set once here, like every
+    // other Section 1 rate, but never touches this model's own profitPerMonth
+    // ESTIMATE (that stays a pure per-contracted-hour figure, unchanged) —
+    // it's a real one-time actual cost, so it's deducted exactly once from
+    // the resulting Deployment's own real monthly profit instead, on
+    // whichever month is the first one actually Approved (see
+    // deployment.service.js's computeMonthlyProfit).
+    mobilisationCost: { type: Number, default: 0, min: 0 },
 
     // --- Section 1: subcontractor — only when workerType === 'SupplierEmployee' ---
     hasSubcontractor: { type: Boolean, default: false }, // server-derived from workerType — never client-writable
