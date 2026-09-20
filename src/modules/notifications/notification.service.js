@@ -75,6 +75,20 @@ export async function notifyUser(userId, { type, title, body, url, dedupeKey }) 
 }
 
 /**
+ * notifyUser, but a failure only logs a warning and returns null — for the
+ * many callers where a notification is a courtesy on top of a real action
+ * (assigning a task, moving a requirement) and must never fail that action.
+ */
+export async function notifyUserSafely(userId, payload) {
+  try {
+    return await notifyUser(userId, payload);
+  } catch (err) {
+    logger.warn(`[notifications] notification to ${userId} failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Resolve the employee's own login (if one has been provisioned) and notify
  * it. Silently does nothing if the employee has no login — most Client-type
  * employees don't (see P2-M1), so this is the normal case, not an error.

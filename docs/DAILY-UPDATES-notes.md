@@ -22,7 +22,7 @@ Decisions the user locked in before any code was written:
 | # | Milestone | Status |
 |---|---|---|
 | M1 | Daily updates: to-do list + work log, assign tasks, MM oversight | **COMPLETE** (this file) |
-| M2 | Requirement board: cards, admin-editable stages, drag/move, stale flags, notifications; updates can attach to a card | not started |
+| M2 | Requirement board: cards, admin-editable stages, drag/move, stale flags, notifications; updates can attach to a card | **COMPLETE** (see `REQUIREMENTS-BOARD-notes.md`) |
 | M3 | Candidates on a card (name, subcontractor, document readiness) + "Start mobilisation" pre-fill + auto-advance when the linked mobilisation is Approved | not started |
 | M4 | Manager extras: filters, Excel export, dashboard widget for stale requirements | not started |
 
@@ -187,24 +187,23 @@ the DB (5 vs 4 tasks, 7 vs 3 logs) — cleaned up and re-run: 78/78.
 
 ## User action required
 
-**Run the grants once per database.** They live in each database's own
-`SectionAccess` collection, so the dev grant does not carry over:
+**Grant access once per database — through the Section Access page** (the intended
+way; `npm run grant:daily-updates` is just a convenience for the dev database). As
+Admin: Section Access → Sales & Clients → **Daily Updates**:
 
-```
-cd server
-npm run grant:daily-updates
-```
+- card "my own tasks & log" → **Write** → tick **Coordinator**
+- card "every coordinator (oversight & assigning)" → **Write** → tick **MM**
+  (or **Read** for view-only)
 
-Run it against staging and production (this session only has the dev database's
-credentials). It's additive and idempotent. Until it runs, a coordinator on that
-database will see no "Daily Updates" item and MM will see nothing — expected, not
-a bug (same as `grant:mobilisations-viewer`).
+The grants live in each database's own `SectionAccess` collection, so the dev grant
+does not carry over: staging and production need them. Until then a coordinator/MM
+there won't see "Daily Updates" — expected, not a bug.
 
 ## Deliberately not done
 
-- **No link to a requirement/client/mobilisation yet.** The `DailyUpdate` model has
-  no such reference on purpose (no unused fields): M2 adds an optional `requirement`
-  reference here when the Requirement entity exists.
+- **A log entry can be tied to a Requirements card (added in milestone 2)** via an
+  optional `requirement` ref — it then shows on the card's timeline and in the daily
+  log with a chip linking to the card. A *task* can't be tied to a card yet.
 - **No "Waiting on you" dashboard count for open tasks.** A natural fit for the
   existing dashboard widget; left for M4 alongside the stale-requirement widget.
 - **Executive logins (GM/COO) don't reach this module** — it uses `requireStaff`,

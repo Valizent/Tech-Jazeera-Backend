@@ -15,9 +15,8 @@
  * actually typed it in, which is what tells a manager-assigned task apart from
  * a self-written one.
  *
- * Deliberately no `requirement`/`client`/`mobilisation` link yet: the
- * Requirements board (milestone 2) will add its own optional reference here
- * when that data exists — not before.
+ * A Log may optionally point at the Requirements card it is about
+ * (`requirement`) — that is the whole link between the two modules.
  */
 import mongoose from 'mongoose';
 
@@ -46,6 +45,12 @@ const dailyUpdateSchema = new mongoose.Schema(
     completedAt: { type: Date, default: null },
     completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 
+    // Log only — the Requirements card this update is about (added with the
+    // Requirements board, 2026-09-20). It then shows on that card's timeline AND
+    // in the coordinator's own daily log, the same entry seen from both places.
+    // Set to null (not left dangling) if the card is deleted.
+    requirement: { type: mongoose.Schema.Types.ObjectId, ref: 'Requirement', default: null },
+
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   },
   { timestamps: true }
@@ -57,5 +62,7 @@ dailyUpdateSchema.index({ coordinator: 1, kind: 1, status: 1 });
 // The all-coordinators views an overseer opens.
 dailyUpdateSchema.index({ kind: 1, date: -1 });
 dailyUpdateSchema.index({ kind: 1, status: 1 });
+// A card's timeline of updates.
+dailyUpdateSchema.index({ requirement: 1, createdAt: -1 });
 
 export default mongoose.model('DailyUpdate', dailyUpdateSchema);

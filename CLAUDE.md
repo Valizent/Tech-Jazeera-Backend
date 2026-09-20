@@ -1380,3 +1380,32 @@ when requested):**
   assertions with disposable users (all cleaned up), a full browser
   click-through as Coordinator, MM and Admin (incl. 375px mobile and
   Arabic/RTL), server suite still 38/38. See `docs/DAILY-UPDATES-notes.md`.
+- **Requirements board COMPLETE (Coordinator Workflow, milestone 2 of 4)** — the
+  pre-mobilisation pipeline the user asked for: client requirements that have
+  come in but aren't mobilised yet (worker sourced, documents being prepared),
+  as a Kanban board that sits BEFORE Mobilisation (which can't represent a
+  requirement with no worker yet). One card per client requirement, admin-
+  editable stages (per-stage "stale after N days", "notify the team on
+  arrival", "closed"), native drag-and-drop with an optimistic move that rolls
+  back if the server refuses, plus a "Move to…" select for touch, a card
+  timeline merging stage moves with the updates coordinators write, and stale/
+  notification handling. Same own/team Section Access shape as Daily Updates —
+  `requirementsOwn`, `requirementsTeam`, and a Write-only `requirementStages`
+  (Admin until granted) — with all authorization in the service and per-card
+  server-computed `permissions`; the shared `resolveOwnTeamAccess` helper was
+  extracted and Daily Updates moved onto it. A Daily Updates log entry can now
+  point at a card (`DailyUpdate.requirement`), so one update shows on the card
+  AND in the coordinator's daily log with a link back. No commercial fields on
+  a requirement by design. The typed client name links itself to a real Client
+  when it matches, so a requirement can arrive from a company that isn't a
+  client yet. Stages start empty and are created by an explicit "Use suggested
+  stages" click (never seeded silently; the suggested day-counts are first
+  guesses). **User action still needed**: tick the roles on the Section Access
+  page (Sales & Clients → Requirements) in production/staging — already done on
+  dev; the earlier `grant:daily-updates` script is only a convenience. Verified:
+  128 real-HTTP API assertions (temporary roles, so no real person was
+  notified, everything cleaned up), the Daily Updates suite re-run at 78/78, a
+  full browser click-through as Admin/Coordinator/MM (real drag-and-drop,
+  optimistic rollback, 375px mobile, Arabic/RTL, stale styling), server suite
+  38/38. Milestones 3 (candidates + "Start mobilisation" handoff) and 4
+  (manager extras) not started. See `docs/REQUIREMENTS-BOARD-notes.md`.

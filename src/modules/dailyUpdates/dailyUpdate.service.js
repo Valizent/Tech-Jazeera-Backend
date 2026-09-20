@@ -24,11 +24,11 @@
  */
 import mongoose from 'mongoose';
 import DailyUpdate from './dailyUpdate.model.js';
+import Requirement from '../requirements/requirement.model.js';
 import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
-import logger from '../../config/logger.js';
-import { getMySectionAccess } from '../sectionAccess/sectionAccess.service.js';
-import { notifyUser } from '../notifications/notification.service.js';
+import { resolveOwnTeamAccess } from '../sectionAccess/sectionAccess.service.js';
+import { notifyUserSafely } from '../notifications/notification.service.js';
 import { logAudit } from '../audit/audit.service.js';
 
 const OWN_KEY = 'dailyUpdatesOwn';
@@ -50,15 +50,7 @@ function todayInRiyadh() {
 
 const idOf = (ref) => String(ref?._id ?? ref);
 
-async function resolveAccess(actor) {
-  const { read, write } = await getMySectionAccess({ userId: actor.userId, role: actor.role });
-  return {
-    ownRead: read.includes(OWN_KEY),
-    ownWrite: write.includes(OWN_KEY),
-    teamRead: read.includes(TEAM_KEY),
-    teamWrite: write.includes(TEAM_KEY),
-  };
-}
+const resolveAccess = (actor) => resolveOwnTeamAccess(actor, OWN_KEY, TEAM_KEY);
 
 /** A person may edit/delete an entry if they hold team-write, or if it is one
  *  they wrote for themselves — never a task someone else assigned to them. */
@@ -98,15 +90,16 @@ function present(item, actor, access, today) {
 const POPULATE = [
   { path: 'coordinator', select: 'name' },
   { path: 'createdBy', select: 'name' },
+  { path: 'requirement', select: 'serialNumber clientName jobTitle' },
 ];
 
-/** Best-effort — a notification failing must never fail the action it
- *  describes (the same rule the approval engine follows). */
-async function notifySafely(userId, payload) {
-  try {
-    await notifyUser(userId, payload);
-  } catch (err) {
-    logger.warn(`[dailyUpdates] notification to ${userId} failed: ${err.message}`);
+/** An update can only be written on a card the author is a coordinator of —
+ *  the same "your own cards" boundary the Requirements module enforces. */
+async function assertCoordinatorOfRequirement(requirementId, actor) {
+  const requirement = await Requirement.findById(requirementId).select('coordinators').lean();
+  if (!requirement) throw new ApiError(400, 'That requirement was not found.');
+  if (!requirement.coordinators.some((c) => String(c) === actor.userId)) {
+    throw new ApiError(403, 'You can only write updates on requirements you are a coordinator of.');
   }
 }
 
@@ -220,14 +213,16 @@ export async function createDailyUpdate(data, actor) {
     if (actor.role !== 'Coordinator') throw new ApiError(400, 'Only coordinators can add a daily log entry.');
     const date = data.date ?? todayInRiyadh();
     assertNotFuture(date);
+    if (data.requirement) await assertCoordinatorOfRequirement(data.requirement, actor);
     const item = await DailyUpdate.create({
       kind: 'Log',
       coordinator: actor.userId,
       text: data.text,
       date,
+      requirement: data.requirement ?? null,
       createdBy: actor.userId,
     });
-    await audit('dailyUpdate.log.create', item, actor);
+    await audit('dailyUpdate.log.create', item, actor, data.requirement ? { requirement: data.requirement } : {});
     return present((await DailyUpdate.findById(item._id).populate(POPULATE).lean()), actor, access, todayInRiyadh());
   }
 
@@ -251,7 +246,7 @@ export async function createDailyUpdate(data, actor) {
   await audit('dailyUpdate.task.create', item, actor, { assigned: !isSelf });
 
   if (!isSelf) {
-    await notifySafely(assigneeId, {
+    await notifyUserSafely(assigneeId, {
       type: 'Task',
       title: 'New task assigned to you',
       body: data.text.slice(0, 200),
@@ -300,7 +295,7 @@ export async function setTaskStatus(id, status, actor) {
     // ticked it off themselves, and not on a reopen.
     if (status === 'Done' && idOf(item.createdBy) !== actor.userId) {
       const who = await User.findById(actor.userId).select('name').lean();
-      await notifySafely(item.createdBy, {
+      await notifyUserSafely(item.createdBy, {
         type: 'Task',
         title: 'A task you assigned is done',
         body: `${who?.name ?? 'A coordinator'}: ${item.text}`.slice(0, 200),

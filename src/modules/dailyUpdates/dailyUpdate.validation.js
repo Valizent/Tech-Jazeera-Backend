@@ -33,13 +33,15 @@ export const createDailyUpdateSchema = z
     date: optionalDate, // Log only — defaults to today in the service
     dueDate: optionalDate, // Task only
     coordinator: z.preprocess(emptyToUndef, objectId.optional()), // Task only — the assignee; defaults to the caller
+    requirement: z.preprocess(emptyToUndef, objectId.optional()), // Log only — the Requirements card it is about
   })
   .superRefine((v, ctx) => {
     if (v.kind === 'Log') {
       if (v.dueDate) ctx.addIssue({ code: 'custom', path: ['dueDate'], message: 'A log entry has no due date.' });
       if (v.coordinator) ctx.addIssue({ code: 'custom', path: ['coordinator'], message: 'A log entry is always your own.' });
-    } else if (v.date) {
-      ctx.addIssue({ code: 'custom', path: ['date'], message: 'A task has a due date, not a log date.' });
+    } else {
+      if (v.date) ctx.addIssue({ code: 'custom', path: ['date'], message: 'A task has a due date, not a log date.' });
+      if (v.requirement) ctx.addIssue({ code: 'custom', path: ['requirement'], message: 'Only a log entry can be tied to a requirement.' });
     }
   });
 

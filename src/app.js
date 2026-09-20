@@ -61,6 +61,7 @@ import mobilisationSettingsRoutes from './modules/mobilisationSettings/mobilisat
 import sectionAccessRoutes from './modules/sectionAccess/sectionAccess.routes.js';
 import reconciliationRoutes from './modules/reconciliation/reconciliation.routes.js';
 import dailyUpdateRoutes from './modules/dailyUpdates/dailyUpdate.routes.js';
+import requirementRoutes from './modules/requirements/requirement.routes.js';
 
 const app = express();
 
@@ -135,6 +136,7 @@ app.use('/api/mobilisation-settings', mobilisationSettingsRoutes);
 app.use('/api/section-access', sectionAccessRoutes);
 app.use('/api/reconciliation', reconciliationRoutes);
 app.use('/api/daily-updates', dailyUpdateRoutes);
+app.use('/api/requirements', requirementRoutes);
 
 // Public NFC tap pages — server-rendered HTML, NOT under /api (no auth, own
 // rate limiter). Must be mounted before the 404 handler.

@@ -9,7 +9,9 @@ import mongoose from 'mongoose';
 
 // 'Task' (added 2026-09-20): a daily-update task was assigned to you, or one
 // you assigned was completed — not an approval decision, so not 'RequestStatus'.
-export const NOTIFICATION_TYPES = ['Expiry', 'RequestStatus', 'Task'];
+// 'Requirement' (added 2026-09-20): a pre-mobilisation requirement was assigned
+// to you, or moved along the board.
+export const NOTIFICATION_TYPES = ['Expiry', 'RequestStatus', 'Task', 'Requirement'];
 
 const notificationSchema = new mongoose.Schema(
   {

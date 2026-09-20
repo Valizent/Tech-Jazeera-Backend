@@ -96,6 +96,19 @@ export const SECTION_KEYS = [
   // anyone's). See dailyUpdate.service.js for how the two combine.
   'dailyUpdatesOwn',
   'dailyUpdatesTeam',
+  // Added 2026-09-20 — the pre-mobilisation Requirements board (milestone 2 of
+  // the Coordinator Workflow). Same own/team pair as Daily Updates:
+  // `requirementsOwn` (Read: see the requirements I'm a coordinator on; Write:
+  // add requirements as myself, edit/move/delete my own, add updates to my
+  // cards) and `requirementsTeam` (Read: see every requirement; Write: assign
+  // any coordinators, edit/move/delete anyone's; members are also who gets
+  // notified when a card reaches a "notify" stage). `requirementStages` is a
+  // Write-only key — who may add/rename/reorder/delete the board's stages;
+  // Admin only until granted, per "admin editable". Reading the stages needs
+  // no key of its own: they arrive with the board itself.
+  'requirementsOwn',
+  'requirementsTeam',
+  'requirementStages',
 ];
 
 const sectionAccessSchema = new mongoose.Schema(
