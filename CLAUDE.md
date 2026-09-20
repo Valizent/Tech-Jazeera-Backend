@@ -1351,3 +1351,32 @@ when requested):**
   directions via network-request inspection, and a real Mobilisation's
   profit figures rendering in the correct color). See
   `docs/QA-AUDIT-2026-09-15-notes.md`'s second 2026-09-17 follow-up.
+- **Daily Updates COMPLETE (Coordinator Workflow, milestone 1 of 4)** — a
+  real home for a coordinator's day-to-day work, from a user ask that also
+  wanted a Kanban-style pipeline for requirements that have arrived but
+  aren't mobilised yet (worker sourced, documents being prepared) — that
+  board is milestones 2-4, not started; locked decisions for it are in the
+  notes file (one card per client requirement with candidate workers inside,
+  admin-editable stages). This milestone: a to-do list AND a work log per
+  coordinator — a coordinator writes their own to-dos and log entries, and MM
+  (or anyone with write access) can assign a task to any coordinator, all of
+  it readable by MM. One `DailyUpdate` collection (`kind: Log | Task`), two
+  new Section Access keys because there are two real circles:
+  `dailyUpdatesOwn` (a coordinator's own workspace) and `dailyUpdatesTeam`
+  (oversight of everyone + assigning) — the same split-key precedent as
+  Attendance's Sign In/Out. All authorization lives in the service, not a
+  route gate (which key applies depends on the entry being touched), and every
+  row carries a server-computed `permissions` object so the client never
+  re-derives who may do what: a coordinator can tick off a task a manager
+  assigned but not rewrite or delete it. Entries always belong to a real,
+  active `Coordinator` login. Assignment/completion notifications (new
+  notification type `Task`), a `backdated` flag so a manager can tell an
+  after-the-fact log entry from a same-day one, Riyadh-day-aware overdue and
+  no-future-dates rules, every mutation audited, English + Arabic. Real
+  grants applied on dev via the new `npm run grant:daily-updates` ("Coordinator"
+  role → own Write, "MM" role → team Write). **User action still needed**:
+  run that script once against staging and production — the grants live in
+  each database's own `SectionAccess` collection. Verified: 78 real-HTTP API
+  assertions with disposable users (all cleaned up), a full browser
+  click-through as Coordinator, MM and Admin (incl. 375px mobile and
+  Arabic/RTL), server suite still 38/38. See `docs/DAILY-UPDATES-notes.md`.

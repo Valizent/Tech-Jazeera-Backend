@@ -7,7 +7,9 @@
  */
 import mongoose from 'mongoose';
 
-export const NOTIFICATION_TYPES = ['Expiry', 'RequestStatus'];
+// 'Task' (added 2026-09-20): a daily-update task was assigned to you, or one
+// you assigned was completed — not an approval decision, so not 'RequestStatus'.
+export const NOTIFICATION_TYPES = ['Expiry', 'RequestStatus', 'Task'];
 
 const notificationSchema = new mongoose.Schema(
   {

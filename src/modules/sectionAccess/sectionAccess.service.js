@@ -46,6 +46,8 @@ const SECTION_LABELS = {
   holidays: 'Holidays',
   dashboardProfit: 'Dashboard — company profit figure',
   reconciliation: 'Data Reconciliation',
+  dailyUpdatesOwn: 'Daily Updates — my own tasks & log',
+  dailyUpdatesTeam: 'Daily Updates — every coordinator (oversight & assigning)',
 };
 
 /** What each section IS FOR, in plain English — not what Read/Write
@@ -92,6 +94,8 @@ const SECTION_DESCRIPTIONS = {
   holidays: 'The company holiday calendar.',
   dashboardProfit: "The dashboard's real monthly profit figure (revenue minus payroll cost minus expenses) — without granting the underlying Invoices/Payroll/Expenses sections themselves.",
   reconciliation: 'A standing integrity report: ledger totals that no longer add up, an Approved mobilisation with no deployment, a placement double-booked.',
+  dailyUpdatesOwn: "A coordinator's own daily work log and to-do list — including any task a manager assigns to them. Read is seeing them; Write is adding entries and ticking tasks off.",
+  dailyUpdatesTeam: "Every coordinator's daily log and tasks. Read is seeing them all; Write is also assigning a task to any coordinator and editing, ticking off or deleting anyone's entries.",
 };
 
 function defaultFor(sectionKey) {

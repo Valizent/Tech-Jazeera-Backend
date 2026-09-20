@@ -87,6 +87,15 @@ export const SECTION_KEYS = [
   // shape as 'auditLog': no write action, Admin-only until granted. See
   // reconciliation.service.js.
   'reconciliation',
+  // Added 2026-09-20 — the Daily Updates module (a coordinator's day-to-day
+  // log and to-do list). Two keys because there are two genuinely different
+  // circles: `dailyUpdatesOwn` is a coordinator's own workspace (Read: see
+  // their own; Write: add/edit their own and tick off what's assigned to
+  // them), `dailyUpdatesTeam` is oversight of everyone (Read: see every
+  // coordinator's; Write: assign tasks to any coordinator, edit/delete/tick
+  // anyone's). See dailyUpdate.service.js for how the two combine.
+  'dailyUpdatesOwn',
+  'dailyUpdatesTeam',
 ];
 
 const sectionAccessSchema = new mongoose.Schema(
