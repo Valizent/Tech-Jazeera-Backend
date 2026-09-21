@@ -782,8 +782,9 @@ async function findDeployments({ worker, client, status, sortOrder }, actor, { s
   // (`worker: null`), so there's nothing to scope for it, same convention
   // getDeployment's own comment already established for a single read.
   if (actor?.role === 'Coordinator') {
-    const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
-    filter.$or = [{ worker: null }, { worker: { $in: teamIds } }];
+    const Mobilisation = (await import('../mobilisations/mobilisation.model.js')).default;
+    const myMobIds = await Mobilisation.find({ 'coordinators.user': actor.userId }).distinct('_id');
+    filter.mobilisation = { $in: myMobIds };
   }
 
   const sort = { startDate: sortOrder === 'asc' ? 1 : -1, _id: -1 };

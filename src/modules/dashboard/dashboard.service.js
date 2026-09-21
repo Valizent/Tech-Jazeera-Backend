@@ -475,8 +475,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
         };
 
         if (isCoordinator) {
-          const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
-          deploymentFilter.$and = [{ $or: [{ worker: null }, { worker: { $in: teamIds } }] }];
+          const myMobIds = await Mobilisation.find({ 'coordinators.user': actor.userId }).distinct('_id');
+          deploymentFilter.mobilisation = { $in: myMobIds };
         }
 
         const activeDeployments = await Deployment.find(deploymentFilter).select('mobilisation').lean();
@@ -484,8 +484,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
         const mobIds = activeDeployments.map(d => d.mobilisation).filter(Boolean);
         if (mobIds.length === 0) return 0;
         
-        const activeMobs = await Mobilisation.find({ _id: { $in: mobIds } }).select('profit').lean();
-        return activeMobs.reduce((sum, mob) => sum + (mob.profit?.monthly || 0), 0);
+        const activeMobs = await Mobilisation.find({ _id: { $in: mobIds } }).select('profitPerMonth').lean();
+        return activeMobs.reduce((sum, mob) => sum + (mob.profitPerMonth || 0), 0);
       })()
     },
     workforceByStatus: canReadEmployees ? workforceByStatus : null,
@@ -596,7 +596,7 @@ export async function getCoordinatorDrillDown(actor, coordinatorId) {
   // Mobilisation profit for this coordinator
   const mobilisations = await Mobilisation.aggregate([
     { $match: { 'coordinators.user': new mongoose.Types.ObjectId(coordinatorId), status: { $in: ['Deployed', 'Approved'] } } },
-    { $group: { _id: null, totalProfit: { $sum: '$profit.monthly' } } }
+    { $group: { _id: null, totalProfit: { $sum: '$profitPerMonth' } } }
   ]);
 
   const totalProfit = mobilisations[0]?.totalProfit ?? 0;
