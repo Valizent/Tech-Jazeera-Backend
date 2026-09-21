@@ -467,20 +467,24 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       // Also available for Managers/Admins as a global total.
       activeMobilisationRevenue: await (async () => {
         const startOfThisMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-        const activeDeployments = await Deployment.find({
+        
+        const deploymentFilter = {
           startDate: { $lte: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59, 999) },
-          $or: [{ endDate: null }, { endDate: { $gte: startOfThisMonth } }]
-        }).select('mobilisation worker').lean();
+          $or: [{ endDate: null }, { endDate: { $gte: startOfThisMonth } }],
+          archived: { $ne: true }
+        };
+
+        if (isCoordinator) {
+          const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+          deploymentFilter.$and = [{ $or: [{ worker: null }, { worker: { $in: teamIds } }] }];
+        }
+
+        const activeDeployments = await Deployment.find(deploymentFilter).select('mobilisation').lean();
         
         const mobIds = activeDeployments.map(d => d.mobilisation).filter(Boolean);
         if (mobIds.length === 0) return 0;
         
-        const mobQuery = { _id: { $in: mobIds } };
-        if (isCoordinator) {
-          mobQuery['coordinators.user'] = new mongoose.Types.ObjectId(actor.userId);
-        }
-        
-        const activeMobs = await Mobilisation.find(mobQuery).select('profit').lean();
+        const activeMobs = await Mobilisation.find({ _id: { $in: mobIds } }).select('profit').lean();
         return activeMobs.reduce((sum, mob) => sum + (mob.profit?.monthly || 0), 0);
       })()
     },
