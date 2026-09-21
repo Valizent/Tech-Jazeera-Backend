@@ -477,8 +477,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // pendingClientApprovals.
     myPendingActions,
     mobilisationsByStatus: mobilisationsAgg ? Object.fromEntries(mobilisationsAgg.map(r => [r._id, r.count])) : null,
-    activeSubcontractors: activeSubcontractorsCount,
-    attendanceSummary: attendanceAgg ? await (async () => {
+    activeSubcontractors: (actor?.role === 'Manager' || actor?.role === 'Admin') ? activeSubcontractorsCount : null,
+    attendanceSummary: (actor?.role === 'Manager' || actor?.role === 'Admin') && attendanceAgg ? await (async () => {
       const empIds = attendanceAgg.map(a => a.employee);
       const emps = await Employee.find({ _id: { $in: empIds } }).select('type designation currentClient').lean();
       const summary = { staff: 0, bdm: 0, coordinator: 0, standby: 0 };
@@ -493,8 +493,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       }
       return summary;
     })() : null,
-    pendingLeave,
-    pendingExit
+    pendingLeave: (actor?.role === 'HR' || actor?.role === 'Admin') ? pendingLeave : null,
+    pendingExit: (actor?.role === 'HR' || actor?.role === 'Admin') ? pendingExit : null
   };
 }
 
