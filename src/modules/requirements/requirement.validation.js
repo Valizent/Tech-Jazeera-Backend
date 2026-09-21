@@ -56,9 +56,12 @@ export const updateRequirementSchema = z
 
 export const moveStageSchema = z.object({ stage: objectId });
 
+/** The board's filters — and, unchanged, the Excel export's: it exports what the board shows. */
 export const boardQuerySchema = z.object({
   coordinator: z.preprocess(emptyToUndef, objectId.optional()),
   closed: z.preprocess(emptyToUndef, z.enum(['all']).optional()), // 'all' = include long-closed cards
+  client: z.preprocess(emptyToUndef, z.string().trim().min(1).max(150).optional()), // the company name a card was typed with
+  subcontractor: z.preprocess(emptyToUndef, objectId.optional()),
 });
 
 export const requirementIdParamSchema = idParam('requirement');

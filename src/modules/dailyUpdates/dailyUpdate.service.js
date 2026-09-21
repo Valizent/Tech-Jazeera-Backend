@@ -197,6 +197,18 @@ export async function listDailyUpdates({ kind, coordinator, status, from, to, pa
   };
 }
 
+/**
+ * Open to-dos this viewer can see — the figure the dashboard's "Waiting on you"
+ * shows. Scoped exactly like the Tasks tab it links to (team-read: every
+ * coordinator's; own-only: the ones assigned to me), so the number on the
+ * dashboard and the list you land on always agree. 0 without access.
+ */
+export async function countOpenTasks(actor) {
+  const access = await resolveAccess(actor);
+  if (!access.ownRead && !access.teamRead) return 0;
+  return DailyUpdate.countDocuments({ kind: 'Task', status: 'Open', ...(access.teamRead ? {} : { coordinator: actor.userId }) });
+}
+
 /** The picker for "assign to" and the coordinator filter — team-read only,
  *  since an own-only coordinator never needs anyone else's name. */
 export async function listCoordinators(actor) {

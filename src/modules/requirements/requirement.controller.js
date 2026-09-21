@@ -5,12 +5,24 @@
 import ApiResponse from '../../utils/ApiResponse.js';
 import * as requirementService from './requirement.service.js';
 import * as stageService from './requirementStage.service.js';
+import { buildRequirementsXlsx } from './requirement.export.js';
 
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
 
-/** GET /api/requirements/board — 200 → data: { stages, requirements, truncated } */
+/** GET /api/requirements/board — 200 → data: { stages, requirements, truncated, filterOptions } */
 export async function board(req, res) {
   res.json(new ApiResponse('Requirements board.', await requirementService.getBoard(req.query, actor(req))));
+}
+
+/** GET /api/requirements/export?... — downloads a .xlsx of what the board shows for the
+ *  same filters: one sheet of requirements, one of their candidates. A binary response,
+ *  the documented exception to the JSON contract. */
+export async function exportAll(req, res) {
+  const requirements = await requirementService.exportRequirements(req.query, actor(req));
+  const buffer = await buildRequirementsXlsx(requirements);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="requirements_${new Date().toISOString().slice(0, 10)}.xlsx"`);
+  res.send(buffer);
 }
 
 /** GET /api/requirements/coordinators — 200 → data: [{ _id, name }] · 403 without team-read */

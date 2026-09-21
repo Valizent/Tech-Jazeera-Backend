@@ -32,6 +32,8 @@ import Mobilisation from '../mobilisations/mobilisation.model.js';
 import { toUtcDay } from '../attendance/attendance.service.js';
 import { annotateCanDecide } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
+import { countStaleRequirements } from '../requirements/requirement.service.js';
+import { countOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
 
 export const EXPIRY_WARNING_DAYS = 30;
 const TREND_MONTHS = 6;
@@ -135,6 +137,12 @@ const daysUntil = (date) => Math.ceil((new Date(date).getTime() - Date.now()) / 
  * review-queue pages use) per module rather than re-deriving the workflow/
  * legacy-role logic a third time — one extra ApprovalRole-membership query
  * per module, cheap at this data volume.
+ *
+ * Two Coordinator Workflow figures ride along (milestone 4), not approvals but
+ * the same idea — work that's waiting on this viewer: requirements stale past
+ * their stage's limit, and open to-dos. Each is counted by its own module under
+ * that module's own Section Access (own-only sees their own, team sees all — the
+ * same scope as the page the row links to), so the dashboard can't disagree with it.
  */
 // `sectionKey` (added 2026-09-15, a real QA-audit-found gap — D1): the
 // REAL decide route for Leave/Timesheet/SalaryAdvance/Reimbursement also
@@ -161,6 +169,7 @@ const PENDING_ACTION_MODULES = [
 
 async function getMyPendingActions(actor) {
   if (!actor?.userId) return [];
+  const [staleRequirements, openTasks] = await Promise.all([countStaleRequirements(actor), countOpenTasks(actor)]);
   const perModule = await Promise.all(
     PENDING_ACTION_MODULES.map(async ({ label, url, Model, pendingStatus, legacyAllowedRoles, sectionKey }) => {
       const items = await Model.find({ status: pendingStatus }).select('workflow currentStep steps status').lean();
@@ -171,7 +180,11 @@ async function getMyPendingActions(actor) {
       return { label, url, count };
     })
   );
-  return perModule.filter((m) => m.count > 0);
+  return [
+    ...perModule,
+    { label: 'Stale requirements', url: '/requirements', count: staleRequirements },
+    { label: 'Open tasks', url: '/daily-updates?tab=tasks', count: openTasks },
+  ].filter((m) => m.count > 0);
 }
 
 /**

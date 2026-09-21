@@ -20,7 +20,12 @@
  * right. The three "handoff" functions at the bottom (assertCanStartFromRequirement,
  * attachMobilisation, onMobilisationApproved) are the only part of this module
  * mobilisation.service.js calls into.
+ *
+ * Manager extras (milestone 4) add no permission of their own either: the client /
+ * subcontractor filters, the Excel export and the dashboard's stale count all see
+ * exactly the cards the board shows that viewer (see buildScope, countStaleRequirements).
  */
+import mongoose from 'mongoose';
 import Requirement from './requirement.model.js';
 import RequirementStage from './requirementStage.model.js';
 import DailyUpdate from '../dailyUpdates/dailyUpdate.model.js';
@@ -45,6 +50,7 @@ const FORBIDDEN = 'You do not have permission to perform this action.';
 const DAY_MS = 86_400_000;
 const CLOSED_VISIBLE_DAYS = 30; // a card in a terminal stage leaves the default board after this
 const BOARD_LIMIT = 1000;
+const EXPORT_LIMIT = 5000; // same cap as the deployments export
 
 const idOf = (ref) => String(ref?._id ?? ref);
 const resolveAccess = (actor) => resolveOwnTeamAccess(actor, OWN_KEY, TEAM_KEY);
@@ -97,6 +103,7 @@ function present(requirement, stageById, activity, actor, access, { withCandidat
   const card = {
     ...requirement,
     daysInStage,
+    // The rule countStaleRequirements() below restates as one query — change both together.
     stale: Boolean(stage && !stage.isTerminal && stage.staleAfterDays && daysInStage >= stage.staleAfterDays),
     lastUpdateAt: seen?.last ?? null,
     updateCount: seen?.count ?? 0,
@@ -163,13 +170,19 @@ const moveEntry = (stage, moverId, at) => ({ stage: stage._id, stageName: stage.
 // ---- reads -----------------------------------------------------------------------------
 
 /**
- * The whole board in one call: the stages plus every card the caller may see.
+ * Which cards a viewer's board is made of — ONE builder shared by the board and its
+ * Excel export, so the two can never drift on what a person is allowed to see
+ * (same idea as deployment.service.js's findDeployments).
+ *
  * An own-only coordinator's filter is forced to their own cards here — a
- * hand-crafted `?coordinator=<someone else>` can't widen it. Cards in a
- * terminal stage that have sat there over a month are left out unless
- * `closed=all`, so the finished columns don't grow forever.
+ * hand-crafted `?coordinator=<someone else>` can't widen it. Cards in a terminal
+ * stage that have sat there over a month are left out unless `closed=all`, so the
+ * finished columns don't grow forever. `client` matches the company name the card
+ * was typed with (case-insensitively); `subcontractor` matches a card that has a
+ * candidate from that subcontractor who hasn't been dropped — the same "a dropped
+ * candidate no longer counts" rule the card's own candidate count follows.
  */
-export async function getBoard({ coordinator, closed }, actor) {
+async function buildScope({ coordinator, closed, client, subcontractor }, actor) {
   const access = await resolveAccess(actor);
   if (!access.ownRead && !access.teamRead) throw new ApiError(403, FORBIDDEN);
 
@@ -182,6 +195,8 @@ export async function getBoard({ coordinator, closed }, actor) {
   } else {
     filter.coordinators = actor.userId;
   }
+  if (client) filter.clientName = { $regex: `^${escapeRegex(client)}$`, $options: 'i' };
+  if (subcontractor) filter.candidates = { $elemMatch: { subcontractor, status: { $ne: 'Dropped' } } };
   const terminalIds = stages.filter((s) => s.isTerminal).map((s) => s._id);
   if (closed !== 'all' && terminalIds.length > 0) {
     filter.$or = [
@@ -189,16 +204,104 @@ export async function getBoard({ coordinator, closed }, actor) {
       { stageEnteredAt: { $gte: new Date(Date.now() - CLOSED_VISIBLE_DAYS * DAY_MS) } },
     ];
   }
+  return { access, stages, stageById, filter };
+}
 
-  // Longest-waiting first within a column, so what needs attention sits on top.
-  const requirements = await Requirement.find(filter).sort({ stageEnteredAt: 1, _id: 1 }).limit(BOARD_LIMIT).populate(POPULATE).lean();
+/**
+ * The choices the board's client / subcontractor filters offer. Taken from the cards
+ * the viewer can see rather than from the Clients / Subcontractors modules: a
+ * coordinator usually has no access to those (asking would just break the filter),
+ * and this way a value is only ever offered when something is behind it. Deliberately
+ * independent of the other filters — picking a coordinator must not make the client
+ * you already chose vanish from the list.
+ */
+async function filterOptionsFor(access, actor) {
+  const scope = access.teamRead ? {} : { coordinators: new mongoose.Types.ObjectId(actor.userId) };
+  const [clientNames, subcontractorRows] = await Promise.all([
+    Requirement.distinct('clientName', scope),
+    // $match doesn't cast inside an aggregation, hence the ObjectId above.
+    Requirement.aggregate([
+      { $match: scope },
+      { $unwind: '$candidates' },
+      { $match: { 'candidates.subcontractor': { $ne: null }, 'candidates.status': { $ne: 'Dropped' } } },
+      { $group: { _id: '$candidates.subcontractor' } },
+    ]),
+  ]);
+
+  // "ARAMCO" and "Aramco" are the same filter (the match is case-insensitive) — list it once.
+  const clients = new Map();
+  for (const name of [...clientNames].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))) {
+    if (!clients.has(name.toLowerCase())) clients.set(name.toLowerCase(), name);
+  }
+  // Current names, not the snapshot on each candidate — a renamed subcontractor shows its new name.
+  const subcontractors = subcontractorRows.length
+    ? await Subcontractor.find({ _id: { $in: subcontractorRows.map((r) => r._id) } }).select('name').sort({ name: 1 }).lean()
+    : [];
+  return { clients: [...clients.values()], subcontractors };
+}
+
+/**
+ * The whole board in one call: the stages, every card the caller may see (within the
+ * filters), and the values the filters can offer.
+ */
+export async function getBoard(query, actor) {
+  const { access, stages, stageById, filter } = await buildScope(query, actor);
+
+  const [requirements, filterOptions] = await Promise.all([
+    // Longest-waiting first within a column, so what needs attention sits on top.
+    Requirement.find(filter).sort({ stageEnteredAt: 1, _id: 1 }).limit(BOARD_LIMIT).populate(POPULATE).lean(),
+    filterOptionsFor(access, actor),
+  ]);
   const activity = await activityFor(requirements.map((r) => r._id));
 
   return {
     stages,
     requirements: requirements.map((r) => present(r, stageById, activity, actor, access)),
     truncated: requirements.length === BOARD_LIMIT,
+    filterOptions,
   };
+}
+
+/**
+ * Every card the board would show for the same filters, with its candidates, for the
+ * Excel export — cards oldest first (the order they were raised), not by stage.
+ * With a subcontractor filter the candidate rows narrow to that subcontractor's
+ * workers too (a manager exporting "ABC Manpower" wants ABC's people, not the rest
+ * of each card); the card-level counts still describe the whole card.
+ */
+export async function exportRequirements(query, actor) {
+  const { access, stageById, filter } = await buildScope(query, actor);
+  const requirements = await Requirement.find(filter)
+    .sort({ createdAt: 1, _id: 1 })
+    .limit(EXPORT_LIMIT)
+    .populate(POPULATE)
+    .populate({ path: 'candidates.mobilisation', select: 'serialNumber' })
+    .lean();
+
+  return requirements.map((r) => {
+    const card = present(r, stageById, new Map(), actor, access, { withCandidates: true });
+    if (query.subcontractor) card.candidates = card.candidates.filter((c) => idOf(c.subcontractor) === query.subcontractor);
+    return { ...card, stageName: stageById.get(idOf(r.stage))?.name ?? '' };
+  });
+}
+
+/**
+ * How many cards, among those this viewer can see, have sat in their stage past its
+ * "stale after" limit — the figure the dashboard's "Waiting on you" shows. It is the
+ * same rule as `present`'s `stale` flag written as one query: "days in stage >= N"
+ * is exactly "entered the stage at or before N days ago". 0 without board access.
+ */
+export async function countStaleRequirements(actor) {
+  const access = await resolveAccess(actor);
+  if (!access.ownRead && !access.teamRead) return 0;
+
+  const stages = await RequirementStage.find({ isTerminal: false, staleAfterDays: { $ne: null } }).select('staleAfterDays').lean();
+  if (stages.length === 0) return 0;
+
+  const now = Date.now();
+  const filter = { $or: stages.map((s) => ({ stage: s._id, stageEnteredAt: { $lte: new Date(now - s.staleAfterDays * DAY_MS) } })) };
+  if (!access.teamRead) filter.coordinators = actor.userId;
+  return Requirement.countDocuments(filter);
 }
 
 /** One card with its full timeline: the stage history and every update

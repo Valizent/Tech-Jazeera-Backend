@@ -8,8 +8,8 @@
  * dailyUpdate.routes.js). The STAGE routes are different: one key, one question,
  * so `requirementStages` (Write) gates them here. requireStaff stays the floor.
  *
- * Order matters: every fixed path ('board', 'coordinators', 'stages/...') is
- * registered before '/:id', or it would be read as a requirement id.
+ * Order matters: every fixed path ('board', 'export', 'coordinators', 'stages/...')
+ * is registered before '/:id', or it would be read as a requirement id.
  */
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
@@ -41,6 +41,7 @@ router.use(requireStaff);
 const canManageStages = requireSectionAccess('requirementStages', 'write');
 
 router.get('/board', validate({ query: boardQuerySchema }), asyncHandler(controller.board));
+router.get('/export', validate({ query: boardQuerySchema }), asyncHandler(controller.exportAll));
 router.get('/coordinators', asyncHandler(controller.coordinators));
 
 router.post('/stages/defaults', canManageStages, asyncHandler(controller.createSuggestedStages));
