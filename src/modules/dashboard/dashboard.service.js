@@ -481,17 +481,18 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     attendanceSummary: (actor?.role === 'Manager' || actor?.role === 'Admin') && attendanceAgg ? await (async () => {
       const empIds = attendanceAgg.map(a => a.employee);
       const emps = await Employee.find({ _id: { $in: empIds } }).select('type designation currentClient').lean();
-      const summary = { staff: 0, bdm: 0, coordinator: 0, standby: 0 };
+      
+      let total = 0;
+      const excludedDesignations = ['MM', 'FM', 'GM', 'COO', 'Admin', 'HR']; 
+      
       for (const e of emps) {
-        if (e.type === 'Own') {
-          summary.staff++;
-          if (e.designation === 'BDM') summary.bdm++;
-          if (e.designation === 'Coordinator') summary.coordinator++;
+        if (e.type === 'Own' && !excludedDesignations.includes(e.designation)) {
+          total++;
         } else if (e.type === 'Outsourced' && !e.currentClient) {
-          summary.standby++;
+          total++;
         }
       }
-      return summary;
+      return { total };
     })() : null,
     pendingLeave: (actor?.role === 'HR' || actor?.role === 'Admin') ? pendingLeave : null,
     pendingExit: (actor?.role === 'HR' || actor?.role === 'Admin') ? pendingExit : null
