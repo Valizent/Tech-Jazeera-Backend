@@ -32,6 +32,8 @@ import { nextSequence } from '../quotations/counter.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import { createDeploymentFromMobilisation } from '../deployments/deployment.service.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import logger from '../../config/logger.js';
+import { assertCanStartFromRequirement, attachMobilisation, onMobilisationApproved } from '../requirements/requirement.service.js';
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -90,6 +92,9 @@ const POPULATE = [
   { path: 'decidedBy', select: 'name' },
   { path: 'createdBy', select: 'name' },
   { path: 'documents.uploadedBy', select: 'name' },
+  // The Requirements card this was started from, if any — just enough to show
+  // "From REQ-0007" and link to it. Nothing commercial lives on a requirement.
+  { path: 'requirement', select: 'serialNumber clientName jobTitle' },
 ];
 
 // Section 1 — the rate/commission/profit fields the Coordinator types in
@@ -507,6 +512,11 @@ export async function createMobilisation(data, actor) {
   if (!clientDoc) throw new ApiError(404, 'Client not found.');
   const subcontractorSnapshot = await resolveSubcontractorSnapshot(data.workerType, data.subcontractor);
 
+  // Started from a Requirements card's candidate ("Start mobilisation")? Confirm the
+  // caller may, and that the candidate is still free, BEFORE anything is created —
+  // so a refused start leaves no orphan Draft behind.
+  if (data.requirement) await assertCanStartFromRequirement(data, actor);
+
   // Office Secretary never coordinates a worker themselves — they're typing
   // this in ON BEHALF OF a real Coordinator (who's "busy or something"), so
   // that Coordinator becomes the primary instead, unconfirmed until they
@@ -560,9 +570,22 @@ export async function createMobilisation(data, actor) {
       workerName: mobilisation.workerName,
       clientName: mobilisation.clientName,
       ...(isOfficeSecretary && { createdOnBehalfOf: primaryCoordinatorId }),
+      ...(data.requirement && { requirement: data.requirement }),
     },
     ip: actor.ip,
   });
+
+  // Point the candidate at its new mobilisation. Best-effort: the mobilisation
+  // already exists and carries its own link (which is what final approval keys
+  // off), so a hiccup here must not surface as a failed create — the caller would
+  // retry and end up with two.
+  if (data.requirement) {
+    try {
+      await attachMobilisation(data.requirement, data.requirementCandidate, mobilisation, actor);
+    } catch (err) {
+      logger.warn(`[mobilisations] linking ${mobilisation.serialNumber} back to its requirement failed: ${err.message}`);
+    }
+  }
   return mobilisation.toObject();
 }
 
@@ -1382,6 +1405,16 @@ async function approveMobilisation(id, decisionNote, actor) {
         500,
         'Approval could not be completed because creating the deployment record failed. The approval was reverted — please try again.'
       );
+    }
+    // A mobilisation started from a Requirements card: mark that candidate
+    // Mobilised, and move the card once every worker it asked for is. Deliberately
+    // AFTER the deployment exists and best-effort — this is bookkeeping on a
+    // different module's record, and it must never undo (or fail) an approval that
+    // has already taken effect.
+    try {
+      await onMobilisationApproved(result);
+    } catch (err) {
+      logger.warn(`[mobilisations] updating the requirement for approved ${result.serialNumber} failed: ${err.message}`);
     }
   }
   return result;

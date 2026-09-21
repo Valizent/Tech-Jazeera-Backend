@@ -946,3 +946,36 @@ worker's name now returned "No mobilisations match" — then restored it
 and confirmed the button/badge reverted. `npm run lint` clean on both
 apps (server: 0 warnings; client: same 16 pre-existing baseline), client
 build clean. Throwaway admin and test records deleted afterward.
+
+
+## Follow-up (2026-09-20): a mobilisation can now be started from a Requirements card
+
+Part of the Coordinator Workflow (see `REQUIREMENTS-BOARD-notes.md`, "Milestone 3").
+A coordinator lining up workers for a client requirement can click "Start mobilisation"
+on a candidate; this is what changed on the Mobilisation side.
+
+- **Two new create-only fields**, `requirement` and `requirementCandidate` (the same
+  "create-only, never editable" pattern as `onBehalfOf`), both-or-neither. Ignored by
+  `updateMobilisation` (its `DIRECT_FIELDS` never includes them). Null for every mobilisation
+  that didn't start from a card — which is most of them.
+- **`createMobilisation`** now, when the pair is present: verifies BEFORE creating anything
+  (`assertCanStartFromRequirement` — the caller may edit the card, the candidate is free, the
+  worker type matches; a refused start leaves no orphan Draft), then links the candidate back
+  AFTER creating (`attachMobilisation`, best-effort — a failure there is logged, never
+  surfaced as a failed create, since the caller would retry and end up with two).
+- **`approveMobilisation`** calls `onMobilisationApproved` after the Deployment exists
+  (best-effort, try/catch + logged) so a final approval marks the candidate Mobilised and
+  advances the card once every worker it asked for is. It never fails or undoes an approval;
+  a mobilisation with no link is a no-op.
+- **`POPULATE`** gained `requirement` (serial / client / job title), so the detail page can
+  show a "From requirement" row — a link when the viewer can open the Requirements board,
+  plain text otherwise.
+- **New Mobilisation page** reads `?requirement=&candidate=` (only those two ids), fetches
+  the card itself and pre-fills the ordinary form; it uses a card value only when it matches
+  a real option in the pickers it loaded. A card the viewer can't open drops the link with a
+  visible notice; a candidate that already has a mobilisation gets a message instead of a
+  form. The Standby list's own query-param pre-fill is unchanged.
+- **A Rejected mobilisation stays the candidate's** — it's fixed and resubmitted, not
+  replaced. Mobilisations can't be deleted, so the link can never dangle.
+- Verified end-to-end through the real approval flow (a disposable one-approver workflow),
+  including that approving a mobilisation whose card was deleted still succeeds.

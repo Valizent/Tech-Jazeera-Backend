@@ -15,11 +15,20 @@
  *
  * Every card in a response carries a server-computed `permissions` object, so
  * the client renders buttons from it and never re-derives who may do what.
+ *
+ * Candidates (milestone 3) have no key of their own — they follow the card's edit
+ * right. The three "handoff" functions at the bottom (assertCanStartFromRequirement,
+ * attachMobilisation, onMobilisationApproved) are the only part of this module
+ * mobilisation.service.js calls into.
  */
 import Requirement from './requirement.model.js';
 import RequirementStage from './requirementStage.model.js';
 import DailyUpdate from '../dailyUpdates/dailyUpdate.model.js';
 import Client from '../clients/client.model.js';
+import Subcontractor from '../subcontractors/subcontractor.model.js';
+// The model only (never mobilisation.service.js, which imports THIS file) — so the
+// handoff below can look a mobilisation up without an import cycle.
+import Mobilisation from '../mobilisations/mobilisation.model.js';
 import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
@@ -28,6 +37,7 @@ import { getSectionAccess, resolveOwnTeamAccess } from '../sectionAccess/section
 import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { notifyUserSafely } from '../notifications/notification.service.js';
 import { logAudit } from '../audit/audit.service.js';
+import logger from '../../config/logger.js';
 
 const OWN_KEY = 'requirementsOwn';
 const TEAM_KEY = 'requirementsTeam';
@@ -74,18 +84,29 @@ async function activityFor(requirementIds) {
   return new Map(rows.map((r) => [idOf(r._id), r]));
 }
 
-function present(requirement, stageById, activity, actor, access) {
+/**
+ * `withCandidates` is true only for the single-card detail — the board (up to
+ * 1000 cards) and the create/edit/move replies carry just the two counts, so
+ * they never haul every card's candidate list around.
+ */
+function present(requirement, stageById, activity, actor, access, { withCandidates = false } = {}) {
   const stage = stageById.get(idOf(requirement.stage));
   const daysInStage = Math.max(0, Math.floor((Date.now() - new Date(requirement.stageEnteredAt).getTime()) / DAY_MS));
   const seen = activity.get(idOf(requirement._id));
-  return {
+  const candidates = requirement.candidates ?? [];
+  const card = {
     ...requirement,
     daysInStage,
     stale: Boolean(stage && !stage.isTerminal && stage.staleAfterDays && daysInStage >= stage.staleAfterDays),
     lastUpdateAt: seen?.last ?? null,
     updateCount: seen?.count ?? 0,
+    // "3 candidates · 1 of 4 mobilised" — a dropped candidate no longer counts as one.
+    candidateCount: candidates.filter((c) => c.status !== 'Dropped').length,
+    mobilisedCount: candidates.filter((c) => c.status === 'Mobilised').length,
     permissions: permissionsFor(requirement, actor, access),
   };
+  if (!withCandidates) delete card.candidates;
+  return card;
 }
 
 /** One card, populated and presented — what create/edit/move return. */
@@ -136,6 +157,9 @@ const audit = (action, requirement, actor, meta = {}) =>
 
 const summary = (requirement) => `${requirement.serialNumber} · ${requirement.clientName} — ${requirement.jobTitle} ×${requirement.headcount}`;
 
+/** One stageHistory entry — the shape moveStage and the auto-advance both write. */
+const moveEntry = (stage, moverId, at) => ({ stage: stage._id, stageName: stage.name, movedBy: moverId, movedAt: at });
+
 // ---- reads -----------------------------------------------------------------------------
 
 /**
@@ -185,6 +209,9 @@ export async function getRequirement(id, actor) {
   const requirement = await Requirement.findById(id)
     .populate(POPULATE)
     .populate({ path: 'stageHistory.movedBy', select: 'name' })
+    // Each candidate's mobilisation, as just its number and status — enough to show
+    // "MOB-0071 · Pending review" and link to it, nothing commercial.
+    .populate({ path: 'candidates.mobilisation', select: 'serialNumber status' })
     .lean();
   if (!requirement || !canView(requirement, actor, access)) throw new ApiError(404, 'That requirement was not found.');
 
@@ -194,7 +221,7 @@ export async function getRequirement(id, actor) {
   ]);
   const activity = new Map([[idOf(requirement._id), { last: updates[0]?.createdAt ?? null, count: updates.length }]]);
   return {
-    ...present(requirement, new Map(stages.map((s) => [idOf(s), s])), activity, actor, access),
+    ...present(requirement, new Map(stages.map((s) => [idOf(s), s])), activity, actor, access, { withCandidates: true }),
     updates,
   };
 }
@@ -314,7 +341,7 @@ export async function moveStage(id, stageId, actor) {
   const now = new Date();
   requirement.stage = stage._id;
   requirement.stageEnteredAt = now;
-  requirement.stageHistory.push({ stage: stage._id, stageName: stage.name, movedBy: actor.userId, movedAt: now });
+  requirement.stageHistory.push(moveEntry(stage, actor.userId, now));
   await requirement.save();
   await audit('requirement.stage.move', requirement, actor, { from: from?.name ?? null, to: stage.name });
 
@@ -340,4 +367,198 @@ export async function deleteRequirement(id, actor) {
   await DailyUpdate.updateMany({ requirement: requirement._id }, { $set: { requirement: null } });
   await requirement.deleteOne();
   await audit('requirement.delete', requirement, actor, { clientName: requirement.clientName });
+}
+
+// ---- candidates (milestone 3) ------------------------------------------------------------
+//
+// The workers being lined up for a card. Anyone who may EDIT the card may keep its
+// candidate list (`permissions.edit`: team-write, or own-write on a card they're a
+// coordinator of) — there is no separate candidate permission to configure.
+
+async function loadEditable(id, actor) {
+  const access = await resolveAccess(actor);
+  const requirement = await loadOr404(id);
+  if (!permissionsFor(requirement, actor, access).edit) throw new ApiError(403, FORBIDDEN);
+  return requirement;
+}
+
+function candidateOr404(requirement, candidateId) {
+  const candidate = requirement.candidates.id(candidateId);
+  if (!candidate) throw new ApiError(404, 'That candidate was not found on this requirement.');
+  return candidate;
+}
+
+async function subcontractorSnapshot(subcontractorId) {
+  const subcontractor = await Subcontractor.findById(subcontractorId).select('name').lean();
+  if (!subcontractor) throw new ApiError(400, 'That subcontractor was not found.');
+  return { subcontractor: subcontractor._id, subcontractorName: subcontractor.name };
+}
+
+export async function addCandidate(id, data, actor) {
+  const requirement = await loadEditable(id, actor);
+  const source = data.workerType === 'SupplierEmployee' ? await subcontractorSnapshot(data.subcontractor) : { subcontractor: null, subcontractorName: null };
+  requirement.candidates.push({
+    workerType: data.workerType,
+    workerName: data.workerName,
+    iqamaNumber: data.iqamaNumber ?? null,
+    nationality: data.nationality ?? null,
+    phone: data.phone ?? null,
+    ...source,
+    status: data.status,
+    docsNote: data.docsNote ?? null,
+    addedBy: actor.userId,
+  });
+  await requirement.save();
+  const added = requirement.candidates[requirement.candidates.length - 1];
+  await audit('requirement.candidate.add', requirement, actor, { workerName: added.workerName });
+  return added.toObject();
+}
+
+export async function updateCandidate(id, candidateId, data, actor) {
+  const requirement = await loadEditable(id, actor);
+  const candidate = candidateOr404(requirement, candidateId);
+
+  // 'Mobilised' is the system's word for "an approved placement exists" — once
+  // it's true it can't be walked back by editing a status.
+  if (data.status !== undefined && candidate.status === 'Mobilised') {
+    throw new ApiError(409, `${candidate.workerName} is already mobilised — their status can't be changed.`);
+  }
+  if (data.subcontractor !== undefined) {
+    if (candidate.workerType !== 'SupplierEmployee') throw new ApiError(400, "Only a subcontractor's worker has a subcontractor.");
+    Object.assign(candidate, await subcontractorSnapshot(data.subcontractor));
+  }
+  for (const key of ['workerName', 'iqamaNumber', 'nationality', 'phone', 'status', 'docsNote']) {
+    if (data[key] !== undefined) candidate[key] = data[key];
+  }
+  await requirement.save();
+  await audit('requirement.candidate.update', requirement, actor, { workerName: candidate.workerName, fields: Object.keys(data) });
+  return candidate.toObject();
+}
+
+export async function removeCandidate(id, candidateId, actor) {
+  const requirement = await loadEditable(id, actor);
+  const candidate = candidateOr404(requirement, candidateId);
+  // A candidate who has a mobilisation is part of a real placement record —
+  // removing the row would orphan it. "Dropped" is the honest way out.
+  if (candidate.mobilisation) {
+    throw new ApiError(409, `${candidate.workerName} has a mobilisation — mark them Dropped instead of removing them.`);
+  }
+  const workerName = candidate.workerName;
+  requirement.candidates.pull(candidateId);
+  await requirement.save();
+  await audit('requirement.candidate.remove', requirement, actor, { workerName });
+}
+
+// ---- the handoff to Mobilisation (milestone 3) --------------------------------------------
+//
+// Called by mobilisation.service.js at three moments of a mobilisation's life, all
+// keyed off the `requirement` + `requirementCandidate` pair stored on it.
+
+/**
+ * BEFORE a mobilisation is created from a candidate: may this caller do it, and
+ * is the candidate actually free to be mobilised? Throws otherwise, so nothing is
+ * created. Anyone who can edit the card may start from it; the candidate must not
+ * already have a mobilisation (a REJECTED one still counts — that record is
+ * resubmitted, not replaced), must not be dropped, and the worker type has to match
+ * (a subcontractor's worker can't be turned into a freelancer's mobilisation here).
+ */
+export async function assertCanStartFromRequirement({ requirement: requirementId, requirementCandidate: candidateId, workerType }, actor) {
+  const access = await resolveAccess(actor);
+  const requirement = await Requirement.findById(requirementId);
+  if (!requirement) throw new ApiError(400, 'The requirement this mobilisation is for was not found.');
+  if (!permissionsFor(requirement, actor, access).edit) throw new ApiError(403, FORBIDDEN);
+
+  const candidate = requirement.candidates.id(candidateId);
+  if (!candidate) throw new ApiError(400, 'That candidate is not on this requirement.');
+  if (candidate.status === 'Dropped') throw new ApiError(400, `${candidate.workerName} was dropped from this requirement.`);
+  if (candidate.status === 'Mobilised' || candidate.mobilisation) {
+    const existing = candidate.mobilisation ? await Mobilisation.findById(candidate.mobilisation).select('serialNumber').lean() : null;
+    throw new ApiError(409, `${candidate.workerName} already has a mobilisation${existing ? ` (${existing.serialNumber})` : ''}.`);
+  }
+  if (candidate.workerType !== workerType) {
+    throw new ApiError(400, "This mobilisation's worker type doesn't match the candidate it was started from.");
+  }
+}
+
+/** Right AFTER the mobilisation exists: point the candidate at it. Guarded on the
+ *  candidate still being unlinked, so two simultaneous starts can't both win. */
+export async function attachMobilisation(requirementId, candidateId, mobilisation, actor) {
+  const result = await Requirement.updateOne(
+    { _id: requirementId, candidates: { $elemMatch: { _id: candidateId, mobilisation: null } } },
+    { $set: { 'candidates.$.mobilisation': mobilisation._id } }
+  );
+  if (result.modifiedCount === 0) {
+    // The mobilisation exists and carries its own link, which is what approval keys
+    // off, so nothing is lost — but say so, since two people started the same candidate.
+    logger.warn(`[requirements] mobilisation ${mobilisation.serialNumber} could not be attached to candidate ${candidateId} on requirement ${requirementId}`);
+    return;
+  }
+  await logAudit({
+    user: actor.userId,
+    action: 'requirement.candidate.mobilisation',
+    targetType: 'Requirement',
+    targetId: requirementId,
+    meta: { mobilisation: mobilisation.serialNumber },
+    ip: actor.ip,
+  });
+}
+
+/**
+ * AFTER a linked mobilisation's final approval (the Deployment already exists):
+ * the candidate is now Mobilised; and once as many candidates are mobilised as the
+ * card asked for, the card moves itself to the stage an admin marked as the
+ * "mobilised" destination (none marked = it stays put; the progress still updates).
+ * Best-effort at the call site — a failure here must never undo an approval.
+ */
+export async function onMobilisationApproved(mobilisation) {
+  if (!mobilisation.requirement || !mobilisation.requirementCandidate) return;
+
+  const requirement = await Requirement.findOneAndUpdate(
+    { _id: mobilisation.requirement, 'candidates._id': mobilisation.requirementCandidate },
+    { $set: { 'candidates.$.status': 'Mobilised', 'candidates.$.mobilisation': mobilisation._id } },
+    { new: true }
+  );
+  if (!requirement) return; // the card or candidate is gone — nothing to update
+
+  const candidate = requirement.candidates.id(mobilisation.requirementCandidate);
+  const mobilised = requirement.candidates.filter((c) => c.status === 'Mobilised').length;
+  const moverId = idOf(mobilisation.decidedBy ?? mobilisation.createdBy);
+
+  const target = await RequirementStage.findOne({ isMobilisedStage: true }).lean();
+  let advancedTo = null;
+  if (target && mobilised >= requirement.headcount) {
+    const now = new Date();
+    const moved = await Requirement.updateOne(
+      { _id: requirement._id, stage: { $ne: target._id } },
+      { $set: { stage: target._id, stageEnteredAt: now }, $push: { stageHistory: moveEntry(target, moverId, now) } }
+    );
+    if (moved.modifiedCount > 0) advancedTo = target;
+  }
+
+  await logAudit({
+    user: moverId,
+    action: 'requirement.candidate.mobilised',
+    targetType: 'Requirement',
+    targetId: requirement._id,
+    meta: { serialNumber: requirement.serialNumber, workerName: candidate.workerName, mobilised, headcount: requirement.headcount, ...(advancedTo && { advancedTo: advancedTo.name }) },
+    ip: null,
+  });
+
+  // The card's coordinators hear about it (never the approver), and — only when the
+  // card actually landed in a stage flagged "notify" — the team circle too.
+  const recipients = new Set(requirement.coordinators.map(idOf));
+  if (advancedTo?.notifyOnEnter) {
+    const team = await getSectionAccess(TEAM_KEY);
+    for (const id of await membersOfRoles([...team.readApprovalRoles, ...team.writeApprovalRoles])) recipients.add(id);
+  }
+  recipients.delete(moverId);
+  const title = advancedTo ? `All workers mobilised — moved to "${advancedTo.name}"` : `${candidate.workerName} approved for mobilisation`;
+  for (const userId of recipients) {
+    await notifyUserSafely(userId, {
+      type: 'Requirement',
+      title,
+      body: `${summary(requirement)} — ${mobilised} of ${requirement.headcount} mobilised`.slice(0, 500),
+      url: boardUrl(requirement),
+    });
+  }
 }

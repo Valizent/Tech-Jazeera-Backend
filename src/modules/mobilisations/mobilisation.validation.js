@@ -124,6 +124,14 @@ const mobilisationFields = {
   // reads it there); required by createMobilisation only when the caller is
   // Office Secretary — see mobilisation.service.js's createMobilisation.
   onBehalfOf: z.preprocess(emptyToUndef, id('user').optional()),
+
+  // Create-only, same as onBehalfOf: the Requirements card + candidate this
+  // mobilisation was started from ("Start mobilisation" on a candidate). Both or
+  // neither — checked below in withRequirementLinkRefine; the service verifies
+  // the card, the candidate and the caller's right to use them. Ignored by
+  // updateMobilisation (DIRECT_FIELDS never includes them).
+  requirement: z.preprocess(emptyToUndef, id('requirement').optional()),
+  requirementCandidate: z.preprocess(emptyToUndef, id('candidate').optional()),
 };
 // NOTE: hasSubcontractor and profitPerHour/profitPerMonth/otProfitPerHour
 // are deliberately absent from this schema — hasSubcontractor is derived
@@ -170,7 +178,18 @@ function withFtaTypeRefine(schema) {
   });
 }
 
-export const createMobilisationSchema = withFtaTypeRefine(withWorkerTypeRefine(z.object(mobilisationFields)));
+/** A requirement link is a PAIR — a card with no candidate (or the reverse) can't
+ *  identify whose mobilisation this is. Create-only, so only createMobilisationSchema
+ *  applies it. */
+function withRequirementLinkRefine(schema) {
+  return schema.superRefine((data, ctx) => {
+    if (Boolean(data.requirement) !== Boolean(data.requirementCandidate)) {
+      ctx.addIssue({ code: 'custom', path: ['requirement'], message: 'A requirement link needs both the requirement and the candidate.' });
+    }
+  });
+}
+
+export const createMobilisationSchema = withRequirementLinkRefine(withFtaTypeRefine(withWorkerTypeRefine(z.object(mobilisationFields))));
 
 /** PATCH: any subset of the same fields — only while Draft (enforced in the
  *  service). `.partial()` makes every field including `client` optional

@@ -45,6 +45,26 @@ export async function remove(req, res) {
   res.json(new ApiResponse('Requirement deleted.'));
 }
 
+// ---- candidates -----------------------------------------------------------------------
+
+/** POST /api/requirements/:id/candidates — 201 → data: candidate */
+export async function addCandidate(req, res) {
+  const candidate = await requirementService.addCandidate(req.params.id, req.body, actor(req));
+  res.status(201).json(new ApiResponse('Candidate added.', candidate));
+}
+
+/** PATCH /api/requirements/:id/candidates/:candidateId — 200 → data: candidate */
+export async function updateCandidate(req, res) {
+  const candidate = await requirementService.updateCandidate(req.params.id, req.params.candidateId, req.body, actor(req));
+  res.json(new ApiResponse('Candidate updated.', candidate));
+}
+
+/** DELETE /api/requirements/:id/candidates/:candidateId — 200 · 409 once they have a mobilisation */
+export async function removeCandidate(req, res) {
+  await requirementService.removeCandidate(req.params.id, req.params.candidateId, actor(req));
+  res.json(new ApiResponse('Candidate removed.'));
+}
+
 // ---- stages ---------------------------------------------------------------------------
 
 /** POST /api/requirements/stages — 201 → data: stage */

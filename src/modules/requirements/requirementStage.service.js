@@ -24,7 +24,7 @@ const SUGGESTED_STAGES = [
   { name: 'Documentation in progress', staleAfterDays: 7 },
   { name: 'Ready to mobilise', staleAfterDays: 3, notifyOnEnter: true },
   { name: 'On hold' },
-  { name: 'Mobilised', isTerminal: true },
+  { name: 'Mobilised', isTerminal: true, isMobilisedStage: true },
   { name: 'Lost', isTerminal: true },
 ];
 
@@ -51,9 +51,16 @@ async function assertNameFree(name, exceptId = null) {
 /** A terminal stage is never flagged stale — a finished card doesn't rot. */
 const normalise = (data) => (data.isTerminal ? { ...data, staleAfterDays: null } : data);
 
+/** At most one stage is "where a fully-mobilised card goes" — flagging one
+ *  un-flags the rest, so an admin moves the flag rather than getting an error. */
+async function clearMobilisedFlagElsewhere(exceptId) {
+  await RequirementStage.updateMany({ ...(exceptId && { _id: { $ne: exceptId } }), isMobilisedStage: true }, { $set: { isMobilisedStage: false } });
+}
+
 export async function createStage(data, actor) {
   await assertNameFree(data.name);
   const last = await RequirementStage.findOne({}).sort({ order: -1 }).select('order').lean();
+  if (data.isMobilisedStage) await clearMobilisedFlagElsewhere(null);
   const stage = await RequirementStage.create({ ...normalise(data), order: (last?.order ?? -1) + 1 });
   await audit('requirementStage.create', stage, actor);
   return stage.toObject();
@@ -64,7 +71,8 @@ export async function updateStage(id, data, actor) {
   if (!stage) throw new ApiError(404, 'Stage not found.');
   if (data.name !== undefined && data.name.toLowerCase() !== stage.name.toLowerCase()) await assertNameFree(data.name, id);
 
-  for (const key of ['name', 'staleAfterDays', 'isTerminal', 'notifyOnEnter']) {
+  if (data.isMobilisedStage === true) await clearMobilisedFlagElsewhere(id);
+  for (const key of ['name', 'staleAfterDays', 'isTerminal', 'notifyOnEnter', 'isMobilisedStage']) {
     if (data[key] !== undefined) stage[key] = data[key];
   }
   if (stage.isTerminal) stage.staleAfterDays = null;

@@ -5,6 +5,7 @@
  * `YYYY-MM-DD` strings turned into a Date at UTC midnight.
  */
 import { z } from 'zod';
+import { CANDIDATE_WORKER_TYPES } from './requirement.model.js';
 
 const emptyToUndef = (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value);
 const emptyToNull = (value) => (typeof value === 'string' && value.trim() === '' ? null : value);
@@ -75,6 +76,7 @@ export const createStageSchema = z.object({
   staleAfterDays: staleAfterDays.default(null),
   isTerminal: z.boolean().default(false),
   notifyOnEnter: z.boolean().default(false),
+  isMobilisedStage: z.boolean().default(false),
 });
 
 /** PATCH: any subset — `.partial()` would keep the `.default()`s and silently
@@ -85,9 +87,59 @@ export const updateStageSchema = z
     staleAfterDays: z.preprocess((v) => (v === '' ? null : v), staleAfterDays.optional()),
     isTerminal: z.boolean().optional(),
     notifyOnEnter: z.boolean().optional(),
+    isMobilisedStage: z.boolean().optional(),
   })
   .refine((v) => Object.values(v).some((x) => x !== undefined), { message: 'Nothing to update.' });
 
 export const reorderStagesSchema = z.object({ ids: z.array(objectId).min(1).max(50) });
 
 export const stageIdParamSchema = idParam('stage');
+
+// ---- candidates ---------------------------------------------------------------------
+
+/** What a person may set by hand. 'Mobilised' is deliberately absent: it's set
+ *  only by the system when the linked mobilisation is approved, so it can never
+ *  be claimed without an actual approved placement behind it. */
+const MANUAL_CANDIDATE_STATUSES = ['Identified', 'DocsInProgress', 'DocsReady', 'Dropped'];
+
+const iqama = z.string().trim().regex(/^\d{10}$/, 'An Iqama number is exactly 10 digits.');
+const phone = z.string().trim().regex(/^\+?[0-9][0-9 -]{5,18}$/, 'Enter a valid phone number.');
+
+export const createCandidateSchema = z
+  .object({
+    workerType: z.enum(CANDIDATE_WORKER_TYPES),
+    workerName: z.string().trim().min(2, 'Enter the worker name.').max(150),
+    iqamaNumber: z.preprocess(emptyToUndef, iqama.optional()),
+    nationality: optionalStr(80),
+    phone: z.preprocess(emptyToUndef, phone.optional()),
+    subcontractor: z.preprocess(emptyToUndef, objectId.optional()),
+    status: z.enum(MANUAL_CANDIDATE_STATUSES).default('Identified'),
+    docsNote: optionalStr(300),
+  })
+  .superRefine((v, ctx) => {
+    if (v.workerType === 'SupplierEmployee' && !v.subcontractor) {
+      ctx.addIssue({ code: 'custom', path: ['subcontractor'], message: 'Select the subcontractor this worker comes from.' });
+    }
+    if (v.workerType === 'Freelancer' && v.subcontractor) {
+      ctx.addIssue({ code: 'custom', path: ['subcontractor'], message: 'A freelancer has no subcontractor.' });
+    }
+  });
+
+/** PATCH: any subset. Worker type can't change (remove and re-add instead), so
+ *  it isn't accepted here. '' clears an optional field. */
+export const updateCandidateSchema = z
+  .object({
+    workerName: z.string().trim().min(2, 'Enter the worker name.').max(150).optional(),
+    iqamaNumber: z.preprocess(emptyToNull, iqama.nullable().optional()),
+    nationality: clearableStr(80),
+    phone: z.preprocess(emptyToNull, phone.nullable().optional()),
+    subcontractor: z.preprocess(emptyToUndef, objectId.optional()),
+    status: z.enum(MANUAL_CANDIDATE_STATUSES).optional(),
+    docsNote: clearableStr(300),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), { message: 'Nothing to update.' });
+
+export const candidateParamSchema = z.object({
+  id: z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid requirement id.'),
+  candidateId: z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid candidate id.'),
+});

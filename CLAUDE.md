@@ -1409,3 +1409,35 @@ when requested):**
   optimistic rollback, 375px mobile, Arabic/RTL, stale styling), server suite
   38/38. Milestones 3 (candidates + "Start mobilisation" handoff) and 4
   (manager extras) not started. See `docs/REQUIREMENTS-BOARD-notes.md`.
+- **Requirements: candidates + the mobilisation handoff COMPLETE (Coordinator
+  Workflow, milestone 3 of 4)** — the last piece of the pre-mobilisation pipeline: WHO
+  is being lined up for each requirement, how far their paperwork is, and a clean path
+  from "documents ready" to a real Mobilisation, with the card following the
+  mobilisation's approval on its own. Candidates are embedded on the card (a
+  subcontractor's worker or a freelancer; name, optional Iqama/nationality/phone, a
+  documents note, a small fixed status — "Mobilised" set only by the system — and the
+  mobilisation made for them), maintained under the card's existing edit right.
+  "Start mobilisation" opens the normal New Mobilisation form pre-filled from the card
+  and candidate — only two ids in the URL, values used only when they match a real
+  picker option — and the mobilisation stores the link (`requirement` +
+  `requirementCandidate`, create-only). The server verifies BEFORE creating anything (so
+  a refused start leaves no orphan Draft) and links back after. On final approval — after
+  the Deployment exists, best-effort so it can never fail or undo an approval — the
+  candidate becomes Mobilised and, once as many are mobilised as the card's headcount,
+  the card moves itself to the stage an admin flagged `isMobilisedStage` (exclusive,
+  separate from `isTerminal`; the suggested set flags "Mobilised"). The mobilisation
+  detail shows "From requirement" with a link back. Own employees aren't candidates (the
+  Standby list already has a Mobilise button and their picker needs Employees access a
+  coordinator lacks). **User action**: on a board built before this milestone, edit the
+  destination stage and tick "Where a fully-mobilised requirement goes" once. Verified:
+  76 real-HTTP assertions including the full approval flow through a disposable workflow
+  (candidate Mobilised at 1 of 2 without advancing; card moves itself at 2 of 2;
+  approving with the card deleted still succeeds; a normal unlinked mobilisation
+  unchanged), the Daily Updates (78) and Requirements (128) suites re-run green, and a full
+  browser click-through as Admin/Coordinator/MM incl. 375px and Arabic/RTL. **A real
+  incident**: my first test run's cleanup crashed on a unique index and left the real
+  "Mobilisation workflows" approval workflow INACTIVE in the dev DB — caught by inspecting
+  the DB, restored, every grant and serial counter verified back, and the script rewritten
+  (state saved first, delete-then-restore, independent steps). Milestone 4 (manager
+  extras) not started. See `docs/REQUIREMENTS-BOARD-notes.md` ("Milestone 3") and
+  `docs/MOBILISATION-notes.md`'s 2026-09-20 follow-up.

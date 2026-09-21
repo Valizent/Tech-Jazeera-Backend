@@ -23,7 +23,7 @@ Decisions the user locked in before any code was written:
 |---|---|---|
 | M1 | Daily updates: to-do list + work log, assign tasks, MM oversight | **COMPLETE** (this file) |
 | M2 | Requirement board: cards, admin-editable stages, drag/move, stale flags, notifications; updates can attach to a card | **COMPLETE** (see `REQUIREMENTS-BOARD-notes.md`) |
-| M3 | Candidates on a card (name, subcontractor, document readiness) + "Start mobilisation" pre-fill + auto-advance when the linked mobilisation is Approved | not started |
+| M3 | Candidates on a card (name, subcontractor, document readiness) + "Start mobilisation" pre-fill + auto-advance when the linked mobilisation is Approved | **COMPLETE** (see `REQUIREMENTS-BOARD-notes.md`, "Milestone 3") |
 | M4 | Manager extras: filters, Excel export, dashboard widget for stale requirements | not started |
 
 ## What was built

@@ -27,6 +27,9 @@ import {
   updateStageSchema,
   reorderStagesSchema,
   stageIdParamSchema,
+  createCandidateSchema,
+  updateCandidateSchema,
+  candidateParamSchema,
 } from './requirement.validation.js';
 import * as controller from './requirement.controller.js';
 
@@ -64,5 +67,18 @@ router.patch(
   asyncHandler(controller.move)
 );
 router.delete('/:id', validate({ params: requirementIdParamSchema }), asyncHandler(controller.remove));
+
+// Candidates — like the card routes, authorized in the service (edit rights on the card).
+router.post(
+  '/:id/candidates',
+  validate({ params: requirementIdParamSchema, body: createCandidateSchema }),
+  asyncHandler(controller.addCandidate)
+);
+router.patch(
+  '/:id/candidates/:candidateId',
+  validate({ params: candidateParamSchema, body: updateCandidateSchema }),
+  asyncHandler(controller.updateCandidate)
+);
+router.delete('/:id/candidates/:candidateId', validate({ params: candidateParamSchema }), asyncHandler(controller.removeCandidate));
 
 export default router;

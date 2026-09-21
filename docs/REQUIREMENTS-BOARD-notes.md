@@ -1,4 +1,4 @@
-# Requirements board: the pre-mobilisation pipeline
+# Requirements board: the pre-mobilisation pipeline (milestones 2 and 3)
 
 Milestone 2 of the Coordinator Workflow (see `DAILY-UPDATES-notes.md` for the
 roadmap and milestone 1). The user's ask: requirements sometimes arrive before
@@ -219,9 +219,8 @@ and staging need them. Until then a coordinator/MM there won't see Requirements.
 
 ## Deliberately not done (and what's next)
 
-- **Candidate workers on a card, and "Start mobilisation" pre-fill / auto-advance when
-  the linked mobilisation is Approved — milestone 3.** A card is currently the
-  requirement only.
+- **Candidate workers and the "Start mobilisation" handoff** — milestone 3, now built;
+  see the "Milestone 3" section below.
 - **Tasks can't be tied to a card** — only log-entry updates can. Natural extension if
   wanted (a to-do "chase medicals" on REQ-0007).
 - **A coordinator can't add a colleague to their own card** (`manageOwners` is
@@ -233,3 +232,183 @@ and staging need them. Until then a coordinator/MM there won't see Requirements.
 - **Coordinators picking a card from their daily-log form** ("Re: REQ-…") — updates are
   currently written from the card. Easy to add if coordinators ask.
 - The board caps at 1000 cards with a visible notice; no pagination.
+
+---
+
+# Milestone 3: candidates and the mobilisation handoff
+
+The last piece of "clarity on what is happening" before a worker is mobilised: WHO
+is being lined up for each requirement, how far their paperwork is, and a clean
+path from "documents ready" to a real Mobilisation — with the card following the
+mobilisation's approval on its own. Built on the design decisions above (one card
+per client requirement, candidates inside it).
+
+## What was built
+
+```
+server/src/modules/requirements/
+  requirement.model.js        # + embedded `candidates[]` (candidateSchema)
+  requirement.validation.js   # + create/update/param schemas for candidates
+  requirement.service.js      # + addCandidate / updateCandidate / removeCandidate
+                              # + assertCanStartFromRequirement / attachMobilisation / onMobilisationApproved
+  requirement.controller.js / requirement.routes.js   # + /:id/candidates[/:candidateId]
+  requirementStage.model.js / .validation.js / .service.js   # + isMobilisedStage (exclusive)
+server/src/modules/mobilisations/
+  mobilisation.model.js       # + requirement, requirementCandidate (create-only)
+  mobilisation.validation.js  # + the pair, create-only, both-or-neither
+  mobilisation.service.js     # create: verify BEFORE, link AFTER; approve: hook AFTER the Deployment
+                              # POPULATE: + requirement (serial/client/job title)
+
+client/src/features/requirements/
+  components/CandidatesSection.jsx    # the list, in-place status, Start mobilisation / Edit / Delete
+  components/CandidateFormModal.jsx   # add / edit a candidate
+  (RequirementDetailModal, RequirementCard, BoardColumn, StageManagerModal extended)
+client/src/features/mobilisations/
+  pages/MobilisationNewPage.jsx       # "Start mobilisation" pre-fill + banner + "already started" guard
+  pages/MobilisationDetailPage.jsx    # "From requirement" row (linked when the viewer can open the board)
+  mobilisations.schema.js             # create-only requirement/requirementCandidate fields
+client/…  auditActions.js, i18n en/ar (128 `staffRequirements.*` keys; identical sets)
+```
+
+## Candidates
+
+- **Embedded on the card** (they live and die with it and are only read with it).
+  Each has a worker type — **Subcontractor's worker** (needs a subcontractor) or
+  **Freelancer** — name, optional Iqama (exactly 10 digits) / nationality / phone, a
+  documents note ("passport received, medical pending"), a status, and — once
+  started — the mobilisation made for them.
+- **Status** is a small fixed list on purpose (a person, not a placement; the board's
+  STAGES are the admin-editable part): Identified → Documents in progress → Documents
+  ready, plus Dropped. **"Mobilised" is set only by the system**, when the linked
+  mobilisation is approved — it can't be picked, and once set it can't be walked back or
+  the row removed.
+- **Own employees are not candidates.** Their picker needs Employees access a
+  coordinator usually lacks (the same gap fixed on the Mobilisation form on 2026-09-16),
+  and the Standby list already has a "Mobilise" button for them. Candidates are the
+  subcontractor/freelancer flow the user described.
+- **Permission = the card's edit right** (team-write, or own-write on a card you're a
+  coordinator of); there is no separate candidate key. A candidate with a mobilisation
+  can't be removed (mark it Dropped instead) — the row is part of a real placement record.
+- The board and the create/edit/move replies carry only `candidateCount` and
+  `mobilisedCount` (a Dropped candidate isn't counted); the full list comes with the
+  single-card detail. The card shows "Candidates: 3 · Mobilised 1/4".
+
+## The handoff — "Start mobilisation"
+
+1. **The button** (on a candidate that has no mobilisation and isn't Dropped/Mobilised)
+   goes to `/mobilisations/new?requirement=<id>&candidate=<id>`. **Only those two ids are
+   in the URL** — no worker name, Iqama or phone ever sits in the address bar.
+2. **The New Mobilisation page fetches the card itself** and pre-fills the ordinary form:
+   worker type, name, Iqama, nationality, phone, subcontractor, client, job title, site.
+   Each value is used only if it matches a real option in the pickers the page loaded (a
+   client the viewer can see, a title on the list) — an unlisted value would leave a
+   `<select>` looking empty while secretly holding a string nobody chose. The client rate,
+   dates and everything commercial stay for the coordinator to enter. A banner says where
+   it came from.
+3. **If the card can't be opened** (deleted / not theirs) the link is dropped, not half-
+   applied: the form still works as an ordinary mobilisation and says so.
+4. **If the candidate already has a mobilisation** the page shows a message with links to
+   it and back to the card — not a form the server would refuse.
+5. **Server side, in this order:** `assertCanStartFromRequirement` runs BEFORE anything is
+   created (the caller may edit the card; the candidate exists, isn't Dropped, has no
+   mobilisation yet, and the worker type matches) — so a refused start leaves no orphan
+   Draft; the mobilisation is then created carrying `requirement` +
+   `requirementCandidate` (create-only, both-or-neither, never editable afterwards);
+   `attachMobilisation` then points the candidate at it (best-effort; guarded so two
+   simultaneous starts can't both win).
+6. **A Rejected mobilisation stays the candidate's.** A rejected mobilisation isn't dead —
+   the coordinator fixes and resubmits the same record — so the link is not cleared.
+   Mobilisations can't be deleted, so it can never dangle.
+7. **Who can start:** the button needs `mobilisationsSelfMobilise` Write (the same right
+   the Mobilisations page uses) AND the card's edit right; the server checks both. So MM
+   can maintain a card's candidates but is not offered "Start mobilisation".
+
+## Auto-advance on final approval
+
+- New stage flag **`isMobilisedStage`** ("Where a fully-mobilised requirement goes") — at
+  most one stage holds it; flagging one moves the flag rather than erroring. It is separate
+  from `isTerminal` on purpose: "closed" also covers Lost, so it can't say which stage means
+  "mobilised". The suggested stage set flags "Mobilised".
+- In `approveMobilisation`, **after** the Deployment exists and **best-effort** (try/catch,
+  logged): `onMobilisationApproved` marks the candidate Mobilised, and once as many
+  candidates are mobilised as the card asked for (`headcount`) it moves the card to the
+  flagged stage — an atomic update with a history entry attributed to the approver. With no
+  stage flagged the candidate is still marked and the progress updates; the card just stays
+  put. It must never fail or undo an approval (same discipline as the 2026-09-15 rule for
+  notifications in that engine), and a deleted card is simply skipped.
+- **Notifications** (`Requirement`, deep-linking to the card): the card's coordinators are
+  told "X approved for mobilisation — 1 of 2 mobilised", or "All workers mobilised — moved
+  to Mobilised" when it advanced; the team circle only if the destination is also a "notify"
+  stage. Never the approver.
+
+## Verification (all real, against the dev DB, disposable data)
+
+**API — 76 assertions, all passing** (real HTTP): the mobilised-stage flag (suggested set,
+create-as, move, exclusive, other edits leave it alone); candidate CRUD and every
+validation rule (subcontractor required/forbidden by type, Iqama format, "Mobilised" not
+creatable, unknown subcontractor, blank name); permissions (another coordinator, read-only
+viewer, no-grant user refused; MM allowed); counts and the board shape; status changes,
+clearing fields, Dropped, remove; **the handoff guards** (pair required, worker-type
+mismatch, another coordinator, unknown card, unknown candidate — and that every refusal left
+NO orphan mobilisation), the link on both sides, the "From requirement" detail, a second
+start → 409 naming the first, remove-blocked / Dropped-allowed / Dropped-can't-restart; and
+**the real approval flow end to end** through a disposable one-approver workflow: submit →
+approve → candidate Mobilised with the card **not** advanced at 1 of 2; second approval →
+card moved itself to the flagged stage, history attributed to the approver, days-in-stage
+reset, correct notifications (and none to the approver / team circle); no flagged stage →
+candidate Mobilised but the card stays; **approving a mobilisation whose card was deleted
+still succeeds** and creates its Deployment; a normal mobilisation with no link still
+creates and approves exactly as before. Daily Updates (78) and the Requirements board (128)
+suites re-run green; existing server suite 38/38; server lint clean; client lint 0 errors;
+client build clean; i18n key sets identical (and no key used-but-missing or unused).
+
+**Browser — real click-through** as Admin, Coordinator and MM: moving the mobilised-stage flag
+between stages in the stage manager; the empty Candidates section; the candidate form's
+visible errors (missing subcontractor/name, bad Iqama); adding a subcontractor's worker and
+a freelancer (the subcontractor field hides for a freelancer); changing a status in place;
+"Start mobilisation" → a form pre-filled from the card (worker, Iqama, nationality, phone,
+subcontractor, client, job title matched to the real list, site) with a banner; saving the
+Draft; the "From requirement" row and its link back; the candidate row now showing
+"MOB-0069 · Draft" with Start/Delete gone; the direct-URL "already has a mobilisation" guard;
+the approval hook → Mobilised badge, "1 of 2 mobilised", card stays; the second → the card
+moves itself to Mobilised, the timeline shows the approver, "Candidates: 2 · Mobilised 2/2",
+two correct notifications; MM can add/edit candidates but is not offered "Start
+mobilisation"; no horizontal overflow at 375px (card detail and the candidate form);
+Arabic/RTL including translated statuses.
+
+**The incident worth remembering.** The first API run crashed mid-way when the dev server
+restarted for longer than the script's retry window, and my script's *cleanup* then hit a
+unique index (`ApprovalWorkflow` allows one ACTIVE workflow per type) because it
+reactivated the real Mobilisation workflow BEFORE deleting the disposable one — leaving the
+real "Mobilisation workflows" workflow **inactive** in the dev database. It was found by
+inspecting the DB (its `updatedAt` matched the run's start to the second), restored, and
+every Section Access grant and both serial counters were verified back to their real
+values. The script was rewritten so this can't recur: recovery state is written to disk
+before anything real is touched, the disposable workflow is deleted first, every cleanup
+step is independent (one failure can't skip another), and the retry window covers a slow
+restart. Nothing was ever left inactive after that, confirmed by an independent read-only
+check. **Lesson for any future test that swaps a real workflow:** delete-then-restore, each
+step in its own try/catch, state saved first.
+
+## User action required
+
+- **Nothing new in Section Access** — candidates ride the existing card edit right, and
+  "Start mobilisation" the existing `mobilisationsSelfMobilise` right.
+- **Tick the new stage flag once per board.** If you used "Use suggested stages" it's
+  already on "Mobilised". If you built your own stages (or already had some before this
+  milestone), open Manage stages → Edit the stage a finished requirement should land in →
+  tick "Where a fully-mobilised requirement goes". Until one is ticked, cards don't move by
+  themselves (candidate progress still updates).
+- Iqama and phone are optional on a candidate, but a mobilisation can't be **submitted** for
+  review without them — worth filling in as they arrive.
+
+## Deliberately not done
+
+- **Candidate changes aren't on the card timeline** (only stage moves and written updates
+  are). Each candidate's current status is the "what's happening"; every change is audited.
+- **Lowering a card's headcount doesn't re-check auto-advance** — it's evaluated on each
+  approval, not on edit.
+- **Own employees as candidates** — see above; use the Standby list.
+- **Demobilising or completing a mobilisation doesn't touch the card.** Once mobilised the
+  requirement's job is done.
+- Milestone 4 (filters by client/subcontractor, Excel export, dashboard widget) is next.

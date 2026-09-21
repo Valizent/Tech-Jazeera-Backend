@@ -193,6 +193,17 @@ const mobilisationSchema = new mongoose.Schema(
     // --- stale-mobilisation warning support ---
     currentStepEnteredAt: { type: Date, default: null },
 
+    // --- the Requirements card this was started from (2026-09-20, milestone 3
+    // of the Coordinator Workflow) — set ONLY at creation, when a coordinator
+    // clicks "Start mobilisation" on a candidate; never editable afterwards.
+    // `requirementCandidate` is that candidate's id inside
+    // Requirement.candidates. On final approval requirement.service.js's
+    // onMobilisationApproved uses the pair to mark the candidate Mobilised (and
+    // advance the card once every requested worker is). Both stay null for a
+    // mobilisation that didn't start from a card, which is most of them.
+    requirement: { type: mongoose.Schema.Types.ObjectId, ref: 'Requirement', default: null },
+    requirementCandidate: { type: mongoose.Schema.Types.ObjectId, default: null },
+
     // --- Section 1: coordinators / documents / remark ---
     coordinators: {
       type: [coordinatorSchema],
