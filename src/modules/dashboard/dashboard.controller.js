@@ -20,3 +20,13 @@ export async function overview(req, res) {
   });
   res.json(new ApiResponse('Dashboard.', data));
 }
+
+export async function standbyAnalysis(req, res) {
+  const data = await import('./dashboard.service.js').then((s) => s.getStandbyAnalysis({ role: req.user.role, userId: req.user.id }));
+  res.json(new ApiResponse('Standby workforce analysis.', data));
+}
+
+export async function coordinatorDrillDown(req, res) {
+  const data = await import('./dashboard.service.js').then((s) => s.getCoordinatorDrillDown({ role: req.user.role, userId: req.user.id }, req.params.id));
+  res.json(new ApiResponse('Coordinator drill-down.', data));
+}

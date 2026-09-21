@@ -14,6 +14,7 @@
  * actual expenses, for a real calendar month — is finally honest to show;
  * see computeMonthProfit()/getProfitOverview() below and finance.profit.
  */
+import mongoose from 'mongoose';
 import Employee, { WORKFORCE_TYPES } from '../employees/employee.model.js';
 import Client from '../clients/client.model.js';
 import Deployment from '../deployments/deployment.model.js';
@@ -34,6 +35,9 @@ import { annotateCanDecide } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import { countStaleRequirements } from '../requirements/requirement.service.js';
 import { countOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
+import Subcontractor from '../subcontractors/subcontractor.model.js';
+import User from '../auth/user.model.js';
+import ExitReentry from '../exitDocuments/exitReentry.model.js';
 
 export const EXPIRY_WARNING_DAYS = 30;
 const TREND_MONTHS = 6;
@@ -303,6 +307,11 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     profitOverview,
     personalPendingQuotations,
     myPendingActions,
+    mobilisationsAgg,
+    activeSubcontractorsCount,
+    attendanceAgg,
+    pendingLeave,
+    pendingExit
   ] = await Promise.all([
     canReadDeployments ? Deployment.countDocuments(deploymentFilter) : Promise.resolve(0),
     canReadEmployees
@@ -367,6 +376,19 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // authority (ApprovalRole membership on that record's current step),
     // which is a stricter, more specific check than any section-level grant.
     getMyPendingActions(actor),
+    // Mobilisations by status
+    Mobilisation.aggregate([
+      ...(isCoordinator ? [{ $match: { 'coordinators.user': new mongoose.Types.ObjectId(actor.userId) } }] : []),
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]),
+    // Active subcontractors
+    actor?.role === 'Manager' || actor?.role === 'Admin' ? Subcontractor.countDocuments({ status: 'Active' }) : Promise.resolve(0),
+    // Attendance summary
+    actor?.role === 'Manager' || actor?.role === 'Admin' ? Attendance.find({ date: toUtcDay(new Date()) }).select('employee').lean() : Promise.resolve([]),
+    // Pending leaves
+    actor?.role === 'HR' || actor?.role === 'Admin' ? LeaveRequest.countDocuments({ status: 'PendingReview' }) : Promise.resolve(0),
+    // Pending exits
+    actor?.role === 'HR' || actor?.role === 'Admin' ? ExitReentry.countDocuments({ status: 'Pending' }) : Promise.resolve(0)
   ]);
 
   // Workforce by status
@@ -454,5 +476,113 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // same "hidden entirely at zero" pattern the client already applies to
     // pendingClientApprovals.
     myPendingActions,
+    mobilisationsByStatus: mobilisationsAgg ? Object.fromEntries(mobilisationsAgg.map(r => [r._id, r.count])) : null,
+    activeSubcontractors: activeSubcontractorsCount,
+    attendanceSummary: attendanceAgg ? await (async () => {
+      const empIds = attendanceAgg.map(a => a.employee);
+      const emps = await Employee.find({ _id: { $in: empIds } }).select('type designation currentClient').lean();
+      const summary = { staff: 0, bdm: 0, coordinator: 0, standby: 0 };
+      for (const e of emps) {
+        if (e.type === 'Own') {
+          summary.staff++;
+          if (e.designation === 'BDM') summary.bdm++;
+          if (e.designation === 'Coordinator') summary.coordinator++;
+        } else if (e.type === 'Outsourced' && !e.currentClient) {
+          summary.standby++;
+        }
+      }
+      return summary;
+    })() : null,
+    pendingLeave,
+    pendingExit
+  };
+}
+
+export async function getStandbyAnalysis(actor) {
+  // MM or Admin only for Standby Analysis
+  if (actor.role !== 'Admin' && actor.role !== 'Manager' && actor.role !== 'HR') {
+    return [];
+  }
+
+  // Find all active Outsourced workers
+  const activeOutsourced = await Employee.find({ type: 'Outsourced', status: 'Active' })
+    .select('_id fullName employeeId joiningDate salary designation')
+    .lean();
+
+  if (activeOutsourced.length === 0) return [];
+  const workerIds = activeOutsourced.map((w) => w._id);
+
+  // Find all active deployments for these workers
+  const activeDeployments = await Deployment.find({ worker: { $in: workerIds }, status: 'Active' })
+    .select('worker')
+    .lean();
+  
+  const deployedWorkerIds = new Set(activeDeployments.map((d) => d.worker.toString()));
+
+  // Find latest deployment for all workers to calculate days since last deployment
+  const latestDeployments = await Deployment.aggregate([
+    { $match: { worker: { $in: workerIds } } },
+    { $sort: { endDate: -1 } },
+    { $group: { _id: '$worker', endDate: { $first: '$endDate' } } }
+  ]);
+  const latestDeploymentByWorker = new Map(latestDeployments.map((d) => [d._id.toString(), d.endDate]));
+
+  const standbyWorkers = [];
+  const now = Date.now();
+
+  for (const worker of activeOutsourced) {
+    if (deployedWorkerIds.has(worker._id.toString())) continue;
+
+    const lastDeploymentEnd = latestDeploymentByWorker.get(worker._id.toString());
+    const referenceDate = lastDeploymentEnd ? new Date(lastDeploymentEnd) : new Date(worker.joiningDate);
+    
+    // Calculate days on standby (max 0 to prevent negative if dates are in future somehow)
+    const daysOnStandby = Math.max(0, Math.ceil((now - referenceDate.getTime()) / 86_400_000));
+    const dailyCost = (worker.salary || 0) / 30;
+    const moneyLost = Math.round(daysOnStandby * dailyCost);
+
+    standbyWorkers.push({
+      _id: worker._id,
+      fullName: worker.fullName,
+      employeeId: worker.employeeId,
+      designation: worker.designation,
+      daysOnStandby,
+      moneyLost,
+      lastDeploymentEnd: lastDeploymentEnd || null,
+      joiningDate: worker.joiningDate
+    });
+  }
+
+  // Sort by most days on standby by default
+  return standbyWorkers.sort((a, b) => b.daysOnStandby - a.daysOnStandby);
+}
+
+export async function getCoordinatorDrillDown(actor, coordinatorId) {
+  // We need to fetch Daily logs, tasks, and profit for this coordinator.
+  // 1. Daily logs for the last 30 days
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000);
+  const { DailyUpdate } = await import('../dailyUpdates/dailyUpdate.model.js');
+  const { Task } = await import('../dailyUpdates/dailyUpdate.model.js');
+  
+  const logs = await DailyUpdate.find({ coordinator: coordinatorId, date: { $gte: thirtyDaysAgo } })
+    .sort({ date: -1 })
+    .limit(10)
+    .lean();
+
+  const openTasks = await Task.countDocuments({ assignee: coordinatorId, completedAt: null });
+  const completedTasks = await Task.countDocuments({ assignee: coordinatorId, completedAt: { $ne: null } });
+
+  // Mobilisation profit for this coordinator
+  const mobilisations = await Mobilisation.aggregate([
+    { $match: { 'coordinators.user': new mongoose.Types.ObjectId(coordinatorId), status: { $in: ['Deployed', 'Approved'] } } },
+    { $group: { _id: null, totalProfit: { $sum: '$profit.monthly' } } }
+  ]);
+
+  const totalProfit = mobilisations[0]?.totalProfit ?? 0;
+
+  return {
+    recentLogs: logs,
+    tasks: { open: openTasks, completed: completedTasks },
+    totalMonthlyProfit: totalProfit
   };
 }

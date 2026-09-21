@@ -26,4 +26,23 @@ router.get(
   asyncHandler(dashboardController.overview)
 );
 
+router.get(
+  '/standby-analysis',
+  requireAuth,
+  requireStaffOrExecutive,
+  asyncHandler(dashboardController.standbyAnalysis)
+);
+
+// We need a validation schema for the coordinator ID, let's reuse a standard param id validator if it exists, or just do it in the controller/service.
+import { z } from 'zod';
+const idParamSchema = z.object({ id: z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id.') });
+
+router.get(
+  '/coordinator-drill-down/:id',
+  requireAuth,
+  requireStaffOrExecutive,
+  validate({ params: idParamSchema }),
+  asyncHandler(dashboardController.coordinatorDrillDown)
+);
+
 export default router;
