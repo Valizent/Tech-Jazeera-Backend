@@ -462,11 +462,27 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       approvedRevenue: canReadQuotations && !isCoordinator ? approvedRevenue : null,
       pendingRevenue: canReadQuotations && !isCoordinator ? pendingRevenue : null,
       monthlyPayroll: canReadPayroll ? (payrollAgg[0]?.total ?? 0) : null,
-      // P2-M8 — real profit for the selected month (revenue from actually
-      // issued invoices, cost from a finalized payroll run and recorded
-      // expenses) plus a trailing 6-month trend. null unless the viewer
-      // holds the 'dashboardProfit' grant — see canSeeProfit above.
       profit: profitOverview,
+      // "amount of revenue a coordinator is bringing in based on active mobilisation that month"
+      // Also available for Managers/Admins as a global total.
+      activeMobilisationRevenue: await (async () => {
+        const startOfThisMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+        const activeDeployments = await Deployment.find({
+          startDate: { $lte: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59, 999) },
+          $or: [{ endDate: null }, { endDate: { $gte: startOfThisMonth } }]
+        }).select('mobilisation worker').lean();
+        
+        const mobIds = activeDeployments.map(d => d.mobilisation).filter(Boolean);
+        if (mobIds.length === 0) return 0;
+        
+        const mobQuery = { _id: { $in: mobIds } };
+        if (isCoordinator) {
+          mobQuery['coordinators.user'] = new mongoose.Types.ObjectId(actor.userId);
+        }
+        
+        const activeMobs = await Mobilisation.find(mobQuery).select('profit').lean();
+        return activeMobs.reduce((sum, mob) => sum + (mob.profit?.monthly || 0), 0);
+      })()
     },
     workforceByStatus: canReadEmployees ? workforceByStatus : null,
     quotationsByStatus: canReadQuotations && !isCoordinator ? quotationsByStatus : null,
