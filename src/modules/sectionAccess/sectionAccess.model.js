@@ -109,6 +109,12 @@ export const SECTION_KEYS = [
   'requirementsOwn',
   'requirementsTeam',
   'requirementStages',
+  // Added 2026-09-21 — Mobilisation Targets: who may set/edit/remove a
+  // monthly mobilisation-count target (and its incentive %) for a
+  // coordinator. A coordinator's own read of their own target is always
+  // allowed (ungated); this key governs the write path (set/edit/remove)
+  // AND the management overview (all coordinators' progress).
+  'mobilisationTargets',
 ];
 
 const sectionAccessSchema = new mongoose.Schema(
