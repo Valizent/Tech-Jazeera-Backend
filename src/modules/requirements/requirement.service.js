@@ -39,6 +39,7 @@ import ApiError from '../../utils/ApiError.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { nextSequence } from '../quotations/counter.model.js';
 import { getSectionAccess, resolveOwnTeamAccess } from '../sectionAccess/sectionAccess.service.js';
+import { listActiveCoordinators } from '../../utils/listActiveCoordinators.js';
 import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { notifyUserSafely } from '../notifications/notification.service.js';
 import { logAudit } from '../audit/audit.service.js';
@@ -249,7 +250,25 @@ export async function getBoard(query, actor) {
 
   const [requirements, filterOptions] = await Promise.all([
     // Longest-waiting first within a column, so what needs attention sits on top.
-    Requirement.find(filter).sort({ stageEnteredAt: 1, _id: 1 }).limit(BOARD_LIMIT).populate(POPULATE).lean(),
+    // Narrowed projection (2026-09-22, a real QA-audit finding — P8): the board
+    // card only ever shows candidateCount/mobilisedCount (present() below
+    // derives both from candidates[].status alone) and never stageHistory (only
+    // the single-card detail view — getRequirement — populates and uses that).
+    // Excluding the rest of each candidate (name/Iqama/nationality/phone/notes)
+    // and all of stageHistory means the board no longer fetches real candidate
+    // PII into the backend just to immediately discard it for every one of up
+    // to 1000 cards. exportRequirements/getRequirement's own queries are
+    // untouched — they genuinely need the full documents.
+    Requirement.find(filter)
+      .select(
+        '-stageHistory -candidates.workerType -candidates.workerName -candidates.iqamaNumber -candidates.nationality' +
+          ' -candidates.phone -candidates.subcontractor -candidates.subcontractorName -candidates.docsNote' +
+          ' -candidates.mobilisation -candidates.addedBy -candidates.addedAt'
+      )
+      .sort({ stageEnteredAt: 1, _id: 1 })
+      .limit(BOARD_LIMIT)
+      .populate(POPULATE)
+      .lean(),
     filterOptionsFor(access, actor),
   ]);
   const activity = await activityFor(requirements.map((r) => r._id));
@@ -329,11 +348,12 @@ export async function getRequirement(id, actor) {
   };
 }
 
-/** For the "assign coordinators" picker — team-read only. */
+/** For the "assign coordinators" picker — team-read only. Shared body with
+ *  dailyUpdate.service.js's identical picker (2026-09-22, a real QA-audit
+ *  finding) — this module's own `resolveAccess` above is untouched. */
 export async function listCoordinators(actor) {
   const access = await resolveAccess(actor);
-  if (!access.teamRead) throw new ApiError(403, FORBIDDEN);
-  return User.find({ role: 'Coordinator', isActive: true }).select('name').sort({ name: 1 }).lean();
+  return listActiveCoordinators(access.teamRead);
 }
 
 // ---- writes ----------------------------------------------------------------------------

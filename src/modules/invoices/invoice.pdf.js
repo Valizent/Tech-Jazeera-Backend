@@ -6,6 +6,7 @@ import PDFDocument from 'pdfkit';
 import { drawLetterhead, LETTERHEAD_HEIGHT } from '../companySettings/letterhead.pdf.js';
 import { formatMoney as money, formatShortDate as shortDate } from '../../utils/pdfFormat.js';
 import { lineAmount } from '../../utils/moneyMath.js';
+import { LINE_ITEM_COLUMNS, drawLineItemRow, drawTotalRow } from '../../utils/pdfLineItemTable.js';
 
 /** `company`/`logo` are optional — a PDF generated before any company
  *  profile is filled in still works, just without a letterhead. */
@@ -34,60 +35,40 @@ export function buildInvoicePdf(inv, company = null, logo = null) {
     doc.fontSize(9).font('Helvetica').fillColor('#666').text('BILL TO', left, top + 146);
     doc.fontSize(12).font('Helvetica-Bold').fillColor('#111').text(inv.clientName, left, top + 159);
 
-    const cols = [
-      { key: 'type', label: 'Type', w: 55, align: 'left' },
-      { key: 'description', label: 'Description', w: 165, align: 'left' },
-      { key: 'quantity', label: 'Qty', w: 40, align: 'right' },
-      { key: 'unitPrice', label: 'Unit', w: 70, align: 'right' },
-      { key: 'discount', label: 'Disc%', w: 45, align: 'right' },
-      { key: 'taxRate', label: 'Tax%', w: 40, align: 'right' },
-      { key: 'amount', label: 'Amount', w: 90, align: 'right' },
-    ];
+    const headerCells = Object.fromEntries(LINE_ITEM_COLUMNS.map((c) => [c.key, c.label]));
     let y = top + 195;
-    const drawRow = (cells, { bold = false } = {}) => {
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor('#111');
-      let x = left;
-      for (const col of cols) {
-        doc.text(String(cells[col.key] ?? ''), x + 2, y + 5, { width: col.w - 4, align: col.align, ellipsis: true });
-        x += col.w;
-      }
-      y += 20;
-      doc.moveTo(left, y).lineTo(right, y).strokeColor('#eee').stroke();
-    };
-
-    drawRow(Object.fromEntries(cols.map((c) => [c.key, c.label])), { bold: true });
+    y = drawLineItemRow(doc, { left, right, y, cells: headerCells, bold: true });
     for (const li of inv.lineItems) {
       if (y > doc.page.height - 220) {
         doc.addPage();
         y = 60;
-        drawRow(Object.fromEntries(cols.map((c) => [c.key, c.label])), { bold: true });
+        y = drawLineItemRow(doc, { left, right, y, cells: headerCells, bold: true });
       }
-      drawRow({
-        type: li.type,
-        description: li.description,
-        quantity: li.quantity,
-        unitPrice: money(li.unitPrice).replace('SAR ', ''),
-        discount: li.discount ?? 0,
-        taxRate: li.taxRate ?? 0,
-        amount: money(lineAmount(li)).replace('SAR ', ''),
+      y = drawLineItemRow(doc, {
+        left,
+        right,
+        y,
+        cells: {
+          type: li.type,
+          description: li.description,
+          quantity: li.quantity,
+          unitPrice: money(li.unitPrice).replace('SAR ', ''),
+          discount: li.discount ?? 0,
+          taxRate: li.taxRate ?? 0,
+          amount: money(lineAmount(li)).replace('SAR ', ''),
+        },
       });
     }
 
     y += 10;
-    const totalRow = (label, value, { bold = false } = {}) => {
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 12 : 10).fillColor('#111');
-      doc.text(label, right - 240, y, { width: 130, align: 'right' });
-      doc.text(money(value), right - 100, y, { width: 100, align: 'right' });
-      y += bold ? 22 : 16;
-    };
-    totalRow('Subtotal', inv.subtotal);
-    totalRow('Discount', -inv.discountTotal);
-    totalRow('VAT / Tax', inv.taxTotal);
+    y = drawTotalRow(doc, { right, y, label: 'Subtotal', value: inv.subtotal });
+    y = drawTotalRow(doc, { right, y, label: 'Discount', value: -inv.discountTotal });
+    y = drawTotalRow(doc, { right, y, label: 'VAT / Tax', value: inv.taxTotal });
     doc.moveTo(right - 240, y).lineTo(right, y).strokeColor('#ccc').stroke();
     y += 6;
-    totalRow('Grand Total', inv.grandTotal, { bold: true });
-    totalRow('Paid', inv.amountPaid);
-    totalRow('Balance Due', inv.balanceDue, { bold: true });
+    y = drawTotalRow(doc, { right, y, label: 'Grand Total', value: inv.grandTotal, bold: true });
+    y = drawTotalRow(doc, { right, y, label: 'Paid', value: inv.amountPaid });
+    y = drawTotalRow(doc, { right, y, label: 'Balance Due', value: inv.balanceDue, bold: true });
 
     if (inv.balanceDue > 0 && company?.bankName && company?.bankIban) {
       y += 10;

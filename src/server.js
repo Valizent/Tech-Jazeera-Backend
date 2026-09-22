@@ -12,6 +12,7 @@ import env from './config/env.js'; // side effect: validates env, may exit
 import { captureError } from './config/sentry.js'; // side effect: initializes Sentry, if configured
 import logger from './config/logger.js';
 import { connectDb } from './config/db.js';
+import { startPeriodicMonitoring } from './config/monitoring.js';
 import app from './app.js';
 import { runExpiryAlertCheck } from './modules/notifications/expiryAlert.job.js';
 import { runMobilisationStaleCheck } from './modules/notifications/mobilisationStale.job.js';
@@ -46,6 +47,11 @@ const server = app.listen(env.port, () => {
   logger.info(`API listening on http://localhost:${env.port} (${env.nodeEnv})`);
 });
 
+// 2026-09-22, a real QA-audit finding — the "monitoring baseline"
+// recommendation: event-loop delay + an aggregate Mongo operation count,
+// logged every minute. See monitoring.js's own doc comment.
+const monitoringInterval = startPeriodicMonitoring();
+
 // P3-F: the expiry-alert notification job — once shortly after boot (so a
 // server that's been down doesn't wait a full day for the first check),
 // then every 24 hours. A plain setInterval, not a job-queue dependency —
@@ -73,6 +79,7 @@ async function shutdown(signal) {
   logger.info(`${signal} received — shutting down gracefully...`);
   clearInterval(expiryAlertInterval);
   clearInterval(mobilisationStaleInterval);
+  clearInterval(monitoringInterval);
   server.close(async () => {
     const { default: mongoose } = await import('mongoose');
     await mongoose.connection.close();

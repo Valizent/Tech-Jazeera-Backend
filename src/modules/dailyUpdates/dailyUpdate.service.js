@@ -28,6 +28,7 @@ import Requirement from '../requirements/requirement.model.js';
 import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { resolveOwnTeamAccess } from '../sectionAccess/sectionAccess.service.js';
+import { listActiveCoordinators } from '../../utils/listActiveCoordinators.js';
 import { notifyUserSafely } from '../notifications/notification.service.js';
 import { logAudit } from '../audit/audit.service.js';
 
@@ -210,11 +211,12 @@ export async function countOpenTasks(actor) {
 }
 
 /** The picker for "assign to" and the coordinator filter — team-read only,
- *  since an own-only coordinator never needs anyone else's name. */
+ *  since an own-only coordinator never needs anyone else's name. Shared body
+ *  with requirement.service.js's identical picker (2026-09-22, a real
+ *  QA-audit finding) — this module's own `resolveAccess` above is untouched. */
 export async function listCoordinators(actor) {
   const access = await resolveAccess(actor);
-  if (!access.teamRead) throw new ApiError(403, FORBIDDEN);
-  return User.find({ role: 'Coordinator', isActive: true }).select('name').sort({ name: 1 }).lean();
+  return listActiveCoordinators(access.teamRead);
 }
 
 export async function createDailyUpdate(data, actor) {

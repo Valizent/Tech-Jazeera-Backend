@@ -1,8 +1,12 @@
 /**
  * Section Access controller — HTTP translation only. Every route here is
- * Admin-only at the router level (see sectionAccess.routes.js): deciding who
- * else can open a section is not itself delegable to whoever that grant
- * creates, same posture as CompanySettings.manageRoles.
+ * Admin-only at the router level (see sectionAccess.routes.js) EXCEPT the
+ * explicit `/mine` exception right below: deciding who else can open a
+ * section is not itself delegable to whoever that grant creates, same
+ * posture as CompanySettings.manageRoles — but reading your OWN resolved
+ * access is safe for any authenticated staff-tier user (2026-09-22, a real
+ * QA-audit finding — comment drift; this doc comment previously claimed
+ * "every route" with no exception noted).
  */
 import ApiResponse from '../../utils/ApiResponse.js';
 import * as sectionAccessService from './sectionAccess.service.js';

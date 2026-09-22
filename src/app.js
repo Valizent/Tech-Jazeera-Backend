@@ -6,20 +6,25 @@
  * starting a listener (useful for testing and for keeping boot logic clean).
  *
  * MIDDLEWARE ORDER MATTERS and is deliberate:
- *   1. helmet     — set security headers before anything else runs
- *   2. cors       — reject foreign origins early, allow credentials for the
+ *   1. requestMetrics — starts the clock before anything else runs, so
+ *                        durationMs reflects the FULL request lifecycle
+ *                        (2026-09-22, a real QA-audit finding — see its own
+ *                        doc comment)
+ *   2. helmet     — set security headers before anything else runs
+ *   3. cors       — reject foreign origins early, allow credentials for the
  *                   refresh-token cookie (M2)
- *   3. parsers    — JSON body with a size cap (large bodies are a DoS vector)
- *   4. rate limit — applied to /api as a whole
- *   5. routes     — feature modules mount here as milestones add them
- *   6. 404        — anything that fell through every route
- *   7. errors     — LAST, so it catches failures from all of the above
+ *   4. parsers    — JSON body with a size cap (large bodies are a DoS vector)
+ *   5. rate limit — applied to /api as a whole
+ *   6. routes     — feature modules mount here as milestones add them
+ *   7. 404        — anything that fell through every route
+ *   8. errors     — LAST, so it catches failures from all of the above
  */
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import env from './config/env.js';
+import { requestMetrics } from './middleware/requestMetrics.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import ApiResponse from './utils/ApiResponse.js';
@@ -71,6 +76,7 @@ const app = express();
 // IP — otherwise rate limiting and audit logs would see the proxy's IP.
 if (env.isProduction) app.set('trust proxy', 1);
 
+app.use(requestMetrics);
 app.use(helmet());
 app.use(
   cors({
