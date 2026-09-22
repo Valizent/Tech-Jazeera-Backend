@@ -20,7 +20,7 @@
  */
 import * as XLSX from 'xlsx';
 import ApiError from '../../utils/ApiError.js';
-import { COLUMN_ALIASES } from './timesheet.constants.js';
+import { COLUMN_ALIASES, MAX_DATA_ROWS, MAX_DATA_COLUMNS } from './timesheet.constants.js';
 
 /** Plain text for any cell value (SheetJS gives Date / number / string). */
 function cellText(value) {
@@ -156,6 +156,29 @@ export async function parseAttendanceWorkbook(buffer, { month, year }) {
 
   const sheet = workbook.SheetNames[0] ? workbook.Sheets[workbook.SheetNames[0]] : null;
   if (!sheet) throw new ApiError(400, 'The workbook has no sheets.');
+
+  // Dimension check BEFORE the expensive sheet_to_json materialization (see
+  // MAX_DATA_ROWS's own doc comment — this is what actually bounds parsing
+  // CPU, since the byte-size limit alone doesn't: a repetitive sheet
+  // compresses hard). Reading `!ref` is cheap; it's already on the sheet
+  // object from XLSX.read.
+  if (sheet['!ref']) {
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    const rowCount = range.e.r - range.s.r + 1;
+    const colCount = range.e.c - range.s.c + 1;
+    if (rowCount > MAX_DATA_ROWS) {
+      throw new ApiError(
+        400,
+        `This workbook has ${rowCount.toLocaleString()} rows, more than the ${MAX_DATA_ROWS.toLocaleString()} this tool accepts. A real one-employee, one-month export is far smaller — check the file.`
+      );
+    }
+    if (colCount > MAX_DATA_COLUMNS) {
+      throw new ApiError(
+        400,
+        `This workbook has ${colCount} columns, more than the ${MAX_DATA_COLUMNS} this tool accepts. Check the file.`
+      );
+    }
+  }
 
   // Array-of-arrays; keeps real Dates (cellDates) and raw values.
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, blankrows: false, defval: null });

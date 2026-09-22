@@ -14,6 +14,7 @@ import env from '../config/env.js';
 import ApiError from '../utils/ApiError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import User from '../modules/auth/user.model.js';
+import { userLimiter } from './rateLimiter.js';
 
 export const requireAuth = asyncHandler(async (req, res, next) => {
   const header = req.headers.authorization;
@@ -65,5 +66,12 @@ export const requireAuth = asyncHandler(async (req, res, next) => {
     role: user.role,
     employee: user.employee ? user.employee.toString() : null,
   };
-  next();
+  // A real per-user budget on top of the IP-wide one now that we know WHO
+  // this is (2026-09-22, a real QA-audit finding — P1) — see
+  // rateLimiter.js's own doc comment on why one IP-keyed limit alone isn't
+  // enough for a shared-office-IP ERP. userLimiter is a plain Express
+  // middleware; calling it directly here (rather than re-declaring it on
+  // every protected router) is the one place every authenticated request
+  // already passes through exactly once.
+  userLimiter(req, res, next);
 });

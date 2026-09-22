@@ -98,5 +98,15 @@ const requirementSchema = new mongoose.Schema(
 
 requirementSchema.index({ stage: 1, stageEnteredAt: 1 });
 requirementSchema.index({ coordinators: 1 });
+// getBoard's own sort (requirement.service.js) — the WHOLE board across
+// every stage at once (client/coordinator columns are grouped client-side),
+// so it sorts by `stageEnteredAt` alone, never filtered by `stage` first.
+// The compound index above doesn't serve that (its leading field is
+// `stage`); added 2026-09-22, a real QA-audit finding (P10): that sort was
+// doing SORT over COLLSCAN with no supporting index. The `{stage:1,
+// stageEnteredAt:1}` index above stays — countStaleRequirements's own
+// per-stage staleness filter (stage equality + a stageEnteredAt range) is a
+// real, different query shape that index still serves.
+requirementSchema.index({ stageEnteredAt: 1, _id: 1 });
 
 export default mongoose.model('Requirement', requirementSchema);

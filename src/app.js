@@ -37,7 +37,8 @@ import nfcRoutes from './modules/nfc/nfc.routes.js';
 import nfcPublicRoutes from './modules/nfc/nfc.public.routes.js';
 import { serveNfcMedia } from './modules/nfc/nfc.upload.js';
 import userRoutes from './modules/users/user.routes.js';
-import leaveRoutes from './modules/leave/leave.routes.js';
+import leaveTypeRoutes from './modules/leave/leaveType.routes.js';
+import leaveRequestRoutes from './modules/leave/leaveRequest.routes.js';
 import holidayRoutes from './modules/holidays/holiday.routes.js';
 import ramadanPeriodRoutes from './modules/ramadan/ramadanPeriod.routes.js';
 import notificationRoutes from './modules/notifications/notification.routes.js';
@@ -108,13 +109,18 @@ app.use('/api/nfc', nfcRoutes);
 // P2-M2: staff-account management, leave (types + requests), and the
 // self-service "me" surface a Worker's ESS portal runs on.
 app.use('/api/users', userRoutes);
-// Mounted BEFORE leaveRoutes deliberately: leaveRoutes sits at the bare
-// '/api' prefix with its own unconditional requireAuth (see its doc
-// comment), which would otherwise intercept company-settings' one public
-// route (GET /branding) before it's ever reached — see
-// companySettings.routes.js's own doc comment on that route.
 app.use('/api/company-settings', companySettingsRoutes);
-app.use('/api', leaveRoutes); // owns /api/leave-types and /api/leave
+// FIX (2026-09-22, a real QA-audit finding — P2): this used to be one router
+// (`leaveRoutes`) mounted at the bare '/api' prefix with its own
+// unconditional requireAuth, silently authenticating EVERY request for any
+// module mounted after it a second time (it fell through leaveRoutes'
+// blanket middleware before ever reaching its own router's). Split into two
+// routers, each at its own real prefix — mount order relative to other
+// modules no longer matters for this reason (company-settings' public
+// /branding route was previously mounted early specifically to dodge this;
+// that workaround is no longer load-bearing, but left in its current spot).
+app.use('/api/leave-types', leaveTypeRoutes);
+app.use('/api/leave', leaveRequestRoutes);
 app.use('/api/holidays', holidayRoutes);
 app.use('/api/ramadan-periods', ramadanPeriodRoutes);
 app.use('/api/notifications', notificationRoutes);

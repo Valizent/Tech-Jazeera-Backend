@@ -20,6 +20,24 @@ function fakeReq(token) {
   return { headers: { authorization: `Bearer ${token}` } };
 }
 
+/** A minimal but real-enough Express response for requireAuth's success path
+ *  to run all the way through: it now calls the real userLimiter middleware
+ *  at the end (2026-09-22, a real QA-audit finding — P1), which sets
+ *  RateLimit-* response headers — an empty `{}` (fine when requireAuth only
+ *  ever called `next(err)` directly) throws on `res.setHeader` once that's
+ *  a real call, not a bug in the code under test. */
+function fakeRes() {
+  const headers = {};
+  return {
+    setHeader: (name, value) => { headers[name] = value; },
+    getHeader: (name) => headers[name],
+    removeHeader: () => {},
+    status: () => ({ json: () => {}, send: () => {} }),
+    json: () => {},
+    send: () => {},
+  };
+}
+
 /**
  * requireAuth is wrapped in asyncHandler, whose returned function does NOT
  * return the inner promise (`Promise.resolve(fn(...)).catch(next)`, no
@@ -29,7 +47,7 @@ function fakeReq(token) {
  */
 function runAuth(req) {
   return new Promise((resolve) => {
-    requireAuth(req, {}, (err) => resolve(err));
+    requireAuth(req, fakeRes(), (err) => resolve(err));
   });
 }
 

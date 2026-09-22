@@ -1,10 +1,21 @@
 /**
  * Rate limiting — first line of defense against brute force and abuse.
  *
- * One general limiter covers the whole API. It is deliberately generous:
- * this is an internal ERP where one office IP serves many staff, and a
- * normal dashboard load fires many requests. Auth routes get a much
- * stricter limiter in M2, because login is the endpoint attackers hammer.
+ * Two general limiters, not one (2026-09-22, a real QA-audit finding — P1).
+ * `apiLimiter` is the original IP-keyed abuse floor: deliberately generous,
+ * because this is an internal ERP where one office IP serves many staff.
+ * But that generosity has a real edge the audit reproduced: ordinary
+ * foreground polling (a notification bell, a few review-queue tabs) from a
+ * HANDFUL of active staff behind that one shared IP can exhaust the whole
+ * office's 600/15min budget before anyone does anything unusual — the limit
+ * was never actually sized per person, because IP was the only signal
+ * available. `userLimiter` adds a real per-authenticated-user budget on top
+ * (see auth.js's requireAuth, which calls it once `req.user` exists) so one
+ * genuinely busy person can no longer eat the whole office's shared budget,
+ * without loosening the IP floor that protects an unauthenticated attacker
+ * from doing the same. Auth routes get a much stricter limiter below,
+ * because login is the endpoint attackers hammer — kept entirely separate
+ * from both of these, unauthenticated by definition.
  */
 import rateLimit from 'express-rate-limit';
 
@@ -19,6 +30,26 @@ export const apiLimiter = rateLimit({
   limit: 600, // per IP per window — roomy for an office sharing one IP
   standardHeaders: 'draft-7', // send RateLimit-* headers so clients can back off
   legacyHeaders: false,
+  message: limitReached,
+});
+
+/**
+ * Per-authenticated-user budget, applied AFTER requireAuth resolves
+ * `req.user` (never on a public/unauthenticated route — those rely on
+ * `apiLimiter` alone). Sized well above what real usage generates: even
+ * before this session's own polling reductions, the audit's own math for
+ * one very active foreground user (bell + a couple of open review-queue
+ * tabs) landed under 300 requests/15min — 1200 leaves comfortable headroom
+ * for real multi-tab usage while still catching a genuinely runaway client
+ * (a stuck retry loop, a misbehaving script) well before it could exhaust
+ * the office-wide IP budget on its own.
+ */
+export const userLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 1200,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user.id,
   message: limitReached,
 });
 

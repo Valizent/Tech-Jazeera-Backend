@@ -486,7 +486,7 @@ export async function listLeaveRequests({ page, limit, status, employee }, actor
   // Fixed 2026-09-15, the same class of gap the 2026-09-14 audit found and
   // fixed for financialRequests only (advance.service.js's listAdvances) —
   // never carried over here. The real route gate
-  // (leave.routes.js's canWriteLeaveRequests) requires Section Access write
+  // (leaveRequest.routes.js's canWriteLeaveRequests) requires Section Access write
   // for EVERY decide, workflow-governed or not — annotateCanDecide only
   // knows about ApprovalRole/legacy-role membership, so its hint could say
   // "yes" for a legacy-role match (e.g. Manager) even after an Admin

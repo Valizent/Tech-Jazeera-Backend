@@ -26,6 +26,23 @@ export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsh
 export const XLS_MIME = 'application/vnd.ms-excel';
 export const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — a month of punches is tiny
 
+/**
+ * Worksheet dimension limits (2026-09-22, a real QA-audit finding — P7).
+ * `MAX_FILE_BYTES` alone does not bound parsing CPU: a repetitive attendance
+ * sheet compresses hard, so the audit's own reproduction fit a 50,000-row
+ * workbook under 1.75 MB (well inside the 5 MB cap) and blocked the event
+ * loop for ~1.1s parsing it. A real one-employee, one-month device export is
+ * a few hundred rows and under a dozen columns at most — these caps are
+ * generous for that real shape while bounding the worst case a malformed or
+ * oversized upload can cost. Checked against the sheet's `!ref` range
+ * BEFORE the expensive `sheet_to_json` materialization (the audit's numbers
+ * show the JS-side per-row/per-cell cost dominates, not the initial
+ * `XLSX.read`, which the byte limit already bounds), so an oversized file
+ * fails fast with a clear 400 instead of paying that cost first.
+ */
+export const MAX_DATA_ROWS = 5000;
+export const MAX_DATA_COLUMNS = 50;
+
 /** Per-day statuses. Frozen so the UI can import the exact labels/order. */
 export const STATUS = Object.freeze({
   PRESENT: 'Present',

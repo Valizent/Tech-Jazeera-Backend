@@ -84,5 +84,10 @@ const invoiceSchema = new mongoose.Schema(
 invoiceSchema.index({ client: 1 });
 invoiceSchema.index({ status: 1 });
 invoiceSchema.index({ createdAt: -1 });
+// The dashboard's monthly profit-trend aggregate (dashboard.service.js)
+// range-matches on `date` (the invoice's own dated line-item total, not
+// `createdAt`) — added 2026-09-22, a real QA-audit finding (P10): that
+// query was doing a full COLLSCAN with no supporting index.
+invoiceSchema.index({ date: 1 });
 
 export default mongoose.model('Invoice', invoiceSchema);

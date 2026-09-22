@@ -66,6 +66,21 @@ export async function resolveStepAuthority(actor, stepRoleIds) {
   return { authorized: false, roleId: null, viaAdminOverride: false };
 }
 
+/** The role ids `annotateCanDecide` would need to check membership of for
+ *  ONE module's items — extracted so a caller juggling several modules
+ *  (getMyPendingActions) can union them across all of its calls first and
+ *  resolve membership once, instead of once per module. */
+export function roleIdsNeededAcross(items, pendingStatus) {
+  const roleIdsNeeded = new Set();
+  for (const item of items) {
+    if (item.status === pendingStatus && item.workflow) {
+      const step = item.steps?.[item.currentStep];
+      for (const roleId of step?.roles ?? []) roleIdsNeeded.add((roleId._id ?? roleId).toString());
+    }
+  }
+  return roleIdsNeeded;
+}
+
 /**
  * Annotate a list of requests (already scoped/filtered by the caller — e.g.
  * a Coordinator's own team) with `canDecideCurrentStep`: a real,
@@ -81,22 +96,26 @@ export async function resolveStepAuthority(actor, stepRoleIds) {
  * @param {{userId:string, role:string}} actor
  * @param {string} pendingStatus    status value meaning "awaiting decision"
  * @param {string[]} legacyAllowedRoles  same list passed to decideApprovalStep
+ * @param {Set<string>} [memberRoleIds]  ALREADY-resolved "which role ids is
+ *   this actor an active member of" (2026-09-22, a real QA-audit finding —
+ *   P3: "batch approval-role membership checks"). Every existing caller
+ *   still gets its own single query exactly as before by leaving this out —
+ *   it exists for a caller like getMyPendingActions that calls this
+ *   function once per module and would otherwise pay for the same "which
+ *   roles is this actor in" question up to once per module. Computed with
+ *   roleIdsNeededAcross(), below, over the UNION of every module's items.
  */
-export async function annotateCanDecide(items, actor, { pendingStatus, legacyAllowedRoles }) {
-  const roleIdsNeeded = new Set();
-  for (const item of items) {
-    if (item.status === pendingStatus && item.workflow) {
-      const step = item.steps?.[item.currentStep];
-      for (const roleId of step?.roles ?? []) roleIdsNeeded.add((roleId._id ?? roleId).toString());
+export async function annotateCanDecide(items, actor, { pendingStatus, legacyAllowedRoles, memberRoleIds: providedMemberRoleIds } = {}) {
+  let memberRoleIds = providedMemberRoleIds;
+  if (!memberRoleIds) {
+    const roleIdsNeeded = roleIdsNeededAcross(items, pendingStatus);
+    memberRoleIds = new Set();
+    if (roleIdsNeeded.size > 0) {
+      const roles = await ApprovalRole.find({ _id: { $in: [...roleIdsNeeded] }, members: actor.userId, isActive: true })
+        .select('_id')
+        .lean();
+      memberRoleIds = new Set(roles.map((r) => r._id.toString()));
     }
-  }
-
-  let memberRoleIds = new Set();
-  if (roleIdsNeeded.size > 0) {
-    const roles = await ApprovalRole.find({ _id: { $in: [...roleIdsNeeded] }, members: actor.userId, isActive: true })
-      .select('_id')
-      .lean();
-    memberRoleIds = new Set(roles.map((r) => r._id.toString()));
   }
 
   return items.map((item) => {
@@ -202,9 +221,25 @@ export async function decideApprovalStep({
 }) {
   const doc = await Model.findById(id);
   if (!doc) throw new ApiError(404, notFoundMessage);
-  if (doc.status !== pendingStatus) {
-    throw new ApiError(400, `Only requests pending review can be decided.`);
-  }
+
+  // Deliberately NOT throwing here on `doc.status !== pendingStatus` (fixed
+  // 2026-09-22, a real QA-audit finding — F1's own flaky test, reconciled).
+  // A stale advisory check like that against this READ raced against every
+  // branch's own atomic conditional update below (all of which already,
+  // consistently, return 409 on a lost race — the `findOneAndUpdate`
+  // filters two lines down are the real, single source of truth for "is
+  // this still decidable"). Depending on exactly how two concurrent
+  // decisions interleaved, the loser could either lose HERE (this doc read
+  // landing after the winner's write already committed → 400) or lose AT
+  // the atomic update (this read landing before the winner's write → 409)
+  // — the same request, the same two racing actors, two different status
+  // codes purely from scheduling. The intended contract is simpler and now
+  // deterministic: 409 Conflict, always, for "this request is not pending
+  // review anymore" — whether that's because someone else decided it a
+  // millisecond ago in a live race or three days ago from a stale-open UI
+  // tab. (Authorization below still runs against this doc regardless of
+  // its status, which is correct — a non-authorized actor gets 403 rather
+  // than being told anything about the request's current state.)
 
   // ---- Legacy path: no workflow governs this request — today's original,
   // single-level behavior. ----

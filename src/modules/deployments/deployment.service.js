@@ -777,10 +777,23 @@ async function findDeployments({ worker, client, status, sortOrder }, actor, { s
   // fired when the caller explicitly passed `?worker=`. The plain,
   // unfiltered list/export (the normal way the register page is opened)
   // built no ownership condition at all, so a Coordinator saw every team's
-  // deployments. Same scoping shape as listAssets' own Coordinator branch —
-  // a SupplierEmployee/Freelancer deployment has no linked Employee
-  // (`worker: null`), so there's nothing to scope for it, same convention
-  // getDeployment's own comment already established for a single read.
+  // deployments.
+  //
+  // Scoped by `Mobilisation.coordinators.user` (2026-09-21), not
+  // `Employee.coordinator` — confirmed correct, not a regression, on review
+  // 2026-09-22: `Employee.coordinator` is itself now fully DERIVED from
+  // Mobilisation state (see mobilisation.service.js's own doc comment on
+  // `primaryIsCoordinator`) and only ever holds the PRIMARY coordinator of
+  // whichever mobilisation most recently claimed that employee — so scoping
+  // here by the deployment's own originating mobilisation is strictly more
+  // correct: it includes every JOINT coordinator (Employee.coordinator never
+  // did), and a coordinator keeps seeing a past deployment they actually
+  // worked even after the employee is later reassigned to someone else.
+  // This is also what finally gives a SupplierEmployee/Freelancer deployment
+  // (no linked Employee, so `Employee.coordinator` could never scope it at
+  // all) real scoping instead of being unconditionally visible to every
+  // Coordinator, which is what the removed `{ worker: null }` branch used to
+  // paper over.
   if (actor?.role === 'Coordinator') {
     const Mobilisation = (await import('../mobilisations/mobilisation.model.js')).default;
     const myMobIds = await Mobilisation.find({ 'coordinators.user': actor.userId }).distinct('_id');
@@ -909,23 +922,41 @@ function computeMonthlyProfit(entry, mobilisation, allEntries) {
  * fallback GOSI already relies on, but only while the run is still Draft.
  */
 export async function deductionsForEmployeeMonth(employeeId, monthStr) {
+  const byEmployee = await deductionsForEmployeesMonth([employeeId], monthStr);
+  return byEmployee.get(String(employeeId)) ?? [];
+}
+
+/**
+ * The batched form of deductionsForEmployeeMonth above — every eligible
+ * employee's deductions for one month in ONE query instead of one query per
+ * employee (2026-09-22, a real QA-audit finding — P4: reproduced at 494ms/10
+ * employees and 4.7s/100 employees, entirely from three per-employee reads,
+ * including this one, run sequentially). payroll.service.js's
+ * createPayrollRun is the real caller — deductionsForEmployeeMonth above
+ * stays as the single-employee convenience form (a $in of one id costs
+ * nothing extra), kept for any future single-employee use.
+ * Returns a Map keyed by employee id (string) → that employee's deduction
+ * list (possibly empty — never a missing key, so a caller can `.get(id) ??
+ * []` without a fallback check).
+ */
+export async function deductionsForEmployeesMonth(employeeIds, monthStr) {
   const deployments = await Deployment.find({
-    worker: employeeId,
+    worker: { $in: employeeIds },
     monthlyHours: { $elemMatch: { month: monthStr, deductionAmount: { $gt: 0 }, status: 'Approved' } },
   })
-    .select('clientName monthlyHours')
+    .select('worker clientName monthlyHours')
     .lean();
 
-  const deductions = [];
+  const byEmployee = new Map(employeeIds.map((id) => [String(id), []]));
   for (const deployment of deployments) {
     const entry = deployment.monthlyHours.find(
       (m) => m.month === monthStr && m.deductionAmount > 0 && m.status === 'Approved'
     );
     if (entry) {
-      deductions.push({ label: `Client deduction — ${deployment.clientName} (${monthStr})`, amount: entry.deductionAmount });
+      byEmployee.get(String(deployment.worker))?.push({ label: `Client deduction — ${deployment.clientName} (${monthStr})`, amount: entry.deductionAmount });
     }
   }
-  return deductions;
+  return byEmployee;
 }
 
 /**

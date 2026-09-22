@@ -1490,3 +1490,39 @@ when requested):**
   made. Worth knowing going in, not a sign of drift or corruption. See
   `docs/DASHBOARD-EXTRAS-notes.md` for the full finding-by-finding list and what "fix" vs.
   "flagged" means for each.
+- **21 September 2026 performance/cleanup audit: P1–P7, P9, P10, F1 all
+  COMPLETE** — an independent audit (10 prioritized performance findings,
+  a dead-code/duplication/dependency/docs section, one flaky-test finding)
+  was spot-checked against source (nothing refuted) then fixed in full for
+  every finding it itself framed as High/Medium priority with a clear fix.
+  Headline fixes: a real per-user rate limiter alongside the existing
+  per-IP one; a route-mounting landmine (`leaveRoutes` at the bare `/api`
+  prefix) split into two properly-prefixed routers; the dashboard's ~30+
+  unbatched queries collapsed to a handful of real batched aggregates/
+  `Map` lookups; Payroll's per-employee query loop batched the same way;
+  push notification delivery moved off the save-response critical path
+  into a small bounded-concurrency queue (not a bare fire-and-forget
+  promise); the Timesheet Processor's spreadsheet parser gained real
+  row/column caps checked BEFORE the expensive parse, since the byte-size
+  limit alone doesn't bound row count; the flaky "concurrent decisions"
+  test was root-caused to a genuine code non-determinism (a redundant
+  early status check racing the atomic update that was already the real
+  guard) and fixed to a single deterministic 409 contract, not dismissed;
+  two duplicate picker cache keys were consolidated into shared hooks; two
+  real missing indexes (`Invoice.date`, `Requirement`'s whole-board sort)
+  were added and confirmed via `explain()` to flip COLLSCAN/SORT into
+  IXSCAN. **P6 (bundle size) also COMPLETE**, beyond the audit's own
+  suggested minimum: i18n now loads only the current language via a real
+  dynamic import (not both eagerly), `DashboardLayout`/`EssLayout` are now
+  lazy like every routed page already was, and the Sentry SDK loads only
+  when an error is actually caught — entry chunk 852KB → 35KB (gzip 260KB
+  → 9.6KB), verified via a full production-build browser click-through
+  (login, live language switch confirming on-demand `ar.json` loading,
+  confirmed absence of the Sentry/Arabic chunks on a normal load). Left
+  deliberately unbuilt, all explicitly lower-priority by the audit's OWN
+  framing: P8 ("growth risk, not a demonstrated current cause"), dead-code/
+  duplication cleanup ("unlikely to matter for runtime speed"), docs
+  reorganization (a readability improvement, not a speed fix), and the
+  monitoring/baseline recommendation (an ongoing practice, not a concrete
+  change). See `docs/PERF-AUDIT-2026-09-21-notes.md` for the full
+  finding-by-finding breakdown and verification evidence.

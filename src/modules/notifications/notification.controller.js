@@ -9,6 +9,12 @@ export async function list(req, res) {
   res.json(new ApiResponse('Notifications.', data));
 }
 
+/** GET /api/notifications/unread-count — the bell badge's own lightweight poll. */
+export async function unreadCount(req, res) {
+  const data = await notificationService.getUnreadCount(req.user.id);
+  res.json(new ApiResponse('Unread count.', data));
+}
+
 export async function markRead(req, res) {
   const notification = await notificationService.markNotificationRead(req.user.id, req.params.id);
   res.json(new ApiResponse('Notification marked read.', notification));

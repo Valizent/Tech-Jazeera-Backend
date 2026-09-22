@@ -3,8 +3,14 @@
  * overview. It adds no data of its own; it reads employees, clients,
  * deployments, quotations, documents and the audit log and rolls them up.
  *
- * All the independent queries run in parallel (Promise.all) so the whole
- * dashboard is one fast round-trip.
+ * Every independent query is fired in parallel (Promise.all) rather than
+ * awaited one at a time — but "parallel" is not "free": a full Admin load is
+ * still a real ~30+ separate database operations (reproduced and fixed down
+ * from 36 on 2026-09-22, a real QA-audit finding — P3; see getMySectionAccess
+ * below and getProfitOverview's own doc comment for the two biggest cuts).
+ * Corrected 2026-09-22 — this comment previously claimed "one fast round
+ * trip," which undersold that real count and was itself a finding in that
+ * same audit.
  *
  * HONESTY NOTE (updated P2-M8): Phase 1 had no cost data, so this module
  * originally reported only approved-quotation revenue and a payroll
@@ -12,7 +18,7 @@
  * (P2-M6), finalized Payroll (P2-M5) and Expenses (P2-M7) all exist, a real
  * profit figure — actual billed revenue minus actual payroll cost minus
  * actual expenses, for a real calendar month — is finally honest to show;
- * see computeMonthProfit()/getProfitOverview() below and finance.profit.
+ * see getProfitOverview() below and finance.profit.
  */
 import mongoose from 'mongoose';
 import Employee, { WORKFORCE_TYPES } from '../employees/employee.model.js';
@@ -31,8 +37,9 @@ import SalaryAdvance from '../financialRequests/advance.model.js';
 import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import { toUtcDay } from '../attendance/attendance.service.js';
-import { annotateCanDecide } from '../approvals/approvalEngine.service.js';
-import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
+import { annotateCanDecide, roleIdsNeededAcross } from '../approvals/approvalEngine.service.js';
+import ApprovalRole from '../approvals/approvalRole.model.js';
+import { canAccessSection, getMySectionAccess } from '../sectionAccess/sectionAccess.service.js';
 import { countStaleRequirements } from '../requirements/requirement.service.js';
 import { countOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
@@ -82,27 +89,18 @@ const monthKey = (year, month) => `${year}-${String(month).padStart(2, '0')}`;
  *    dashboard's real cost figure."
  *  - expenses: sum of Expense.amount recorded in the month (Expense.date).
  */
-async function computeMonthProfit(year, month) {
-  const { start, end } = resolveMonth(monthKey(year, month));
-  const [invoiceAgg, payrollRun, expenseAgg] = await Promise.all([
-    Invoice.aggregate([
-      { $match: { date: { $gte: start, $lte: end } } },
-      { $group: { _id: null, total: { $sum: '$grandTotal' } } },
-    ]),
-    PayrollRun.findOne({ periodYear: year, periodMonth: month, status: 'Finalized' }).select('totalNet').lean(),
-    Expense.aggregate([
-      { $match: { date: { $gte: start, $lte: end } } },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
-    ]),
-  ]);
-  const revenue = invoiceAgg[0]?.total ?? 0;
-  const payrollCost = payrollRun?.totalNet ?? 0;
-  const expenses = expenseAgg[0]?.total ?? 0;
-  return { month: monthKey(year, month), revenue, payrollCost, expenses, net: revenue - payrollCost - expenses };
-}
-
-/** The selected month's real P&L plus a trailing TREND_MONTHS-month history
- *  (oldest → newest, selected month last) for the dashboard's bar breakdown. */
+/**
+ * The selected month's real P&L plus a trailing TREND_MONTHS-month history
+ * (oldest → newest, selected month last) for the dashboard's bar breakdown.
+ *
+ * FIX (2026-09-22, a real QA-audit finding — P3): this used to call a
+ * per-month `computeMonthProfit(year, month)` six times, each running its
+ * own Invoice aggregate + PayrollRun lookup + Expense aggregate — 18
+ * database operations for one dashboard load, the single largest chunk of
+ * the audit's reproduced 36-operation/2.16s Admin dashboard trace. Same
+ * three collections, same math, but each is now ONE query covering the
+ * whole 6-month span at once, grouped by month — 3 operations total, not 18.
+ */
 async function getProfitOverview(monthStr) {
   const selected = resolveMonth(monthStr);
   const months = [];
@@ -113,9 +111,36 @@ async function getProfitOverview(monthStr) {
       m += 12;
       y -= 1;
     }
-    months.push({ y, m });
+    months.push({ y, m, key: monthKey(y, m) });
   }
-  const trend = await Promise.all(months.map(({ y, m }) => computeMonthProfit(y, m)));
+  const rangeStart = resolveMonth(months[0].key).start;
+  const rangeEnd = resolveMonth(months[months.length - 1].key).end;
+
+  const [invoiceRows, expenseRows, payrollRuns] = await Promise.all([
+    Invoice.aggregate([
+      { $match: { date: { $gte: rangeStart, $lte: rangeEnd } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$date' } }, total: { $sum: '$grandTotal' } } },
+    ]),
+    Expense.aggregate([
+      { $match: { date: { $gte: rangeStart, $lte: rangeEnd } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$date' } }, total: { $sum: '$amount' } } },
+    ]),
+    // A small, bounded $or (one clause per trend month) — not a date-range
+    // match, since periodYear/periodMonth are plain numbers, not a Date.
+    PayrollRun.find({ $or: months.map(({ y, m }) => ({ periodYear: y, periodMonth: m })), status: 'Finalized' })
+      .select('periodYear periodMonth totalNet')
+      .lean(),
+  ]);
+  const revenueByMonth = new Map(invoiceRows.map((r) => [r._id, r.total]));
+  const expensesByMonth = new Map(expenseRows.map((r) => [r._id, r.total]));
+  const payrollByMonth = new Map(payrollRuns.map((r) => [monthKey(r.periodYear, r.periodMonth), r.totalNet]));
+
+  const trend = months.map(({ key }) => {
+    const revenue = revenueByMonth.get(key) ?? 0;
+    const payrollCost = payrollByMonth.get(key) ?? 0;
+    const expenses = expensesByMonth.get(key) ?? 0;
+    return { month: key, revenue, payrollCost, expenses, net: revenue - payrollCost - expenses };
+  });
   return { ...trend[trend.length - 1], trend };
 }
 
@@ -131,6 +156,31 @@ export const IDENTITY_DOCS = [
 ];
 
 const daysUntil = (date) => Math.ceil((new Date(date).getTime() - Date.now()) / 86_400_000);
+
+/**
+ * Live estimated revenue from mobilisations active at any point this calendar month —
+ * the sum of each active mobilisation's own `profitPerMonth` estimate (the same
+ * commercial figure Mobilisation/Deployment already treat as sensitive), not a fresh
+ * calculation of its own. Called only once the caller's gate (own work for a
+ * Coordinator, `mobilisationsViewer` read for anyone else — see getDashboard) is open.
+ */
+async function computeActiveMobilisationRevenue(actor, isCoordinator) {
+  const startOfThisMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const deploymentFilter = {
+    startDate: { $lte: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59, 999) },
+    $or: [{ endDate: null }, { endDate: { $gte: startOfThisMonth } }],
+    archived: { $ne: true },
+  };
+  if (isCoordinator) {
+    const myMobIds = await Mobilisation.find({ 'coordinators.user': actor.userId }).distinct('_id');
+    deploymentFilter.mobilisation = { $in: myMobIds };
+  }
+  const activeDeployments = await Deployment.find(deploymentFilter).select('mobilisation').lean();
+  const mobIds = activeDeployments.map((d) => d.mobilisation).filter(Boolean);
+  if (mobIds.length === 0) return 0;
+  const activeMobs = await Mobilisation.find({ _id: { $in: mobIds } }).select('profitPerMonth').lean();
+  return activeMobs.reduce((sum, mob) => sum + (mob.profitPerMonth || 0), 0);
+}
 
 /**
  * "Pending on me" across every approval-hierarchy-integrated request type —
@@ -149,7 +199,7 @@ const daysUntil = (date) => Math.ceil((new Date(date).getTime() - Date.now()) / 
  */
 // `sectionKey` (added 2026-09-15, a real QA-audit-found gap — D1): the
 // REAL decide route for Leave/Timesheet/SalaryAdvance/Reimbursement also
-// requires Section Access write on this key — see leave.routes.js's
+// requires Section Access write on this key — see leaveRequest.routes.js's
 // canWriteLeaveRequests, timesheet.routes.js's canWrite,
 // advance.service.js's own already-fixed `listAdvances` (2026-09-14, the
 // exact same class of gap, just never carried over to this dashboard
@@ -170,16 +220,53 @@ const PENDING_ACTION_MODULES = [
   { label: 'Mobilisations', url: '/mobilisations', Model: Mobilisation, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin'], sectionKey: null },
 ];
 
-async function getMyPendingActions(actor) {
+// FIX (2026-09-22, a real QA-audit finding — P3, two parts):
+//  1. `mySectionAccess` is getMySectionAccess's own already-batched result (2
+//     queries total, covering every section key), passed in by getDashboard
+//     rather than each of these five modules calling
+//     canAccessSection(sectionKey, ...) itself — that used to mean up to 5
+//     more SectionAccess reads here (Salary advances and Reimbursements even
+//     shared the same 'financialRequests' key, so a viewer with both pending
+//     could pay for it twice), on top of the 13 the main dashboard batch
+//     already ran.
+//  2. "Batch approval-role membership checks": every module used to call
+//     annotateCanDecide separately, each running its OWN ApprovalRole query
+//     — up to 5 more. Every module's items are now fetched first (still 5
+//     queries — different collections, can't be merged), then ONE
+//     ApprovalRole query covers the union of every module's needed role ids
+//     (roleIdsNeededAcross, from approvalEngine.service.js), passed into
+//     annotateCanDecide so it skips its own query entirely.
+async function getMyPendingActions(actor, mySectionAccess) {
   if (!actor?.userId) return [];
-  const [staleRequirements, openTasks] = await Promise.all([countStaleRequirements(actor), countOpenTasks(actor)]);
+  const [staleRequirements, openTasks, itemsByModule] = await Promise.all([
+    countStaleRequirements(actor),
+    countOpenTasks(actor),
+    Promise.all(
+      PENDING_ACTION_MODULES.map(({ Model, pendingStatus }) =>
+        Model.find({ status: pendingStatus }).select('workflow currentStep steps status').lean()
+      )
+    ),
+  ]);
+
+  const allRoleIdsNeeded = new Set();
+  PENDING_ACTION_MODULES.forEach(({ pendingStatus }, i) => {
+    for (const id of roleIdsNeededAcross(itemsByModule[i], pendingStatus)) allRoleIdsNeeded.add(id);
+  });
+  let memberRoleIds = new Set();
+  if (allRoleIdsNeeded.size > 0) {
+    const roles = await ApprovalRole.find({ _id: { $in: [...allRoleIdsNeeded] }, members: actor.userId, isActive: true })
+      .select('_id')
+      .lean();
+    memberRoleIds = new Set(roles.map((r) => r._id.toString()));
+  }
+
   const perModule = await Promise.all(
-    PENDING_ACTION_MODULES.map(async ({ label, url, Model, pendingStatus, legacyAllowedRoles, sectionKey }) => {
-      const items = await Model.find({ status: pendingStatus }).select('workflow currentStep steps status').lean();
+    PENDING_ACTION_MODULES.map(async ({ label, url, pendingStatus, legacyAllowedRoles, sectionKey }, i) => {
+      const items = itemsByModule[i];
       if (items.length === 0) return { label, url, count: 0 };
-      const annotated = await annotateCanDecide(items, actor, { pendingStatus, legacyAllowedRoles });
-      const hasSectionWrite = sectionKey ? await canAccessSection(sectionKey, actor, 'write') : true;
-      const count = hasSectionWrite ? annotated.filter((i) => i.canDecideCurrentStep).length : 0;
+      const annotated = await annotateCanDecide(items, actor, { pendingStatus, legacyAllowedRoles, memberRoleIds });
+      const hasSectionWrite = sectionKey ? mySectionAccess.write.includes(sectionKey) : true;
+      const count = hasSectionWrite ? annotated.filter((i2) => i2.canDecideCurrentStep).length : 0;
       return { label, url, count };
     })
   );
@@ -256,44 +343,47 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     ? await Employee.find({ coordinator: actor.userId, type: { $in: WORKFORCE_TYPES } }).distinct('_id')
     : null;
 
-  const [
-    canReadEmployees,
-    canReadDeployments,
-    canReadClients,
-    canReadQuotations,
-    canReadPayroll,
-    canSeeProfit,
-    canReadAuditLog,
-    canReadAttendance,
-    canReadDocuments,
-    canReadSubcontractors,
-    canReadLeave,
-    canReadExitDocuments,
-  ] = actor
-    ? await Promise.all(
-        [
-          'employeeCreate',
-          'deploymentsRelease',
-          'clientsManage',
-          'quotationsManage',
-          'payroll',
-          'dashboardProfit',
-          'auditLog',
-          'attendanceRecords',
-          'documentsManage',
-          // FIX (2026-09-22): activeSubcontractors/attendanceSummary/pendingLeave/pendingExit
-          // below used to gate on a hardcoded `actor.role === 'Manager'|'Admin'|'HR'` check —
-          // the exact anti-pattern the 2026-09-13 "dashboard driven by real Section Access
-          // reads" rewrite removed everywhere else on this page. Each now reuses the SAME
-          // grant that already governs its own underlying module, same as every other field
-          // here (e.g. expiringDocuments reuses canReadEmployees/canReadDocuments) —
-          // attendanceSummary reuses `attendanceRecords` (canReadAttendance, above) directly.
-          'subcontractorsManage',
-          'leaveRequests',
-          'exitDocuments',
-        ].map((key) => canAccessSection(key, actor, 'read'))
-      )
-    : Array(12).fill(false);
+  // FIX (2026-09-22, a real QA-audit finding — P3): every canReadX flag below
+  // used to be its own `canAccessSection(key, actor, 'read')` call — each one
+  // its own `SectionAccess.findOne` — 13 separate reads on every dashboard
+  // load (reproduced: 9 of them for a Manager with no grants at all, before
+  // any actual dashboard data was even touched). getMySectionAccess(actor) is
+  // the SAME already-batched primitive `user.sectionAccess` itself is built
+  // from on login (2 queries total, covering every section key that exists,
+  // not just these 13) — resolved once here and reused for every read check
+  // below AND passed into getMyPendingActions, instead of asking the
+  // database the same "which sections can this actor read/write" question
+  // repeatedly in one request.
+  const mySectionAccess = actor ? await getMySectionAccess(actor) : { read: [], write: [] };
+  const canRead = (key) => mySectionAccess.read.includes(key);
+  const canReadEmployees = canRead('employeeCreate');
+  const canReadDeployments = canRead('deploymentsRelease');
+  const canReadClients = canRead('clientsManage');
+  const canReadQuotations = canRead('quotationsManage');
+  const canReadPayroll = canRead('payroll');
+  const canSeeProfit = canRead('dashboardProfit');
+  const canReadAuditLog = canRead('auditLog');
+  const canReadAttendance = canRead('attendanceRecords');
+  const canReadDocuments = canRead('documentsManage');
+  // activeSubcontractors/attendanceSummary/pendingLeave/pendingExit below
+  // used to gate on a hardcoded `actor.role === 'Manager'|'Admin'|'HR'`
+  // check — the exact anti-pattern the 2026-09-13 "dashboard driven by real
+  // Section Access reads" rewrite removed everywhere else on this page.
+  // Each now reuses the SAME grant that already governs its own underlying
+  // module, same as every other field here (e.g. expiringDocuments reuses
+  // canReadEmployees/canReadDocuments) — attendanceSummary reuses
+  // `attendanceRecords` (canReadAttendance, above) directly.
+  const canReadSubcontractors = canRead('subcontractorsManage');
+  const canReadLeave = canRead('leaveRequests');
+  const canReadExitDocuments = canRead('exitDocuments');
+  // mobilisationsByStatus and activeMobilisationRevenue's company-wide
+  // totals used to be computed and returned to EVERY viewer unconditionally
+  // — only the client chose not to render them outside Manager/Admin.
+  // Reuses mobilisationsViewer ("full visibility into every mobilisation...
+  // commercial rates and margins included"), the existing key for exactly
+  // this sensitivity. A Coordinator's own scoped totals stay ungated —
+  // their own work, same posture as their own MobilisationTargetCard.
+  const canReadMobilisationCommercials = canRead('mobilisationsViewer');
 
   const employeeExpiryFilter = { status: { $ne: 'Exited' }, $or: identityExpiryOr };
   if (teamIds) employeeExpiryFilter._id = { $in: teamIds };
@@ -331,7 +421,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     activeSubcontractorsCount,
     attendanceAgg,
     pendingLeave,
-    pendingExit
+    pendingExit,
+    activeMobilisationRevenue
   ] = await Promise.all([
     canReadDeployments ? Deployment.countDocuments(deploymentFilter) : Promise.resolve(0),
     canReadEmployees
@@ -395,12 +486,16 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // gates above — it's already self-gated by real per-item decide
     // authority (ApprovalRole membership on that record's current step),
     // which is a stricter, more specific check than any section-level grant.
-    getMyPendingActions(actor),
-    // Mobilisations by status
-    Mobilisation.aggregate([
-      ...(isCoordinator ? [{ $match: { 'coordinators.user': new mongoose.Types.ObjectId(actor.userId) } }] : []),
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]),
+    getMyPendingActions(actor, mySectionAccess),
+    // Mobilisations by status — a Coordinator's own is never gated (their own work);
+    // the company-wide breakdown needs mobilisationsViewer read (see the doc comment
+    // on the canAccessSection batch above).
+    isCoordinator || canReadMobilisationCommercials
+      ? Mobilisation.aggregate([
+          ...(isCoordinator ? [{ $match: { 'coordinators.user': new mongoose.Types.ObjectId(actor.userId) } }] : []),
+          { $group: { _id: '$status', count: { $sum: 1 } } },
+        ])
+      : Promise.resolve([]),
     // Active subcontractors — gated on subcontractorsManage read, the same grant that
     // already governs the subcontractor directory itself.
     canReadSubcontractors ? Subcontractor.countDocuments({ status: 'Active' }) : Promise.resolve(0),
@@ -412,7 +507,15 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     canReadLeave ? LeaveRequest.countDocuments({ status: 'PendingReview' }) : Promise.resolve(0),
     // Pending exits — gated on exitDocuments read, the same grant that governs the
     // Exit Documents module itself.
-    canReadExitDocuments ? ExitReentry.countDocuments({ status: 'Pending' }) : Promise.resolve(0)
+    canReadExitDocuments ? ExitReentry.countDocuments({ status: 'Pending' }) : Promise.resolve(0),
+    // Active mobilisation revenue — same gate as mobilisationsByStatus above. Moved into
+    // this parallel batch (2026-09-22 fix): it used to sit in the return object below,
+    // running sequentially AFTER this whole batch already resolved, instead of
+    // alongside everything else — see this file's own top doc comment on why every
+    // independent query belongs in one Promise.all.
+    isCoordinator || canReadMobilisationCommercials
+      ? computeActiveMobilisationRevenue(actor, isCoordinator)
+      : Promise.resolve(null)
   ]);
 
   // Workforce by status
@@ -487,30 +590,11 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       pendingRevenue: canReadQuotations && !isCoordinator ? pendingRevenue : null,
       monthlyPayroll: canReadPayroll ? (payrollAgg[0]?.total ?? 0) : null,
       profit: profitOverview,
-      // "amount of revenue a coordinator is bringing in based on active mobilisation that month"
-      // Also available for Managers/Admins as a global total.
-      activeMobilisationRevenue: await (async () => {
-        const startOfThisMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-        
-        const deploymentFilter = {
-          startDate: { $lte: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59, 999) },
-          $or: [{ endDate: null }, { endDate: { $gte: startOfThisMonth } }],
-          archived: { $ne: true }
-        };
-
-        if (isCoordinator) {
-          const myMobIds = await Mobilisation.find({ 'coordinators.user': actor.userId }).distinct('_id');
-          deploymentFilter.mobilisation = { $in: myMobIds };
-        }
-
-        const activeDeployments = await Deployment.find(deploymentFilter).select('mobilisation').lean();
-        
-        const mobIds = activeDeployments.map(d => d.mobilisation).filter(Boolean);
-        if (mobIds.length === 0) return 0;
-        
-        const activeMobs = await Mobilisation.find({ _id: { $in: mobIds } }).select('profitPerMonth').lean();
-        return activeMobs.reduce((sum, mob) => sum + (mob.profitPerMonth || 0), 0);
-      })()
+      // Revenue from mobilisations active this month — a Coordinator's own, or the
+      // company total once granted mobilisationsViewer read (see canAccessSection batch
+      // above and computeActiveMobilisationRevenue). Already null from that gated query
+      // when not entitled; computed in the parallel batch above, not sequentially here.
+      activeMobilisationRevenue
     },
     workforceByStatus: canReadEmployees ? workforceByStatus : null,
     quotationsByStatus: canReadQuotations && !isCoordinator ? quotationsByStatus : null,
@@ -520,7 +604,14 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // same "hidden entirely at zero" pattern the client already applies to
     // pendingClientApprovals.
     myPendingActions,
-    mobilisationsByStatus: mobilisationsAgg ? Object.fromEntries(mobilisationsAgg.map(r => [r._id, r.count])) : null,
+    // Gated the same way the query itself was above (own for a Coordinator,
+    // mobilisationsViewer read otherwise) — mobilisationsAgg is always a real array from
+    // Promise.all even when the query was skipped, so the gate has to be checked here
+    // explicitly rather than inferred from truthiness.
+    mobilisationsByStatus:
+      isCoordinator || canReadMobilisationCommercials
+        ? Object.fromEntries(mobilisationsAgg.map((r) => [r._id, r.count]))
+        : null,
     // FIX (2026-09-22): these four used to gate on a hardcoded actor.role check — see the
     // matching doc comment on the canAccessSection batch above for why each now reuses the
     // grant that already governs its own underlying module instead.
@@ -546,11 +637,12 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
   };
 }
 
+/** How much an idle own-outsourced workforce is costing — derived from `Employee.salary`,
+ *  the same compensation data `getDashboard`'s own `monthlyPayroll` figure sums, so this
+ *  reuses that figure's own `payroll` gate (2026-09-22 fix — this used to hardcode
+ *  Admin/Manager/HR directly, the same anti-pattern already fixed on the main dashboard). */
 export async function getStandbyAnalysis(actor) {
-  // MM or Admin only for Standby Analysis
-  if (actor.role !== 'Admin' && actor.role !== 'Manager' && actor.role !== 'HR') {
-    return [];
-  }
+  if (!(await canAccessSection('payroll', actor, 'read'))) return [];
 
   // Find all active Outsourced workers
   const activeOutsourced = await Employee.find({ type: 'Outsourced', status: 'Active' })

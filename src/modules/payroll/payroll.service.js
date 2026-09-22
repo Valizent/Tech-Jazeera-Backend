@@ -5,7 +5,7 @@
 import Employee from '../employees/employee.model.js';
 import Timesheet from '../timesheets/timesheet.model.js';
 import LeaveRequest from '../leave/leaveRequest.model.js';
-import { deductionsForEmployeeMonth } from '../deployments/deployment.service.js';
+import { deductionsForEmployeesMonth } from '../deployments/deployment.service.js';
 import PayrollRun from './payrollRun.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
@@ -47,18 +47,18 @@ function expandSickPayBreakdown(startDate, payBreakdown) {
  * tiers later — same discipline as everywhere else `eligibility` is used).
  * A request spanning a month boundary only has its days IN this month
  * counted; the rest belongs to whichever month those calendar days fall in.
+ *
+ * FIX (2026-09-22, a real QA-audit finding — P4): this and the two
+ * functions below it used to each run their own per-employee query,
+ * sequentially, once per employee in createPayrollRun's loop — reproduced
+ * at 494ms/10 employees and 4.7s/100 employees, all from that. Each is now
+ * a `requestsByEmployee`/`timesheetsByEmployee`/`deductionsByEmployee` MAP,
+ * built by ONE query per collection covering every eligible employee at
+ * once (`sickLeaveRequestsForMonth`/`approvedTimesheetsForMonth` below),
+ * with this function's own math unchanged — it just reads its rows out of
+ * the pre-fetched map instead of awaiting its own find().
  */
-async function sickLeaveDeductionForMonth(employeeId, basicSalary, monthStart, monthEnd) {
-  const requests = await LeaveRequest.find({
-    employee: employeeId,
-    status: { $in: ['AutoApproved', 'Approved'] },
-    'eligibility.payBreakdown': { $exists: true, $ne: [] },
-    startDate: { $lte: monthEnd },
-    endDate: { $gte: monthStart },
-  })
-    .select('startDate eligibility.payBreakdown')
-    .lean();
-
+function sickLeaveDeductionForMonth(requests, basicSalary, monthStart, monthEnd) {
   const dailyWage = basicSalary / DAILY_WAGE_DIVISOR;
   let deduction = 0;
   let reducedPayDays = 0;
@@ -79,20 +79,50 @@ async function sickLeaveDeductionForMonth(employeeId, basicSalary, monthStart, m
   return { deduction: money(deduction), note: parts.length ? `Sick leave: ${parts.join(', ')}` : '' };
 }
 
+/** Every eligible employee's sick LeaveRequests relevant to this month, in
+ *  ONE query — grouped by employee id (string) for sickLeaveDeductionForMonth
+ *  above to read per-employee; see its own doc comment. */
+async function sickLeaveRequestsForMonth(employeeIds, monthStart, monthEnd) {
+  const requests = await LeaveRequest.find({
+    employee: { $in: employeeIds },
+    status: { $in: ['AutoApproved', 'Approved'] },
+    'eligibility.payBreakdown': { $exists: true, $ne: [] },
+    startDate: { $lte: monthEnd },
+    endDate: { $gte: monthStart },
+  })
+    .select('employee startDate eligibility.payBreakdown')
+    .lean();
+  const byEmployee = new Map(employeeIds.map((id) => [String(id), []]));
+  for (const request of requests) byEmployee.get(String(request.employee))?.push(request);
+  return byEmployee;
+}
+
 /** Sum of Approved-timesheet hours (and overtime hours, P3-E) for one
  *  employee, counting a week toward the calendar month its Saturday
  *  (periodStart) falls in — a documented approximation, not a day-by-day
- *  split of weeks that cross month ends. */
-async function approvedHoursForMonth(employeeId, monthStart, monthEnd) {
-  const timesheets = await Timesheet.find({
-    employee: employeeId,
-    status: 'Approved',
-    periodStart: { $gte: monthStart, $lte: monthEnd },
-  }).lean();
+ *  split of weeks that cross month ends. See sickLeaveDeductionForMonth's
+ *  own doc comment above for why this takes pre-fetched rows, not an id. */
+function approvedHoursForMonth(timesheets) {
   return {
     approvedHours: money(timesheets.reduce((sum, t) => sum + t.totalHours, 0)),
     overtimeHours: money(timesheets.reduce((sum, t) => sum + (t.overtimeHours ?? 0), 0)),
   };
+}
+
+/** Every eligible employee's Approved timesheets in this month's window, in
+ *  ONE query — grouped by employee id (string) for approvedHoursForMonth
+ *  above to read per-employee. */
+async function approvedTimesheetsForMonth(employeeIds, monthStart, monthEnd) {
+  const timesheets = await Timesheet.find({
+    employee: { $in: employeeIds },
+    status: 'Approved',
+    periodStart: { $gte: monthStart, $lte: monthEnd },
+  })
+    .select('employee totalHours overtimeHours')
+    .lean();
+  const byEmployee = new Map(employeeIds.map((id) => [String(id), []]));
+  for (const t of timesheets) byEmployee.get(String(t.employee))?.push(t);
+  return byEmployee;
 }
 
 function buildLineTotals({ basicSalary, housingAllowance, transportAllowance, otherAllowances, overtimePay, sickLeaveDeduction, gosiDeduction, otherDeductions }) {
@@ -133,6 +163,20 @@ export async function createPayrollRun({ periodYear, periodMonth }, actor) {
   const monthEnd = new Date(Date.UTC(periodYear, periodMonth, 0));
 
   const monthStr = `${periodYear}-${String(periodMonth).padStart(2, '0')}`;
+  const employeeIds = employees.map((e) => e._id);
+  // FIX (2026-09-22, a real QA-audit finding — P4): these three used to be
+  // awaited ONE EMPLOYEE AT A TIME inside the loop below — three sequential
+  // reads per employee, blocking the next employee from starting until all
+  // three finished. Now three queries total, covering every eligible
+  // employee at once, run in parallel ahead of the loop — the loop itself
+  // is now pure synchronous math over already-fetched data. See each
+  // function's own doc comment for the exact reproduced numbers.
+  const [deductionsByEmployee, timesheetsByEmployee, sickRequestsByEmployee] = await Promise.all([
+    deductionsForEmployeesMonth(employeeIds, monthStr),
+    approvedTimesheetsForMonth(employeeIds, monthStart, monthEnd),
+    sickLeaveRequestsForMonth(employeeIds, monthStart, monthEnd),
+  ]);
+
   const lines = [];
   for (const employee of employees) {
     const basicSalary = employee.basicSalary ?? employee.salary;
@@ -140,6 +184,7 @@ export async function createPayrollRun({ periodYear, periodMonth }, actor) {
     const transportAllowance = employee.transportAllowance ?? 0;
     const otherAllowances = 0;
     const gosiDeduction = 0;
+    const employeeKey = String(employee._id);
     // Any Approved client-timesheet deduction this employee's Deployment(s)
     // carried for this exact month (e.g. a client-imposed absence penalty —
     // see deployment.model.js's own doc comment on deductionAmount) — the
@@ -149,15 +194,15 @@ export async function createPayrollRun({ periodYear, periodMonth }, actor) {
     // exists is not retroactively pulled in (see deductionsForEmployeeMonth's
     // own doc comment) — same limitation overtimeHours/sickLeaveDeduction
     // already have.
-    const otherDeductions = await deductionsForEmployeeMonth(employee._id, monthStr);
+    const otherDeductions = deductionsByEmployee.get(employeeKey) ?? [];
 
-    const { approvedHours, overtimeHours } = await approvedHoursForMonth(employee._id, monthStart, monthEnd);
+    const { approvedHours, overtimeHours } = approvedHoursForMonth(timesheetsByEmployee.get(employeeKey) ?? []);
     // Overtime pay is based on THIS employee's own basic salary, not a
     // company-wide rate — the hourly wage a 50%-uplift is computed against
     // is theirs alone (Article 107).
     const overtimePay = money(overtimeHours * (basicSalary / HOURLY_WAGE_DIVISOR) * OVERTIME_RATE);
-    const { deduction: sickLeaveDeduction, note: sickLeaveNote } = await sickLeaveDeductionForMonth(
-      employee._id,
+    const { deduction: sickLeaveDeduction, note: sickLeaveNote } = sickLeaveDeductionForMonth(
+      sickRequestsByEmployee.get(employeeKey) ?? [],
       basicSalary,
       monthStart,
       monthEnd
