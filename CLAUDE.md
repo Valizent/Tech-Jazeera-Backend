@@ -1441,3 +1441,52 @@ when requested):**
   (state saved first, delete-then-restore, independent steps). Milestone 4 (manager
   extras) not started. See `docs/REQUIREMENTS-BOARD-notes.md` ("Milestone 3") and
   `docs/MOBILISATION-notes.md`'s 2026-09-20 follow-up.
+- **Requirements: manager extras — filters, export, dashboard widget COMPLETE
+  (Coordinator Workflow, milestone 4 of 4 — the whole workflow is now built)** — client
+  and subcontractor filters on the board (joining the existing coordinator/closed
+  filters), a real `GET /api/requirements/export` (`.xlsx`, a Requirements sheet and a
+  Candidates sheet) sharing the board's own query-building function so the two can never
+  disagree on what a viewer sees, and two new "Waiting on you" dashboard rows (stale
+  requirements, open tasks), each counted by its own module scoped exactly like the page
+  it links to. No new permission — everything rides the existing `requirementsOwn`/
+  `requirementsTeam` read. Fixed a real pre-existing crash found while building this: a
+  job-title quick-create `useEffect` added after milestone 3 referenced `setValue` before
+  `useForm` declared it, crashing the whole board the instant the Add/Edit requirement
+  modal mounted. Verified: 95 real-HTTP assertions plus a full browser click-through. See
+  `docs/REQUIREMENTS-BOARD-notes.md`'s "Milestone 4" section.
+- **22 September 2026: audit of work built outside this session, one real crash fixed,
+  several real gaps flagged for a decision** — between sessions the user built a good
+  deal more directly (a new `mobilisationTargets` module — per-coordinator monthly
+  mobilisation targets with live progress and an incentive percent; several new dashboard
+  widgets — active revenue, a standby-workforce analysis, HR compliance, daily attendance,
+  a coordinator drill-down, directory stats, a system-logs widget; and a scoping change to
+  `Deployment`'s Coordinator team-check). Asked to check it all and bring the docs/memory
+  up to date. Found and fixed one real, reproducible crash:
+  `GET /dashboard/coordinator-drill-down/:id` 500'd on every call — it destructured
+  `{ DailyUpdate }` and `{ Task }` off `dailyUpdate.model.js`, which has neither (one
+  collection, a single default export, `kind: 'Log' | 'Task'` tells them apart) — fixed
+  to the model's real shape, plus a stray unused import that was failing the CI lint job
+  outright. Found and **flagged for the user's own decision, not changed**: 7 of the 9
+  new dashboard widgets have no `t()` calls at all — hardcoded English, a real regression
+  against the "Staff panel Arabic" milestone's explicit "the entire Dashboard page + its
+  sub-components — every visible string, not a partial pass"; four of the new dashboard
+  fields (`activeSubcontractors`, `attendanceSummary`, `pendingLeave`, `pendingExit`) gate
+  on a hardcoded `actor.role === 'Manager' | 'Admin' | 'HR'` check, reintroducing the
+  exact anti-pattern the "Dashboard driven by real Section Access reads" milestone was
+  built specifically to remove; the new `finance.activeMobilisationRevenue` figure has NO
+  Section Access gate at all, unlike every other financial figure this dashboard shows
+  (`profit` needs `dashboardProfit`) — any staff login with dashboard access sees it
+  unconditionally; `deployment.service.js`'s Coordinator team-scoping changed from
+  `Employee.coordinator` to `Mobilisation.coordinators.user` and dropped the always-
+  visible `worker: null` branch for SupplierEmployee/Freelancer deployments (a real,
+  undocumented change to scoping logic the 15 September QA audit had specifically
+  hardened) — its own code comment still describes the old, no-longer-true behavior. Also
+  noted: a `test.js` ad hoc debug script sitting at the server root, checked into git
+  (dead code by this file's own hard rule — left alone pending the user's own go-ahead to
+  remove it, since it's their file). **Separately confirmed**: OpenAI's Codex CLI was
+  running against this same working directory alongside this session — the user runs more
+  than one AI coding tool on this repo concurrently, which is the honest explanation for
+  the code-quality/convention gaps above and for commits landing that this session never
+  made. Worth knowing going in, not a sign of drift or corruption. See
+  `docs/DASHBOARD-EXTRAS-notes.md` for the full finding-by-finding list and what "fix" vs.
+  "flagged" means for each.

@@ -411,4 +411,45 @@ step in its own try/catch, state saved first.
 - **Own employees as candidates** — see above; use the Standby list.
 - **Demobilising or completing a mobilisation doesn't touch the card.** Once mobilised the
   requirement's job is done.
-- Milestone 4 (filters by client/subcontractor, Excel export, dashboard widget) is next.
+
+## Milestone 4 — manager extras (2026-09-21/22, COMPLETE)
+
+The last piece: client/subcontractor filters, an Excel export, and a "waiting on you"
+dashboard count — no new permission, everything rides the existing `requirementsOwn`/
+`requirementsTeam` read.
+
+- **Board filters.** `client` (the exact company name a card was typed with,
+  case-insensitive) and `subcontractor` (matches a card with a non-dropped candidate
+  from that subcontractor) join the existing `coordinator`/`closed` filters, all ANDed.
+  The board response now also carries `filterOptions` — the client names and
+  subcontractors actually present among the cards THIS viewer can see, taken from the
+  data itself rather than fetched from the Clients/Subcontractors modules (a coordinator
+  usually has no access to either, so asking those would just break the filter). A
+  renamed subcontractor shows its current name, not the snapshot frozen on the candidate.
+- **`GET /api/requirements/export`** — one `.xlsx`, two sheets (Requirements,
+  Candidates), built from the exact same `buildScope()` the board itself uses (a shared
+  query builder, the same pattern `deployment.service.js`'s `findDeployments` already
+  established) — export and board can never disagree on which cards a viewer sees for a
+  given set of filters. A subcontractor filter narrows the Candidates sheet to that
+  subcontractor's own rows on each card; the card-level counts still describe the whole
+  card. No commercial columns — a requirement carries none.
+- **Dashboard "Waiting on you".** Two new rows, `countStaleRequirements` and
+  `countOpenTasks` (own module, own file — `requirement.service.js` /
+  `dailyUpdate.service.js`), each scoped exactly like the page the row links to (own-only
+  sees their own, team sees everyone's), so the number on the dashboard can never
+  disagree with the page it opens. "Stale" restates the card's own `stale` flag as one
+  query, checked to the second in verification.
+- Fixed a real pre-existing crash found while building this: `RequirementFormModal`'s
+  job-title quick-create `useEffect` (added after M3, in a later commit) referenced
+  `setValue` before `useForm` declared it — a "Cannot access 'setValue' before
+  initialization" that crashed the whole board the moment the Add/Edit requirement modal
+  mounted. Moved the `useEffect` below `useForm`, same fix pattern as every other
+  quick-create-then-select bug in this app (Job Titles, Deployment's preset-employee bug).
+- Verified: 95 real-HTTP assertions (disposable users/roles/cards/stages/subcontractors,
+  additive-only grants via `$addToSet`/`$pull` so a real grant made meanwhile is never
+  clobbered) covering the filters, their options per viewer, export/board parity across
+  10 viewer+filter combinations, and the dashboard counts including the stale boundary
+  checked to the second; a full browser click-through as a disposable coordinator
+  (filters narrowing the board, Clear filters, a real downloaded `.xlsx`, the dashboard
+  row deep-linking to the Tasks tab). **Coordinator Workflow now fully complete
+  (M1–M4).**

@@ -36,7 +36,6 @@ import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import { countStaleRequirements } from '../requirements/requirement.service.js';
 import { countOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
-import User from '../auth/user.model.js';
 import ExitReentry from '../exitDocuments/exitReentry.model.js';
 
 export const EXPIRY_WARNING_DAYS = 30;
@@ -267,13 +266,34 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     canReadAuditLog,
     canReadAttendance,
     canReadDocuments,
+    canReadSubcontractors,
+    canReadLeave,
+    canReadExitDocuments,
   ] = actor
     ? await Promise.all(
-        ['employeeCreate', 'deploymentsRelease', 'clientsManage', 'quotationsManage', 'payroll', 'dashboardProfit', 'auditLog', 'attendanceRecords', 'documentsManage'].map(
-          (key) => canAccessSection(key, actor, 'read')
-        )
+        [
+          'employeeCreate',
+          'deploymentsRelease',
+          'clientsManage',
+          'quotationsManage',
+          'payroll',
+          'dashboardProfit',
+          'auditLog',
+          'attendanceRecords',
+          'documentsManage',
+          // FIX (2026-09-22): activeSubcontractors/attendanceSummary/pendingLeave/pendingExit
+          // below used to gate on a hardcoded `actor.role === 'Manager'|'Admin'|'HR'` check —
+          // the exact anti-pattern the 2026-09-13 "dashboard driven by real Section Access
+          // reads" rewrite removed everywhere else on this page. Each now reuses the SAME
+          // grant that already governs its own underlying module, same as every other field
+          // here (e.g. expiringDocuments reuses canReadEmployees/canReadDocuments) —
+          // attendanceSummary reuses `attendanceRecords` (canReadAttendance, above) directly.
+          'subcontractorsManage',
+          'leaveRequests',
+          'exitDocuments',
+        ].map((key) => canAccessSection(key, actor, 'read'))
       )
-    : Array(9).fill(false);
+    : Array(12).fill(false);
 
   const employeeExpiryFilter = { status: { $ne: 'Exited' }, $or: identityExpiryOr };
   if (teamIds) employeeExpiryFilter._id = { $in: teamIds };
@@ -381,14 +401,18 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       ...(isCoordinator ? [{ $match: { 'coordinators.user': new mongoose.Types.ObjectId(actor.userId) } }] : []),
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]),
-    // Active subcontractors
-    actor?.role === 'Manager' || actor?.role === 'Admin' ? Subcontractor.countDocuments({ status: 'Active' }) : Promise.resolve(0),
-    // Attendance summary
-    actor?.role === 'Manager' || actor?.role === 'Admin' ? Attendance.find({ date: toUtcDay(new Date()) }).select('employee').lean() : Promise.resolve([]),
-    // Pending leaves
-    actor?.role === 'HR' || actor?.role === 'Admin' ? LeaveRequest.countDocuments({ status: 'PendingReview' }) : Promise.resolve(0),
-    // Pending exits
-    actor?.role === 'HR' || actor?.role === 'Admin' ? ExitReentry.countDocuments({ status: 'Pending' }) : Promise.resolve(0)
+    // Active subcontractors — gated on subcontractorsManage read, the same grant that
+    // already governs the subcontractor directory itself.
+    canReadSubcontractors ? Subcontractor.countDocuments({ status: 'Active' }) : Promise.resolve(0),
+    // Attendance summary — canReadAttendance (attendanceRecords), already computed above
+    // for markedToday; not a second, narrower role check.
+    canReadAttendance ? Attendance.find({ date: toUtcDay(new Date()) }).select('employee').lean() : Promise.resolve([]),
+    // Pending leaves — gated on leaveRequests read, the same grant that governs the
+    // Leave module itself.
+    canReadLeave ? LeaveRequest.countDocuments({ status: 'PendingReview' }) : Promise.resolve(0),
+    // Pending exits — gated on exitDocuments read, the same grant that governs the
+    // Exit Documents module itself.
+    canReadExitDocuments ? ExitReentry.countDocuments({ status: 'Pending' }) : Promise.resolve(0)
   ]);
 
   // Workforce by status
@@ -497,14 +521,17 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // pendingClientApprovals.
     myPendingActions,
     mobilisationsByStatus: mobilisationsAgg ? Object.fromEntries(mobilisationsAgg.map(r => [r._id, r.count])) : null,
-    activeSubcontractors: (actor?.role === 'Manager' || actor?.role === 'Admin') ? activeSubcontractorsCount : null,
-    attendanceSummary: (actor?.role === 'Manager' || actor?.role === 'Admin') && attendanceAgg ? await (async () => {
+    // FIX (2026-09-22): these four used to gate on a hardcoded actor.role check — see the
+    // matching doc comment on the canAccessSection batch above for why each now reuses the
+    // grant that already governs its own underlying module instead.
+    activeSubcontractors: canReadSubcontractors ? activeSubcontractorsCount : null,
+    attendanceSummary: canReadAttendance && attendanceAgg ? await (async () => {
       const empIds = attendanceAgg.map(a => a.employee);
       const emps = await Employee.find({ _id: { $in: empIds } }).select('type designation currentClient').lean();
-      
+
       let total = 0;
-      const excludedDesignations = ['MM', 'FM', 'GM', 'COO', 'Admin', 'HR']; 
-      
+      const excludedDesignations = ['MM', 'FM', 'GM', 'COO', 'Admin', 'HR'];
+
       for (const e of emps) {
         if (e.type === 'Own' && !excludedDesignations.includes(e.designation)) {
           total++;
@@ -514,8 +541,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       }
       return { total };
     })() : null,
-    pendingLeave: (actor?.role === 'HR' || actor?.role === 'Admin') ? pendingLeave : null,
-    pendingExit: (actor?.role === 'HR' || actor?.role === 'Admin') ? pendingExit : null
+    pendingLeave: canReadLeave ? pendingLeave : null,
+    pendingExit: canReadExitDocuments ? pendingExit : null
   };
 }
 
@@ -579,19 +606,22 @@ export async function getStandbyAnalysis(actor) {
 }
 
 export async function getCoordinatorDrillDown(actor, coordinatorId) {
-  // We need to fetch Daily logs, tasks, and profit for this coordinator.
-  // 1. Daily logs for the last 30 days
+  // FIX (2026-09-22): this destructured { DailyUpdate } and { Task } off dailyUpdate.model.js,
+  // which has neither — one collection, a single DEFAULT export, with `kind: 'Log' | 'Task'`
+  // telling the two apart (see dailyUpdate.model.js's own doc comment). Both names came back
+  // undefined, so this 500'd every time — reproduced via GET /dashboard/coordinator-drill-down/:id.
+  // Real fields: `coordinator` (who it belongs to, not `assignee`) and `status`/`completedAt`
+  // (a Task only) — the same shape dailyUpdate.service.js already reads throughout.
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000);
-  const { DailyUpdate } = await import('../dailyUpdates/dailyUpdate.model.js');
-  const { Task } = await import('../dailyUpdates/dailyUpdate.model.js');
-  
-  const logs = await DailyUpdate.find({ coordinator: coordinatorId, date: { $gte: thirtyDaysAgo } })
+  const { default: DailyUpdate } = await import('../dailyUpdates/dailyUpdate.model.js');
+
+  const logs = await DailyUpdate.find({ kind: 'Log', coordinator: coordinatorId, date: { $gte: thirtyDaysAgo } })
     .sort({ date: -1 })
     .limit(10)
     .lean();
 
-  const openTasks = await Task.countDocuments({ assignee: coordinatorId, completedAt: null });
-  const completedTasks = await Task.countDocuments({ assignee: coordinatorId, completedAt: { $ne: null } });
+  const openTasks = await DailyUpdate.countDocuments({ kind: 'Task', coordinator: coordinatorId, status: 'Open' });
+  const completedTasks = await DailyUpdate.countDocuments({ kind: 'Task', coordinator: coordinatorId, status: 'Done' });
 
   // Mobilisation profit for this coordinator
   const mobilisations = await Mobilisation.aggregate([
