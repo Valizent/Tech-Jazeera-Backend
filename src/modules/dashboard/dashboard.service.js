@@ -186,6 +186,60 @@ async function computeActiveMobilisationRevenue(actor, isCoordinator) {
   return activeMobs.reduce((sum, mob) => sum + (mob.profitPerMonth || 0), 0);
 }
 
+const ACTIVE_REVENUE_TREND_MONTHS = 6;
+
+/**
+ * 6-month trailing trend of computeActiveMobilisationRevenue's own figure (2026-09-24,
+ * for the ActiveRevenueWidget's dashboard sparkline — the user's own ask) — the exact
+ * same "active at any point in the month" definition above, repeated per trailing
+ * month, not a second metric. Real numbers throughout: never a synthesized/interpolated
+ * series — a month with no active deployment data is a genuine 0, not a guess.
+ *
+ * Batched into 2 queries total for the whole 6-month window (one Deployment fetch
+ * spanning it, one Mobilisation fetch for every distinct id touched across all 6
+ * months), not one round trip per month — same discipline getProfitOverview's own
+ * trend already established (see this file's 2026-09-22 P3 fix's doc comment).
+ */
+async function computeActiveMobilisationRevenueTrend(actor, isCoordinator) {
+  const now = new Date();
+  const months = [];
+  for (let i = ACTIVE_REVENUE_TREND_MONTHS - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({
+      month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+      start: new Date(d.getFullYear(), d.getMonth(), 1),
+      end: new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999),
+    });
+  }
+  const windowStart = months[0].start;
+  const windowEnd = months[months.length - 1].end;
+
+  const deploymentFilter = {
+    startDate: { $lte: windowEnd },
+    $or: [{ endDate: null }, { endDate: { $gte: windowStart } }],
+    archived: { $ne: true },
+  };
+  if (isCoordinator) {
+    const myMobIds = await Mobilisation.find({ 'coordinators.user': actor.userId }).distinct('_id');
+    deploymentFilter.mobilisation = { $in: myMobIds };
+  }
+  const deployments = await Deployment.find(deploymentFilter).select('mobilisation startDate endDate').lean();
+
+  const allMobIds = [...new Set(deployments.map((d) => d.mobilisation?.toString()).filter(Boolean))];
+  const profitById = new Map();
+  if (allMobIds.length > 0) {
+    const mobs = await Mobilisation.find({ _id: { $in: allMobIds } }).select('profitPerMonth').lean();
+    for (const m of mobs) profitById.set(m._id.toString(), m.profitPerMonth || 0);
+  }
+
+  return months.map(({ month, start, end }) => ({
+    month,
+    revenue: deployments
+      .filter((d) => d.mobilisation && d.startDate <= end && (!d.endDate || d.endDate >= start))
+      .reduce((sum, d) => sum + (profitById.get(d.mobilisation.toString()) || 0), 0),
+  }));
+}
+
 /**
  * "Pending on me" across every approval-hierarchy-integrated request type —
  * the dashboard action list a decider (Manager/HR/Accounts/Coordinator/Admin)
@@ -426,7 +480,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     attendanceAgg,
     pendingLeave,
     pendingExit,
-    activeMobilisationRevenue
+    activeMobilisationRevenue,
+    activeMobilisationRevenueTrend
   ] = await Promise.all([
     canReadDeployments ? Deployment.countDocuments(deploymentFilter) : Promise.resolve(0),
     canReadEmployees
@@ -525,6 +580,11 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // independent query belongs in one Promise.all.
     isCoordinator || canReadMobilisationCommercials
       ? computeActiveMobilisationRevenue(actor, isCoordinator)
+      : Promise.resolve(null),
+    // 6-month sparkline behind the same figure/gate above — see
+    // computeActiveMobilisationRevenueTrend's own doc comment.
+    isCoordinator || canReadMobilisationCommercials
+      ? computeActiveMobilisationRevenueTrend(actor, isCoordinator)
       : Promise.resolve(null)
   ]);
 
@@ -604,7 +664,10 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       // company total once granted mobilisationsViewer read (see canAccessSection batch
       // above and computeActiveMobilisationRevenue). Already null from that gated query
       // when not entitled; computed in the parallel batch above, not sequentially here.
-      activeMobilisationRevenue
+      activeMobilisationRevenue,
+      // 6-month trailing trend of the figure above, for the dashboard card's own
+      // sparkline (2026-09-24) — same gate, same null-when-not-entitled shape.
+      activeMobilisationRevenueTrend
     },
     workforceByStatus: canReadEmployees ? workforceByStatus : null,
     quotationsByStatus: canReadQuotations && !isCoordinator ? quotationsByStatus : null,
