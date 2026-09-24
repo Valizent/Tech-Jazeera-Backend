@@ -44,7 +44,7 @@ import { countStaleRequirements } from '../requirements/requirement.service.js';
 import { countOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ExitReentry from '../exitDocuments/exitReentry.model.js';
-import { getStandbyWorkforce } from '../deployments/deployment.service.js';
+import { getStandbyWorkforce, getActualPerformanceSummary } from '../deployments/deployment.service.js';
 import User from '../auth/user.model.js';
 import { monthBounds } from '../mobilisationTargets/mobilisationTarget.service.js';
 import ApiError from '../../utils/ApiError.js';
@@ -481,7 +481,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     pendingLeave,
     pendingExit,
     activeMobilisationRevenue,
-    activeMobilisationRevenueTrend
+    activeMobilisationRevenueTrend,
+    actualPerformance
   ] = await Promise.all([
     canReadDeployments ? Deployment.countDocuments(deploymentFilter) : Promise.resolve(0),
     canReadEmployees
@@ -585,7 +586,12 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // computeActiveMobilisationRevenueTrend's own doc comment.
     isCoordinator || canReadMobilisationCommercials
       ? computeActiveMobilisationRevenueTrend(actor, isCoordinator)
-      : Promise.resolve(null)
+      : Promise.resolve(null),
+    // Real, closed-book Actual Performance (Revenue/Expenses/Net Profit from
+    // Approved monthly timesheets) — gated on canSeeProfit (dashboardProfit),
+    // the SAME key the existing Invoice-based profit figure uses, not a new
+    // permission tier. See getActualPerformanceSummary's own doc comment.
+    canSeeProfit ? getActualPerformanceSummary() : Promise.resolve(null)
   ]);
 
   // Workforce by status
@@ -667,7 +673,12 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       activeMobilisationRevenue,
       // 6-month trailing trend of the figure above, for the dashboard card's own
       // sparkline (2026-09-24) — same gate, same null-when-not-entitled shape.
-      activeMobilisationRevenueTrend
+      activeMobilisationRevenueTrend,
+      // Real, closed-book Revenue/Expenses/Net Profit from Approved monthly
+      // timesheets (2026-09-24) — see getActualPerformanceSummary's own doc
+      // comment. Deliberately company-wide, not Coordinator-team-scoped like
+      // the estimate above it — same `dashboardProfit` gate either way.
+      actualPerformance
     },
     workforceByStatus: canReadEmployees ? workforceByStatus : null,
     quotationsByStatus: canReadQuotations && !isCoordinator ? quotationsByStatus : null,

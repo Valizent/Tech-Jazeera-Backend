@@ -18,6 +18,7 @@ import mongoose from 'mongoose';
 import Deployment, { DEMOBILISATION_OUTCOME, EMPLOYEE_ONLY_DEMOBILISATION_REASONS } from './deployment.model.js';
 import Employee from '../employees/employee.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
+import Expense from '../expenses/expense.model.js';
 import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
@@ -851,8 +852,8 @@ export async function exportDeployments(filters, actor) {
 }
 
 /**
- * Real profit for one already-entered month — same shape as Mobilisation's
- * own computeProfitFields (server/src/modules/mobilisations/
+ * Real revenue/expenses/profit for one already-entered month — same shape as
+ * Mobilisation's own computeProfitFields (server/src/modules/mobilisations/
  * mobilisation.service.js), just applied recurringly per real month instead
  * of once at commercial-details time. Deployment has no rate fields of its
  * own (see the model's doc comment — identity/commercial context lives on
@@ -878,28 +879,52 @@ function firstApprovedEntryId(entries) {
   return approved.reduce((earliest, e) => (new Date(e.decidedAt) < new Date(earliest.decidedAt) ? e : earliest))._id?.toString();
 }
 
-function computeMonthlyProfit(entry, mobilisation, allEntries) {
+/**
+ * Renamed from computeMonthlyProfit (2026-09-24, a real user ask — the
+ * dashboard's new "Actual Performance" section needs real Revenue/Expenses,
+ * not just their already-netted difference) — this is a DECOMPOSITION, not a
+ * new formula: `profit` below is algebraically identical to the original
+ * function's own return value (verified against real dev data — see
+ * docs/DEPLOYMENT-notes.md's 2026-09-24 follow-up), just now built from two
+ * named parts instead of one combined expression, so both this module's
+ * existing per-entry profit display (getDeployment, below — reads `.profit`
+ * only, unchanged behavior) and the new dashboard aggregate
+ * (getActualPerformanceSummary — reads `.revenue`/`.expenses`) share the
+ * exact same formula. No caller may ever compute Revenue/Expenses a second,
+ * independent way — that's how a figure like this quietly drifts.
+ *
+ *   revenue  = clientRate × contractHours + otClientRate × otHours — the pure
+ *              amount billed to the client, never netted against any cost.
+ *   expenses = clientCommission × contractHours
+ *            + (SupplierEmployee only) (subcontractorRate + subcontractorCommission) × contractHours
+ *            + fta + allowance
+ *            + otEmployeeRate × otHours
+ *            + entry.deductionAmount
+ *            + (this deployment's chronologically-first-Approved entry only) mobilisationCost
+ *   profit   = revenue − expenses, always.
+ */
+function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries) {
   if (!mobilisation) return null;
   const isSupplier = mobilisation.workerType === 'SupplierEmployee';
-  const clientSide = (mobilisation.clientRate ?? 0) - (mobilisation.clientCommission ?? 0);
+
+  const revenue = money((mobilisation.clientRate ?? 0) * entry.contractHours + (mobilisation.otClientRate ?? 0) * entry.otHours);
+
   const subSide = isSupplier ? (mobilisation.subcontractorRate ?? 0) + (mobilisation.subcontractorCommission ?? 0) : 0;
-  const profitPerHour = clientSide - subSide;
-
-  const otProfitPerHour = (mobilisation.otClientRate ?? 0) - (mobilisation.otEmployeeRate ?? 0);
-  const otProfitTotal = money(otProfitPerHour * entry.otHours);
-
   const isFirstApprovedEntry =
     Array.isArray(allEntries) && entry.status === 'Approved' && entry._id?.toString() === firstApprovedEntryId(allEntries);
   const mobilisationCostDeduction = isFirstApprovedEntry ? mobilisation.mobilisationCost ?? 0 : 0;
 
-  return money(
-    profitPerHour * entry.contractHours -
-      (mobilisation.fta ?? 0) -
+  const expenses = money(
+    (mobilisation.clientCommission ?? 0) * entry.contractHours +
+      subSide * entry.contractHours +
+      (mobilisation.fta ?? 0) +
       (mobilisation.allowance ?? 0) +
-      otProfitTotal -
-      (entry.deductionAmount ?? 0) -
+      (mobilisation.otEmployeeRate ?? 0) * entry.otHours +
+      (entry.deductionAmount ?? 0) +
       mobilisationCostDeduction
   );
+
+  return { revenue, expenses, profit: money(revenue - expenses) };
 }
 
 /**
@@ -1011,7 +1036,10 @@ export async function getDeployment(id, actor) {
   // 'read' — see the sibling comment in updateMonthlyHours above.
   const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor, 'read') : false;
   deployment.monthlyHours = deployment.monthlyHours.map((entry) => {
-    if (canSeeCommercial) return { ...entry, profit: computeMonthlyProfit(entry, deployment.mobilisation, deployment.monthlyHours) };
+    if (canSeeCommercial) {
+      const revExp = computeMonthlyRevenueAndExpenses(entry, deployment.mobilisation, deployment.monthlyHours);
+      return { ...entry, profit: revExp ? revExp.profit : null };
+    }
     const { otAmount, ...rest } = entry;
     return rest;
   });
@@ -1022,4 +1050,164 @@ export async function getDeployment(id, actor) {
     deployment.mobilisation = { _id: deployment.mobilisation._id, serialNumber: deployment.mobilisation.serialNumber };
   }
   return deployment;
+}
+
+/** (year, month 1-12) shifted back by `n` months, wrapping across years. */
+function shiftMonth(year, month, n) {
+  const d = new Date(year, month - 1 - n, 1);
+  return { year: d.getFullYear(), month: d.getMonth() + 1 };
+}
+const monthKeyOf = (year, month) => `${year}-${String(month).padStart(2, '0')}`;
+/** [firstDayOfMonth, firstDayOfNextMonth) as real Dates, for the Expense-ledger
+ *  side of getActualPerformanceSummary (Expense.date is a real Date, unlike
+ *  Deployment.monthlyHours' plain 'YYYY-MM' string). */
+function monthDateBounds(year, month) {
+  return { start: new Date(year, month - 1, 1), end: new Date(year, month, 1) };
+}
+/** Sum of Expense.amount for deployment-linked entries dated within one window
+ *  — a plain, separate aggregate per window (not one combined query bucketing
+ *  in JS): real data volume here is tiny, and four small, independently
+ *  readable queries are far less error-prone than one clever overlapping-range
+ *  aggregate — same "don't over-engineer for scale that doesn't exist yet"
+ *  call this app's own performance work has made repeatedly. */
+async function sumDeploymentExpenses(range) {
+  if (!range) return 0;
+  const [row] = await Expense.aggregate([
+    { $match: { deployment: { $ne: null }, date: { $gte: range.start, $lt: range.end } } },
+    { $group: { _id: null, total: { $sum: '$amount' } } },
+  ]);
+  return row?.total ?? 0;
+}
+/** null when there's nothing real to compare against — the user's own explicit
+ *  ask ("if there is no last year data then do not show anything"). Mirrors
+ *  ActiveRevenueWidget.jsx's own already-shipped convention for exactly this
+ *  (treating a zero/absent prior value as "nothing to compare"), not a new rule. */
+function pctDelta(current, prior) {
+  return prior ? Math.round(((current - prior) / prior) * 100) : null;
+}
+
+/**
+ * "Actual Performance" — real, closed-book Revenue/Expenses/Net Profit built
+ * only from APPROVED Deployment monthly-hours entries (never an estimate —
+ * see computeMonthlyRevenueAndExpenses's own doc comment), for the dashboard's
+ * new section below the existing (estimate-based) Active Mobilisation Revenue
+ * card (2026-09-24, a real user ask — see docs/DEPLOYMENT-notes.md's own
+ * 2026-09-24 follow-up for the full derivation this mirrors).
+ *
+ * Two periods, each with a real delta against a real prior baseline:
+ *   - "last month" (the most recently fully-elapsed calendar month) vs. the
+ *     month before it — same delta convention the existing Active Revenue
+ *     card's sparkline already uses.
+ *   - "this year" (every closed month so far this calendar year — naturally
+ *     excludes the still-open current month, since an entry for it can't
+ *     exist yet per the model's own rule) vs. the same relative months of
+ *     last year — a fair like-for-like comparison, not a full prior-year total.
+ *
+ * Expenses = everything computeMonthlyRevenueAndExpenses already treats as a
+ * cost, PLUS this deployment's own linked Expense-ledger entries dated in the
+ * same window (2026-09-24, the user's own ask for real per-deployment expense
+ * tracking — see expense.model.js's pre-existing `deployment` field).
+ *
+ * Gate: `dashboardProfit` — the SAME Section Access key the existing
+ * company-wide (Invoice-based) profit figure already requires, not a new
+ * permission tier. Checked by the CALLER (dashboard.service.js's own already-
+ * batched `mySectionAccess`/`canSeeProfit`), not here — this file's own
+ * sibling functions (computeActiveMobilisationRevenue/-Trend) follow the same
+ * convention, and a redundant internal `canAccessSection` call here would
+ * reintroduce the exact per-function-read-gate pattern the 2026-09-22 P3 fix
+ * removed everywhere else on the dashboard (see dashboard.service.js's own
+ * top-of-file doc comment).
+ *
+ * Batched: one Deployment fetch across the whole date window needed (at most
+ * ~2 years of month keys) plus four small Expense sums — not one query per
+ * deployment, matching this file's own established performance discipline.
+ */
+export async function getActualPerformanceSummary() {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonthNum = now.getMonth() + 1;
+
+  const lastMonth = shiftMonth(currentYear, currentMonthNum, 1);
+  const monthBeforeLast = shiftMonth(currentYear, currentMonthNum, 2);
+  const lastMonthKey = monthKeyOf(lastMonth.year, lastMonth.month);
+  const monthBeforeLastKey = monthKeyOf(monthBeforeLast.year, monthBeforeLast.month);
+
+  // Every CLOSED month so far this calendar year — empty in January (no closed
+  // month in the current year exists yet), never includes the still-open
+  // current month.
+  const thisYearMonths = [];
+  for (let m = 1; m < currentMonthNum; m++) thisYearMonths.push(monthKeyOf(currentYear, m));
+  const sameMonthsLastYear = thisYearMonths.map((mk) => {
+    const [y, m] = mk.split('-').map(Number);
+    return monthKeyOf(y - 1, m);
+  });
+
+  const relevantMonthKeys = new Set([lastMonthKey, monthBeforeLastKey, ...thisYearMonths, ...sameMonthsLastYear]);
+
+  const [deployments, lastMonthExp, monthBeforeLastExp, thisYearExp, sameMonthsLastYearExp] = await Promise.all([
+    Deployment.find({ monthlyHours: { $elemMatch: { status: 'Approved', month: { $in: [...relevantMonthKeys] } } } })
+      .select('monthlyHours mobilisation')
+      .populate('mobilisation', PROFIT_RATE_FIELDS)
+      .lean(),
+    sumDeploymentExpenses(monthDateBounds(lastMonth.year, lastMonth.month)),
+    sumDeploymentExpenses(monthDateBounds(monthBeforeLast.year, monthBeforeLast.month)),
+    thisYearMonths.length
+      ? sumDeploymentExpenses({ start: new Date(currentYear, 0, 1), end: monthDateBounds(currentYear, currentMonthNum - 1).end })
+      : 0,
+    thisYearMonths.length
+      ? sumDeploymentExpenses({ start: new Date(currentYear - 1, 0, 1), end: monthDateBounds(currentYear - 1, currentMonthNum - 1).end })
+      : 0,
+  ]);
+
+  const zeroBucket = () => ({ revenue: 0, expenses: 0 });
+  const buckets = { lastMonth: zeroBucket(), monthBeforeLast: zeroBucket(), thisYear: zeroBucket(), sameMonthsLastYear: zeroBucket() };
+  const addTo = (bucket, r) => {
+    bucket.revenue += r.revenue;
+    bucket.expenses += r.expenses;
+  };
+
+  for (const dep of deployments) {
+    if (!dep.mobilisation) continue;
+    for (const entry of dep.monthlyHours) {
+      if (entry.status !== 'Approved' || !relevantMonthKeys.has(entry.month)) continue;
+      const result = computeMonthlyRevenueAndExpenses(entry, dep.mobilisation, dep.monthlyHours);
+      if (!result) continue;
+      if (entry.month === lastMonthKey) addTo(buckets.lastMonth, result);
+      if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, result);
+      if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, result);
+      if (sameMonthsLastYear.includes(entry.month)) addTo(buckets.sameMonthsLastYear, result);
+    }
+  }
+
+  buckets.lastMonth.expenses += lastMonthExp;
+  buckets.monthBeforeLast.expenses += monthBeforeLastExp;
+  buckets.thisYear.expenses += thisYearExp;
+  buckets.sameMonthsLastYear.expenses += sameMonthsLastYearExp;
+
+  const profitOf = (b) => money(b.revenue - b.expenses);
+  const lastMonthProfit = profitOf(buckets.lastMonth);
+  const monthBeforeLastProfit = profitOf(buckets.monthBeforeLast);
+  const thisYearProfit = profitOf(buckets.thisYear);
+  const sameMonthsLastYearProfit = profitOf(buckets.sameMonthsLastYear);
+
+  return {
+    lastMonth: {
+      month: lastMonthKey,
+      revenue: money(buckets.lastMonth.revenue),
+      expenses: money(buckets.lastMonth.expenses),
+      profit: lastMonthProfit,
+      revenueDeltaPct: pctDelta(buckets.lastMonth.revenue, buckets.monthBeforeLast.revenue),
+      expensesDeltaPct: pctDelta(buckets.lastMonth.expenses, buckets.monthBeforeLast.expenses),
+      profitDeltaPct: pctDelta(lastMonthProfit, monthBeforeLastProfit),
+    },
+    thisYear: {
+      year: currentYear,
+      revenue: money(buckets.thisYear.revenue),
+      expenses: money(buckets.thisYear.expenses),
+      profit: thisYearProfit,
+      revenueDeltaPct: pctDelta(buckets.thisYear.revenue, buckets.sameMonthsLastYear.revenue),
+      expensesDeltaPct: pctDelta(buckets.thisYear.expenses, buckets.sameMonthsLastYear.expenses),
+      profitDeltaPct: pctDelta(thisYearProfit, sameMonthsLastYearProfit),
+    },
+  };
 }
