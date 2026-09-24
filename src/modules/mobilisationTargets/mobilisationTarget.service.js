@@ -63,6 +63,34 @@ async function sumProgress(coordinatorId, month) {
   return row?.total ?? 0;
 }
 
+/**
+ * Same figure as sumProgress, batched across MANY coordinators in one query
+ * (2026-09-24, a real N+1 found while looking for further performance wins —
+ * getAllProgress used to call sumProgress once PER coordinator with a target
+ * that month, the exact class of per-item-aggregate pattern the 21 September
+ * performance audit fixed elsewhere in this app (P3/P4) — invisible today at
+ * 2 real coordinators, but the same growth-risk shape). Mirrors
+ * dashboard.service.js's getCoordinatorLeaderboard, which computes the
+ * identical figure company-wide via the same $unwind+$group shape.
+ */
+async function sumProgressBatch(coordinatorIds, month) {
+  const { start, end } = monthBounds(month);
+  const rows = await Mobilisation.aggregate([
+    {
+      $match: {
+        'coordinators.user': { $in: coordinatorIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        status: { $in: ['Approved', 'Completed'] },
+        mobilisationDate: { $gte: start, $lt: end },
+        archived: { $ne: true },
+      },
+    },
+    { $unwind: '$coordinators' },
+    { $match: { 'coordinators.user': { $in: coordinatorIds.map((id) => new mongoose.Types.ObjectId(id)) } } },
+    { $group: { _id: '$coordinators.user', total: { $sum: { $ifNull: ['$profitPerMonth', 0] } } } },
+  ]);
+  return new Map(rows.map((r) => [r._id.toString(), r.total]));
+}
+
 export async function canManageTargets(actor) {
   if (actor.role === 'Admin' || actor.role === 'Manager') return true;
   return canAccessSection('mobilisationTargets', actor);
@@ -165,22 +193,31 @@ export async function getAllProgress(actor, month) {
     .populate('setBy', 'name')
     .lean();
 
-  const withProgress = await Promise.all(
-    targets.map(async (t) => {
-      const achieved = await sumProgress(t.coordinator._id, month);
-      return {
-        _id: t._id,
-        coordinator: t.coordinator,
-        month: t.month,
-        target: t.target,
-        incentivePercent: t.incentivePercent,
-        setBy: t.setBy,
-        achieved,
-        remaining: Math.max(0, t.target - achieved),
-        hit: achieved >= t.target,
-      };
-    })
+  if (targets.length === 0) return [];
+
+  // FIX (2026-09-24, a real N+1 found looking for further performance wins):
+  // this used to call sumProgress once PER target (one Mobilisation.aggregate
+  // per coordinator) — now one batched aggregate for every coordinator with a
+  // target this month at once. See sumProgressBatch's own doc comment.
+  const achievedById = await sumProgressBatch(
+    targets.map((t) => t.coordinator._id),
+    month
   );
+
+  const withProgress = targets.map((t) => {
+    const achieved = achievedById.get(t.coordinator._id.toString()) ?? 0;
+    return {
+      _id: t._id,
+      coordinator: t.coordinator,
+      month: t.month,
+      target: t.target,
+      incentivePercent: t.incentivePercent,
+      setBy: t.setBy,
+      achieved,
+      remaining: Math.max(0, t.target - achieved),
+      hit: achieved >= t.target,
+    };
+  });
 
   return withProgress.sort((a, b) => a.coordinator.name.localeCompare(b.coordinator.name));
 }
