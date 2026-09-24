@@ -1479,3 +1479,26 @@ when requested):**
   counters record real activity. Full server suite 38/38, client lint/
   build clean throughout. See `docs/PERF-AUDIT-2026-09-21-notes.md`'s own
   "Second follow-up" section for the full breakdown.
+- **Follow-up (24 September 2026): re-verified the 22-September audit's
+  remaining findings — 3 of 4 already fixed, one real i18n gap found and
+  closed** — asked to pick up that audit's "7 of 9 dashboard widgets have
+  no `t()` calls" item. Checked the actual current code first rather than
+  assuming the finding still held: the unguarded `finance.
+  activeMobilisationRevenue`, the 4 hardcoded-role dashboard fields
+  (`activeSubcontractors`/`attendanceSummary`/`pendingLeave`/
+  `pendingExit`), and the Coordinator scoping "regression" had all already
+  been fixed or reviewed-and-confirmed-correct (dated 2026-09-22 in-code
+  comments) by work that landed after that audit entry was written but
+  before this session started — see `dashboard.service.js` lines 437-444/
+  699-701 and `deployment.service.js` lines 783-797. All 7 flagged widgets
+  turned out to already be fully wired to `useTranslation`/`t()` with real
+  English+Arabic strings in both locale files, except one real leftover:
+  the client's `StandbyAnalysisWidget` concatenated a raw `{count}d` with a
+  hardcoded Latin "d" suffix for its "days on standby" badge, which would
+  render untranslated even in Arabic. Added a proper
+  `staffDashboard.widgets.standby.daysCount` key (en: `{{count}}d`, ar:
+  `{{count}} يوم`, matching the existing `common.expiry.daysLeft`-style
+  convention) and switched the widget to use it — client-only change, no
+  server code touched. Verified: client lint clean (0 errors), production
+  build clean, new key confirmed present and correct in both compiled
+  locale bundles.
