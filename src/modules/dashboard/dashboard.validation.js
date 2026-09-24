@@ -16,3 +16,8 @@ export const dashboardQuerySchema = z.object({
 export const monthQuerySchema = z.object({
   month: z.preprocess(emptyToUndef, z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Use YYYY-MM.').optional()),
 });
+
+/** The coordinator-drill-down route's :id param — moved here (2026-09-24)
+ *  from an ad-hoc inline declaration that used to live in dashboard.routes.js
+ *  itself, the only route file in this app that didn't put its schemas here. */
+export const coordinatorIdParamSchema = z.object({ id: z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id.') });

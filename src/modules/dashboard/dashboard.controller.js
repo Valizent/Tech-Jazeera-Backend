@@ -27,7 +27,9 @@ export async function standbyAnalysis(req, res) {
 }
 
 export async function coordinatorDrillDown(req, res) {
-  const data = await import('./dashboard.service.js').then((s) => s.getCoordinatorDrillDown({ role: req.user.role, userId: req.user.id }, req.params.id));
+  const data = await import('./dashboard.service.js').then((s) =>
+    s.getCoordinatorDrillDown({ role: req.user.role, userId: req.user.id }, req.params.id, req.query.month)
+  );
   res.json(new ApiResponse('Coordinator drill-down.', data));
 }
 

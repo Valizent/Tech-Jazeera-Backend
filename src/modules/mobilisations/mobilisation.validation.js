@@ -207,6 +207,11 @@ export const listMobilisationsSchema = z.object({
   status: z.preprocess(emptyToUndef, z.enum(['Draft', 'PendingReview', 'Approved', 'Rejected', 'Completed']).optional()),
   client: z.preprocess(emptyToUndef, id('client').optional()),
   worker: z.preprocess(emptyToUndef, id('worker').optional()),
+  // 2026-09-24 — the Coordinator Drill-Down modal's "Generated profit" tile
+  // links here filtered to one coordinator (matches ANY position in
+  // `coordinators`, not just primary — same "any coordinator counts" rule
+  // mobilisationTarget.service.js's own sumProgress already uses).
+  coordinator: z.preprocess(emptyToUndef, id('coordinator').optional()),
   search: optionalStr(100),
   sortBy: z.enum(['mobilisationDate', 'createdAt']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
@@ -223,6 +228,7 @@ export const exportMobilisationsSchema = z.object({
   status: z.preprocess(emptyToUndef, z.enum(['Draft', 'PendingReview', 'Approved', 'Rejected', 'Completed']).optional()),
   client: z.preprocess(emptyToUndef, id('client').optional()),
   worker: z.preprocess(emptyToUndef, id('worker').optional()),
+  coordinator: z.preprocess(emptyToUndef, id('coordinator').optional()),
   search: optionalStr(100),
   sortBy: z.enum(['mobilisationDate', 'createdAt']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),

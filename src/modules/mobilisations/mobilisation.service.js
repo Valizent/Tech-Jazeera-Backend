@@ -616,11 +616,12 @@ export async function createMobilisation(data, actor) {
  * `skip`/`limit` omitted means "no pagination, fetch everything matching".
  */
 async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
-  const { status, client, worker, search, sortBy, sortOrder } = query;
+  const { status, client, worker, coordinator, search, sortBy, sortOrder } = query;
   const conditions = [{ archived: { $ne: true } }];
   if (status) conditions.push({ status });
   if (client) conditions.push({ client });
   if (worker) conditions.push({ worker });
+  if (coordinator) conditions.push({ 'coordinators.user': coordinator });
   if (search) {
     const rx = { $regex: escapeRegex(search), $options: 'i' };
     conditions.push({ $or: [{ workerName: rx }, { clientName: rx }, { jobTitle: rx }, { serialNumber: rx }] });

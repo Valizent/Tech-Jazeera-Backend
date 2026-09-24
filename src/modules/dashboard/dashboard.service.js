@@ -47,6 +47,7 @@ import ExitReentry from '../exitDocuments/exitReentry.model.js';
 import { getStandbyWorkforce, getActualPerformanceSummary } from '../deployments/deployment.service.js';
 import User from '../auth/user.model.js';
 import { monthBounds } from '../mobilisationTargets/mobilisationTarget.service.js';
+import MobilisationTarget from '../mobilisationTargets/mobilisationTarget.model.js';
 import ApiError from '../../utils/ApiError.js';
 
 export const EXPIRY_WARNING_DAYS = 30;
@@ -812,7 +813,7 @@ export async function getStandbyAnalysis(actor) {
   return result.sort((a, b) => b.daysOnStandby - a.daysOnStandby);
 }
 
-export async function getCoordinatorDrillDown(actor, coordinatorId) {
+export async function getCoordinatorDrillDown(actor, coordinatorId, monthStr) {
   // FIX (2026-09-22): this destructured { DailyUpdate } and { Task } off dailyUpdate.model.js,
   // which has neither — one collection, a single DEFAULT export, with `kind: 'Log' | 'Task'`
   // telling the two apart (see dailyUpdate.model.js's own doc comment). Both names came back
@@ -827,25 +828,40 @@ export async function getCoordinatorDrillDown(actor, coordinatorId) {
     .limit(10)
     .lean();
 
+  // Tasks are a live to-do list, not a monthly figure — deliberately NOT
+  // month-scoped, unlike totalMonthlyProfit below: an Open task from last
+  // month is still open work today.
   const openTasks = await DailyUpdate.countDocuments({ kind: 'Task', coordinator: coordinatorId, status: 'Open' });
   const completedTasks = await DailyUpdate.countDocuments({ kind: 'Task', coordinator: coordinatorId, status: 'Done' });
 
-  // Mobilisation profit for this coordinator. FIX (2026-09-22): this used to match
-  // status: { $in: ['Deployed', 'Approved'] } — 'Deployed' has never been a real
-  // Mobilisation status (see MOBILISATION_STATUSES: Draft/PendingReview/Approved/
-  // Rejected/Completed), so that half of the $in silently matched nothing and this
-  // figure quietly excluded every Completed mobilisation. Now the same
-  // ['Approved', 'Completed'] definition sumProgress (mobilisationTarget.service.js)
-  // and getCoordinatorLeaderboard (below) both use — one real definition of
-  // "counts toward profit," not three independently-typed ones.
+  // Mobilisation profit for this coordinator, for ONE calendar month.
+  // FIX (2026-09-24, a real inconsistency found while adding the Coordinator
+  // Leaderboard's Target column): this used to sum EVERY Approved/Completed
+  // mobilisation ever, with no date filter at all — a different figure than
+  // the leaderboard row you click to open this same modal, which is (and
+  // always was) scoped to one month via mobilisationDate. Same
+  // `getCoordinatorLeaderboard`/`sumProgress` definition now: Approved +
+  // Completed, mobilisationDate within the month, month defaults to current
+  // when omitted — so a Target comparison and "the number I clicked" are
+  // finally the same number in two places, not three quietly-different ones.
+  const month = monthStr || new Date().toISOString().slice(0, 7);
+  const { start, end } = monthBounds(month);
   const mobilisations = await Mobilisation.aggregate([
-    { $match: { 'coordinators.user': new mongoose.Types.ObjectId(coordinatorId), status: { $in: ['Approved', 'Completed'] }, archived: { $ne: true } } },
+    {
+      $match: {
+        'coordinators.user': new mongoose.Types.ObjectId(coordinatorId),
+        status: { $in: ['Approved', 'Completed'] },
+        mobilisationDate: { $gte: start, $lt: end },
+        archived: { $ne: true },
+      },
+    },
     { $group: { _id: null, totalProfit: { $sum: { $ifNull: ['$profitPerMonth', 0] } } } }
   ]);
 
   const totalProfit = mobilisations[0]?.totalProfit ?? 0;
 
   return {
+    month,
     recentLogs: logs,
     tasks: { open: openTasks, completed: completedTasks },
     totalMonthlyProfit: totalProfit
@@ -883,7 +899,7 @@ export async function getCoordinatorLeaderboard(actor, monthStr) {
   const month = monthStr || new Date().toISOString().slice(0, 7);
   const { start, end } = monthBounds(month);
 
-  const [coordinators, statsRows] = await Promise.all([
+  const [coordinators, statsRows, targetRows] = await Promise.all([
     User.find({ role: 'Coordinator' }).select('name').sort({ name: 1 }).lean(),
     Mobilisation.aggregate([
       {
@@ -902,9 +918,18 @@ export async function getCoordinatorLeaderboard(actor, monthStr) {
         },
       },
     ]),
+    // This month's Riyal target per coordinator, if management has set one
+    // (mobilisationTargets module — see its own model doc comment). Not
+    // every coordinator has one, so this is a separate optional lookup, not
+    // folded into the mobilisation aggregate above — `target` is a plain
+    // read here, deliberately not gated on `mobilisationTargets` access:
+    // this whole endpoint already exposes company-wide per-coordinator
+    // profit to the mobilisationsViewer circle, the same sensitivity class.
+    MobilisationTarget.find({ month }).select('coordinator target').lean(),
   ]);
 
   const statsById = new Map(statsRows.map((r) => [r._id.toString(), r]));
+  const targetById = new Map(targetRows.map((t) => [t.coordinator.toString(), t.target]));
 
   return {
     month,
@@ -912,6 +937,7 @@ export async function getCoordinatorLeaderboard(actor, monthStr) {
       const stats = statsById.get(c._id.toString());
       return {
         _id: c._id,
+        target: targetById.get(c._id.toString()) ?? null,
         name: c.name,
         count: stats?.count ?? 0,
         profit: stats?.profit ?? 0,
