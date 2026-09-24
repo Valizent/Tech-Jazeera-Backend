@@ -16,6 +16,7 @@ import { startPeriodicMonitoring } from './config/monitoring.js';
 import app from './app.js';
 import { runExpiryAlertCheck } from './modules/notifications/expiryAlert.job.js';
 import { runMobilisationStaleCheck } from './modules/notifications/mobilisationStale.job.js';
+import { runOverdueInvoiceCheck } from './modules/notifications/overdueInvoice.job.js';
 
 // Without these, a stray unhandled promise rejection or thrown error outside
 // Express's own request handling (e.g. inside a setInterval job's own bug,
@@ -70,6 +71,13 @@ const mobilisationStaleInterval = setInterval(
   ONE_DAY_MS
 );
 
+// Same pattern again, offset by 20s so all three jobs' initial runs don't overlap.
+setTimeout(() => runOverdueInvoiceCheck().catch((err) => logger.error(`[overdueInvoiceJob] failed: ${err.message}`)), 20_000);
+const overdueInvoiceInterval = setInterval(
+  () => runOverdueInvoiceCheck().catch((err) => logger.error(`[overdueInvoiceJob] failed: ${err.message}`)),
+  ONE_DAY_MS
+);
+
 /**
  * Graceful shutdown: stop accepting new connections, let in-flight requests
  * finish, then close the DB connection. Without this, a deploy/restart can
@@ -79,6 +87,7 @@ async function shutdown(signal) {
   logger.info(`${signal} received — shutting down gracefully...`);
   clearInterval(expiryAlertInterval);
   clearInterval(mobilisationStaleInterval);
+  clearInterval(overdueInvoiceInterval);
   clearInterval(monitoringInterval);
   server.close(async () => {
     const { default: mongoose } = await import('mongoose');

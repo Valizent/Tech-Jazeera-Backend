@@ -27,6 +27,17 @@
  *    week or a configured Ramadan cap — see timesheets/timesheet.service.js);
  *    overtimePay = overtimeHours × hourly wage × 1.5 (Labor Law Article 107),
  *    and IS folded into grossPay — see payroll.service.js's buildLineTotals.
+ *  - `advanceRepayment` (2026-09-24) is a real, auto-computed deduction the
+ *    same way sickLeaveDeduction is: if the employee has an Approved,
+ *    still-outstanding SalaryAdvance, its suggested monthly installment
+ *    (amount ÷ repaymentMonths, capped at what's actually still owed) is
+ *    pre-filled here — Accounts can reduce it to 0 (skip this month) or
+ *    lower it while the run is Draft, but never raise it above what was
+ *    suggested at creation (see payroll.service.js's updatePayrollLine).
+ *    On Finalize, this amount is recorded as a real repayment against the
+ *    SalaryAdvance itself (advance.service.js's addRepayment) — the one
+ *    place this app closes the loop that used to require a human to
+ *    separately remember to update the advance ledger by hand every month.
  *  - `sickLeaveDeduction` is the other real, auto-computed cost figure: for
  *    any Approved 'Sick'-type LeaveRequest overlapping this month, days
  *    paid at less than 100% (per the LeaveType's configurable tiers —
@@ -77,6 +88,17 @@ const payrollLineSchema = new mongoose.Schema({
 
   gosiDeduction: { type: Number, default: 0, min: 0 },
   otherDeductions: { type: [deductionSchema], default: [] },
+
+  // See this file's own top doc comment. `suggestedAmount` is frozen at
+  // run-creation time (the ceiling `amount` may be edited down to, never
+  // above, while Draft); `advance` is null when the employee has no
+  // Approved outstanding SalaryAdvance this month.
+  advanceRepayment: {
+    advance: { type: mongoose.Schema.Types.ObjectId, ref: 'SalaryAdvance', default: null },
+    amount: { type: Number, default: 0, min: 0 },
+    suggestedAmount: { type: Number, default: 0, min: 0 },
+  },
+
   totalDeductions: { type: Number, default: 0, min: 0 },
 
   netPay: { type: Number, required: true },

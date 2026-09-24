@@ -5,10 +5,13 @@
 import Employee from '../employees/employee.model.js';
 import Timesheet from '../timesheets/timesheet.model.js';
 import LeaveRequest from '../leave/leaveRequest.model.js';
+import SalaryAdvance from '../financialRequests/advance.model.js';
+import { addRepayment, computeOutstanding } from '../financialRequests/advance.service.js';
 import { deductionsForEmployeesMonth } from '../deployments/deployment.service.js';
 import PayrollRun from './payrollRun.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
+import logger from '../../config/logger.js';
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -125,11 +128,50 @@ async function approvedTimesheetsForMonth(employeeIds, monthStart, monthEnd) {
   return byEmployee;
 }
 
-function buildLineTotals({ basicSalary, housingAllowance, transportAllowance, otherAllowances, overtimePay, sickLeaveDeduction, gosiDeduction, otherDeductions }) {
+function buildLineTotals({
+  basicSalary,
+  housingAllowance,
+  transportAllowance,
+  otherAllowances,
+  overtimePay,
+  sickLeaveDeduction,
+  gosiDeduction,
+  otherDeductions,
+  advanceRepaymentAmount,
+}) {
   const grossPay = money(basicSalary + housingAllowance + transportAllowance + otherAllowances + overtimePay);
-  const totalDeductions = money(sickLeaveDeduction + gosiDeduction + otherDeductions.reduce((sum, d) => sum + d.amount, 0));
+  const totalDeductions = money(
+    sickLeaveDeduction + gosiDeduction + advanceRepaymentAmount + otherDeductions.reduce((sum, d) => sum + d.amount, 0)
+  );
   const netPay = money(grossPay - totalDeductions);
   return { grossPay, totalDeductions, netPay };
+}
+
+/** Every eligible employee's Approved, still-outstanding SalaryAdvance, in
+ *  ONE query — grouped by employee id, same batching discipline as the
+ *  timesheet/sick-leave/client-deduction lookups above (2026-09-22's own
+ *  fix). An employee can only ever have one active advance at a time
+ *  (advance.service.js's submitAdvance enforces that), so this is a
+ *  straight id → advance map, not id → array. */
+async function outstandingAdvancesForEmployees(employeeIds) {
+  const advances = await SalaryAdvance.find({ employee: { $in: employeeIds }, status: 'Approved' })
+    .select('employee amount repaymentMonths repayments')
+    .lean();
+  const byEmployee = new Map();
+  for (const advance of advances) {
+    const outstanding = computeOutstanding(advance);
+    if (outstanding <= 0) continue;
+    byEmployee.set(String(advance.employee), { advance, outstanding });
+  }
+  return byEmployee;
+}
+
+/** The suggested monthly installment — amount ÷ repaymentMonths, never more
+ *  than what's actually still owed (a worker who over-pays by hand, or
+ *  whose advance is close to fully repaid, should never see a suggestion
+ *  larger than the real remaining balance). */
+function suggestedInstallment(advance, outstanding) {
+  return Math.min(outstanding, money(advance.amount / advance.repaymentMonths));
 }
 
 function recomputeRunTotals(run) {
@@ -171,10 +213,11 @@ export async function createPayrollRun({ periodYear, periodMonth }, actor) {
   // employee at once, run in parallel ahead of the loop — the loop itself
   // is now pure synchronous math over already-fetched data. See each
   // function's own doc comment for the exact reproduced numbers.
-  const [deductionsByEmployee, timesheetsByEmployee, sickRequestsByEmployee] = await Promise.all([
+  const [deductionsByEmployee, timesheetsByEmployee, sickRequestsByEmployee, advancesByEmployee] = await Promise.all([
     deductionsForEmployeesMonth(employeeIds, monthStr),
     approvedTimesheetsForMonth(employeeIds, monthStart, monthEnd),
     sickLeaveRequestsForMonth(employeeIds, monthStart, monthEnd),
+    outstandingAdvancesForEmployees(employeeIds),
   ]);
 
   const lines = [];
@@ -208,6 +251,13 @@ export async function createPayrollRun({ periodYear, periodMonth }, actor) {
       monthEnd
     );
 
+    const outstandingAdvance = advancesByEmployee.get(employeeKey);
+    let advanceRepayment = { advance: null, amount: 0, suggestedAmount: 0 };
+    if (outstandingAdvance) {
+      const suggested = suggestedInstallment(outstandingAdvance.advance, outstandingAdvance.outstanding);
+      advanceRepayment = { advance: outstandingAdvance.advance._id, amount: suggested, suggestedAmount: suggested };
+    }
+
     const totals = buildLineTotals({
       basicSalary,
       housingAllowance,
@@ -217,6 +267,7 @@ export async function createPayrollRun({ periodYear, periodMonth }, actor) {
       sickLeaveDeduction,
       gosiDeduction,
       otherDeductions,
+      advanceRepaymentAmount: advanceRepayment.amount,
     });
 
     lines.push({
@@ -234,6 +285,7 @@ export async function createPayrollRun({ periodYear, periodMonth }, actor) {
       sickLeaveNote,
       gosiDeduction,
       otherDeductions,
+      advanceRepayment,
       ...totals,
     });
   }
@@ -285,6 +337,16 @@ export async function updatePayrollLine(runId, lineId, data, actor) {
   line.otherAllowances = data.otherAllowances;
   line.gosiDeduction = data.gosiDeduction;
   line.otherDeductions = data.otherDeductions;
+  // Clamped to [0, suggestedAmount] — never raised above what was actually
+  // checked against the advance's real outstanding balance at run-creation
+  // time (see this file's own top doc comment on advanceRepayment); Accounts
+  // can only reduce it (e.g. skip this month) or leave it as suggested.
+  if (line.advanceRepayment?.advance) {
+    line.advanceRepayment.amount = Math.min(
+      Math.max(0, data.advanceRepaymentAmount ?? line.advanceRepayment.amount),
+      line.advanceRepayment.suggestedAmount
+    );
+  }
   Object.assign(
     line,
     buildLineTotals({
@@ -296,6 +358,7 @@ export async function updatePayrollLine(runId, lineId, data, actor) {
       sickLeaveDeduction: line.sickLeaveDeduction, // auto-computed at creation, not editable here
       gosiDeduction: line.gosiDeduction,
       otherDeductions: line.otherDeductions,
+      advanceRepaymentAmount: line.advanceRepayment?.amount ?? 0,
     })
   );
   recomputeRunTotals(run);
@@ -321,6 +384,34 @@ export async function finalizePayrollRun(id, actor) {
   run.finalizedBy = actor.userId;
   run.finalizedAt = new Date();
   await run.save();
+
+  // Real money left this employee's net pay for this — record it against
+  // the advance's own repayment ledger now, the same action Accounts used
+  // to have to remember to do by hand separately. Best-effort per line, not
+  // transactional with the save above (same no-cross-collection-
+  // transactions posture as every other module here — see
+  // reimbursement.service.js's markReimbursementPaid for the identical
+  // reasoning): finalizing payroll must never be blocked by one advance's
+  // own edge case (e.g. it was independently repaid elsewhere in the
+  // meantime), so a failure here is logged, not thrown.
+  for (const line of run.lines) {
+    if (!line.advanceRepayment?.advance || line.advanceRepayment.amount <= 0) continue;
+    try {
+      await addRepayment(
+        line.advanceRepayment.advance,
+        {
+          amount: line.advanceRepayment.amount,
+          date: run.finalizedAt,
+          note: `Auto-deducted from ${run.periodMonth}/${run.periodYear} payroll.`,
+        },
+        actor
+      );
+    } catch (err) {
+      logger.warn(
+        `[payroll.finalize] could not auto-record advance repayment for ${line.employeeCode} (advance ${line.advanceRepayment.advance}): ${err.message}`
+      );
+    }
+  }
 
   await logAudit({
     user: actor.userId,

@@ -58,6 +58,12 @@ const invoiceSchema = new mongoose.Schema(
     quotationNumber: { type: String, required: true },
     client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', required: true },
     clientName: { type: String, required: true },
+    // Snapshot at creation, same durable-history reasoning as clientName —
+    // a B2B ZATCA tax invoice must show the buyer's VAT number when they
+    // have one; a later edit to the Client record must never retroactively
+    // change what an already-issued invoice says. Null when the client has
+    // no VAT number on file (never invented).
+    clientVatNumber: { type: String, default: null },
 
     date: { type: Date, default: Date.now },
     dueDate: { type: Date, default: null },
@@ -77,6 +83,21 @@ const invoiceSchema = new mongoose.Schema(
     amountPaid: { type: Number, default: 0 },
     balanceDue: { type: Number, default: 0 },
     status: { type: String, enum: INVOICE_STATUSES, default: 'Unpaid' },
+
+    // Sum of every CreditNote issued against this invoice — always
+    // recomputed from creditNote.service.js's own atomic update, same
+    // never-trust-a-cached-figure discipline as amountPaid/balanceDue.
+    // `balanceDue` already has any credited amount subtracted out of it;
+    // this is kept separately so the PDF/detail view can show "Grand Total"
+    // and "Credited" as two honest, separate lines rather than silently
+    // rewriting the original grand total.
+    creditedTotal: { type: Number, default: 0 },
+
+    // Set once, the first time this invoice is found overdue by the daily
+    // background job (overdueInvoice.job.js) — prevents re-notifying every
+    // single day for the same still-overdue invoice. Reset to null if a
+    // payment brings it current again, so a LATER relapse notifies again.
+    overdueNotifiedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -28,11 +28,19 @@ function buildAdvanceStepNotification() {
   };
 }
 
+/** The one real formula for "how much of this advance is still owed" —
+ *  exported (2026-09-24) so payroll.service.js's payroll-deduction
+ *  suggestion reuses it instead of re-deriving the same math a second time. */
+export function computeOutstanding(advance) {
+  const amountRepaid = money(advance.repayments.reduce((sum, r) => sum + r.amount, 0));
+  return money(advance.amount - amountRepaid);
+}
+
 /** Adds the derived repayment figures every caller needs — never stored,
  *  always computed fresh from the repayments ledger so it can't drift. */
 function withBalance(advance) {
   const amountRepaid = money(advance.repayments.reduce((sum, r) => sum + r.amount, 0));
-  return { ...advance, amountRepaid, outstandingBalance: money(advance.amount - amountRepaid) };
+  return { ...advance, amountRepaid, outstandingBalance: computeOutstanding(advance) };
 }
 
 export async function submitAdvance(employeeId, data, actor) {

@@ -5,6 +5,7 @@
  */
 import mongoose from 'mongoose';
 import Quotation from '../quotations/quotation.model.js';
+import Client from '../clients/client.model.js';
 import { nextSequence } from '../quotations/counter.model.js';
 import Invoice from './invoice.model.js';
 import ApiError from '../../utils/ApiError.js';
@@ -25,6 +26,7 @@ export async function createInvoice({ quotation: quotationId, dueDate }, actor) 
   const existing = await Invoice.findOne({ quotation: quotationId }).lean();
   if (existing) throw new ApiError(409, `This quotation already has an invoice (${existing.invoiceNumber}).`);
 
+  const client = await Client.findById(quotation.client).select('vatNumber').lean();
   const totals = computeTotals(quotation.lineItems);
   const invoice = await Invoice.create({
     invoiceNumber: await newInvoiceNumber(),
@@ -32,6 +34,7 @@ export async function createInvoice({ quotation: quotationId, dueDate }, actor) 
     quotationNumber: quotation.quotationNumber,
     client: quotation.client,
     clientName: quotation.clientName,
+    clientVatNumber: client?.vatNumber || null,
     dueDate: dueDate ?? null,
     lineItems: quotation.lineItems,
     notes: quotation.notes,
@@ -51,11 +54,15 @@ export async function createInvoice({ quotation: quotationId, dueDate }, actor) 
   return invoice.toObject();
 }
 
-export async function listInvoices({ page, limit, client, quotation, status, search }) {
+export async function listInvoices({ page, limit, client, quotation, status, overdue, search }) {
   const conditions = [];
   if (client) conditions.push({ client });
   if (quotation) conditions.push({ quotation });
   if (status) conditions.push({ status });
+  // Same definition overdueInvoice.job.js and invoiceColumns.jsx's own
+  // isOverdue() already use — kept in one place server-side so the
+  // Financial hub's badge count and this list can never disagree.
+  if (overdue) conditions.push({ status: { $ne: 'Paid' }, dueDate: { $ne: null, $lt: new Date() } });
   if (search) {
     const rx = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
     conditions.push({ $or: [{ invoiceNumber: rx }, { clientName: rx }] });
@@ -122,7 +129,17 @@ export async function recordPayment(id, data, actor) {
           balanceDue: { $round: [{ $subtract: ['$balanceDue', data.amount] }, 2] },
         },
       },
-      { $set: { status: { $cond: [{ $lte: ['$balanceDue', 0] }, 'Paid', 'Partially Paid'] } } },
+      {
+        $set: {
+          status: { $cond: [{ $lte: ['$balanceDue', 0] }, 'Paid', 'Partially Paid'] },
+          // Cleared once paid off — see overdueInvoice.job.js's own doc
+          // comment. No real path currently makes an already-Paid invoice
+          // overdue again (dueDate is set once, never edited), but this
+          // keeps the dedupe field honestly reset rather than relying on
+          // that staying true forever.
+          overdueNotifiedAt: { $cond: [{ $lte: ['$balanceDue', 0] }, null, '$overdueNotifiedAt'] },
+        },
+      },
     ],
     { new: true }
   );

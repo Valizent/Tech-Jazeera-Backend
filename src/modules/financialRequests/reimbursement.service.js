@@ -4,6 +4,7 @@
  */
 import Employee from '../employees/employee.model.js';
 import ReimbursementClaim from './reimbursement.model.js';
+import Expense from '../expenses/expense.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.js';
 import { logAudit } from '../audit/audit.service.js';
@@ -194,6 +195,26 @@ export async function markReimbursementPaid(id, actor) {
   claim.paidAt = new Date();
   claim.paidBy = actor.userId;
   await claim.save();
+
+  // Real cash leaving the company — must land in the Expenses ledger, the
+  // one place the dashboard's profit figure actually reads from. Before
+  // this, a paid claim was invisible to both (a real gap, not a design
+  // choice — see expense.model.js's own doc comment on sourceReimbursement).
+  // Best-effort, not transactional (this codebase has no cross-collection
+  // transactions anywhere — see invoice.service.js's own atomic-update
+  // convention): if this throws, the claim is still correctly Paid; the
+  // failure surfaces as a 500 for Accounts to retry, same risk posture as
+  // every other post-write side effect (logAudit, notifyEmployeeUser) here.
+  const employee = await Employee.findById(claim.employee).select('fullName').lean();
+  await Expense.create({
+    date: claim.paidAt,
+    category: 'Staff Reimbursement',
+    vendor: employee?.fullName ?? 'Employee reimbursement',
+    amount: claim.amount,
+    notes: `${claim.category} reimbursement claim${claim.description ? ` — ${claim.description}` : ''}.`,
+    recordedBy: actor.userId,
+    sourceReimbursement: claim._id,
+  });
 
   await logAudit({
     user: actor.userId,

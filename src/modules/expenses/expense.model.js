@@ -21,10 +21,19 @@
  *    not reaching into Documents (a different trust/compliance category).
  *  - `recordedBy` tracks who entered the expense — useful for a manually
  *    entered cost ledger the way `payments[].recordedBy` is on Invoice.
+ *  - `sourceReimbursement` (optional ref) links an Expense that was
+ *    AUTO-CREATED when a worker's ReimbursementClaim was marked Paid (see
+ *    reimbursement.service.js's markReimbursementPaid) — closes a real gap:
+ *    that money genuinely leaves the company but used to never appear in
+ *    this ledger or the dashboard's profit figure. Always filed under the
+ *    'Staff Reimbursement' category (never mapped onto Rent/Fuel/etc — the
+ *    claim's own category is preserved in `notes` instead), so this ledger
+ *    can tell "a direct company purchase" from "money paid back to a
+ *    worker" apart at a glance, same distinction real bookkeeping makes.
  */
 import mongoose from 'mongoose';
 
-export const EXPENSE_CATEGORIES = ['Rent', 'Fuel', 'Salaries-external', 'Purchases', 'Utilities', 'Other'];
+export const EXPENSE_CATEGORIES = ['Rent', 'Fuel', 'Salaries-external', 'Purchases', 'Utilities', 'Staff Reimbursement', 'Other'];
 
 /** The stored receipt file. _id disabled — a value object, not an entity.
  *  Identical shape to ReimbursementClaim's receipt (middleware/upload.js). */
@@ -54,6 +63,7 @@ const expenseSchema = new mongoose.Schema(
     receipt: { type: receiptSchema, default: null },
 
     recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    sourceReimbursement: { type: mongoose.Schema.Types.ObjectId, ref: 'ReimbursementClaim', default: null },
   },
   { timestamps: true }
 );

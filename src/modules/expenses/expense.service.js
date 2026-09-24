@@ -146,6 +146,9 @@ export async function updateExpense(id, data, actor) {
 export async function deleteExpense(id, actor) {
   const expense = await Expense.findById(id).lean();
   if (!expense) throw new ApiError(404, 'Expense not found.');
+  if (expense.sourceReimbursement) {
+    throw new ApiError(400, 'This expense was auto-created from a paid reimbursement claim and cannot be deleted here.');
+  }
 
   if (expense.receipt) {
     await destroyDocumentFile(expense.receipt.fileName, expense.receipt.resourceType).catch(() => {});

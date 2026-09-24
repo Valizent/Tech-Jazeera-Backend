@@ -26,6 +26,11 @@ export const updatePayrollLineSchema = z.object({
   otherAllowances: z.coerce.number().min(0).max(1_000_000).default(0),
   gosiDeduction: z.coerce.number().min(0).max(1_000_000).default(0),
   otherDeductions: z.array(deductionLineSchema).max(20).default([]),
+  // Optional: a line with no outstanding SalaryAdvance simply ignores this
+  // (see payroll.service.js's updatePayrollLine — it's a no-op unless the
+  // line already has one). The real ceiling (never above what was
+  // suggested at creation) is enforced server-side, not here.
+  advanceRepaymentAmount: z.coerce.number().min(0).max(1_000_000).optional(),
 });
 
 export const listPayrollRunsSchema = z.object({

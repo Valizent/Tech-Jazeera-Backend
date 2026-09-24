@@ -32,6 +32,11 @@ export const listInvoicesSchema = z.object({
   client: id.optional(),
   quotation: id.optional(),
   status: z.preprocess(emptyToUndef, z.enum(INVOICE_STATUSES).optional()),
+  // NOT z.coerce.boolean() — that coerces the string "false" to true (see
+  // employee.validation.js's own warning comment on this exact class of
+  // bug). notification.validation.js's own unreadOnly field is the
+  // established correct pattern for a query-string boolean.
+  overdue: z.preprocess((v) => v === 'true', z.boolean().default(false)),
   search: z.preprocess(emptyToUndef, z.string().trim().max(100).optional()),
 });
 

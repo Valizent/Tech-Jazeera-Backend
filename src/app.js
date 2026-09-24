@@ -54,6 +54,7 @@ import exitDocumentsRoutes from './modules/exitDocuments/exitDocuments.routes.js
 import timesheetRoutes from './modules/timesheets/timesheet.routes.js';
 import payrollRoutes from './modules/payroll/payroll.routes.js';
 import invoiceRoutes from './modules/invoices/invoice.routes.js';
+import creditNoteRoutes from './modules/creditNotes/creditNote.routes.js';
 import expenseRoutes from './modules/expenses/expense.routes.js';
 import meRoutes from './modules/me/me.routes.js';
 import profileRoutes from './modules/me/profile.routes.js';
@@ -137,6 +138,7 @@ app.use('/api/exit-documents', exitDocumentsRoutes);
 app.use('/api/timesheets', timesheetRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/invoices', invoiceRoutes);
+app.use('/api/credit-notes', creditNoteRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/me', meRoutes);
 app.use('/api/profile', profileRoutes);
