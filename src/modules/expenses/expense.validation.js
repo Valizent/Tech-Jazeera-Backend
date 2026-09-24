@@ -30,6 +30,9 @@ export const listExpensesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   category: z.preprocess(emptyToUndef, z.enum(EXPENSE_CATEGORIES).optional()),
   client: z.preprocess(emptyToUndef, id.optional()),
+  // Added 2026-09-24 for the new per-Deployment expenses section — see
+  // DeploymentDetailPage.jsx's own doc comment.
+  deployment: z.preprocess(emptyToUndef, id.optional()),
   from: z.preprocess(emptyToUndef, z.coerce.date().optional()),
   // A bare "YYYY-MM-DD" date-picks 00:00:00.000 UTC — push to the last
   // millisecond of that day so an inclusive "to" really covers it (same fix

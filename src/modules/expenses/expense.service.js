@@ -59,10 +59,13 @@ export async function createExpense(data, file, actor) {
   return expense.toObject();
 }
 
-export async function listExpenses({ page, limit, category, client, from, to, search }) {
+export async function listExpenses({ page, limit, category, client, deployment, from, to, search }) {
   const conditions = [];
   if (category) conditions.push({ category });
   if (client) conditions.push({ client });
+  // Added 2026-09-24 for the new per-Deployment expenses section on
+  // DeploymentDetailPage.jsx — browsing one deployment's own expense history.
+  if (deployment) conditions.push({ deployment });
   if (from || to) {
     const range = {};
     if (from) range.$gte = from;

@@ -1037,15 +1037,29 @@ export async function getDeployment(id, actor) {
   const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor, 'read') : false;
   deployment.monthlyHours = deployment.monthlyHours.map((entry) => {
     if (canSeeCommercial) {
+      // .revenue/.expenses added 2026-09-24 alongside .profit (unchanged) — for
+      // the new per-Deployment Expenses section's own Revenue/Expenses/Profit
+      // summary (see DeploymentDetailPage.jsx's own doc comment).
       const revExp = computeMonthlyRevenueAndExpenses(entry, deployment.mobilisation, deployment.monthlyHours);
-      return { ...entry, profit: revExp ? revExp.profit : null };
+      return { ...entry, profit: revExp ? revExp.profit : null, revenue: revExp ? revExp.revenue : null, expenses: revExp ? revExp.expenses : null };
     }
     const { otAmount, ...rest } = entry;
     return rest;
   });
   if (canSeeCommercial) {
     const withProfit = deployment.monthlyHours.filter((e) => e.profit != null);
+    // Deliberately UNCHANGED scope (2026-09-24): totalProfit/totalRevenue/
+    // totalExpenses sum every entry with a computable figure, any status —
+    // same as this field's own pre-existing behavior (byte-identical to the
+    // original totalProfit computation), which DeploymentDetailPage.jsx's
+    // Monthly Hours section already relies on as a running "everything entered
+    // so far" total, not an Approved-only one. The new per-Deployment Expenses
+    // section (below, client-side) computes its OWN separate Approved-only
+    // figure — plus the linked ad-hoc Expense ledger — rather than silently
+    // redefining what this established field means.
     deployment.totalProfit = withProfit.length ? money(withProfit.reduce((sum, e) => sum + e.profit, 0)) : null;
+    deployment.totalRevenue = withProfit.length ? money(withProfit.reduce((sum, e) => sum + e.revenue, 0)) : null;
+    deployment.totalExpenses = withProfit.length ? money(withProfit.reduce((sum, e) => sum + e.expenses, 0)) : null;
   } else if (deployment.mobilisation) {
     deployment.mobilisation = { _id: deployment.mobilisation._id, serialNumber: deployment.mobilisation.serialNumber };
   }
