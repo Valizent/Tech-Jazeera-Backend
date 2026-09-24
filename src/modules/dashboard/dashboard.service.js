@@ -40,7 +40,7 @@ import { toUtcDay } from '../attendance/attendance.service.js';
 import { annotateCanDecide, roleIdsNeededAcross } from '../approvals/approvalEngine.service.js';
 import ApprovalRole from '../approvals/approvalRole.model.js';
 import { canAccessSection, getMySectionAccess } from '../sectionAccess/sectionAccess.service.js';
-import { countStaleRequirements } from '../requirements/requirement.service.js';
+import { countStaleRequirements, getMyRequirementsSummary } from '../requirements/requirement.service.js';
 import { countOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ExitReentry from '../exitDocuments/exitReentry.model.js';
@@ -435,6 +435,7 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
   const canReadSubcontractors = canRead('subcontractorsManage');
   const canReadLeave = canRead('leaveRequests');
   const canReadExitDocuments = canRead('exitDocuments');
+  const canReadRequirementsOwn = canRead('requirementsOwn');
   // mobilisationsByStatus and activeMobilisationRevenue's company-wide
   // totals used to be computed and returned to EVERY viewer unconditionally
   // — only the client chose not to render them outside Manager/Admin.
@@ -483,7 +484,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     pendingExit,
     activeMobilisationRevenue,
     activeMobilisationRevenueTrend,
-    actualPerformance
+    actualPerformance,
+    myRequirementsSummary
   ] = await Promise.all([
     canReadDeployments ? Deployment.countDocuments(deploymentFilter) : Promise.resolve(0),
     canReadEmployees
@@ -592,7 +594,12 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // Approved monthly timesheets) — gated on canSeeProfit (dashboardProfit),
     // the SAME key the existing Invoice-based profit figure uses, not a new
     // permission tier. See getActualPerformanceSummary's own doc comment.
-    canSeeProfit ? getActualPerformanceSummary() : Promise.resolve(null)
+    canSeeProfit ? getActualPerformanceSummary() : Promise.resolve(null),
+    // A coordinator's own open Requirements pipeline (2026-09-24, a real user
+    // ask) — the "My Requirements" dashboard widget. Coordinator-only (this is
+    // "MY requirements", not a company view) and still gated on requirementsOwn
+    // read, same discipline as every other field here.
+    isCoordinator && canReadRequirementsOwn ? getMyRequirementsSummary(actor) : Promise.resolve(null)
   ]);
 
   // Workforce by status
@@ -718,7 +725,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       return { total };
     })() : null,
     pendingLeave: canReadLeave ? pendingLeave : null,
-    pendingExit: canReadExitDocuments ? pendingExit : null
+    pendingExit: canReadExitDocuments ? pendingExit : null,
+    myRequirementsSummary
   };
 }
 

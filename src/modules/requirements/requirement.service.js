@@ -323,6 +323,30 @@ export async function countStaleRequirements(actor) {
   return Requirement.countDocuments(filter);
 }
 
+/**
+ * A coordinator's own open (non-terminal-stage) requirement cards, grouped by
+ * stage — the dashboard's "My Requirements" widget (2026-09-24, a real user
+ * ask: the board already tracks exactly this, but nothing on the dashboard
+ * showed a coordinator their open pipeline, only the stale subset via
+ * countStaleRequirements above). Deliberately always scoped to the caller's
+ * own cards, regardless of teamRead — this is "MY requirements", not a
+ * narrower view of the board.
+ */
+export async function getMyRequirementsSummary(actor) {
+  const stages = await RequirementStage.find({ isTerminal: false }).select('name order').sort({ order: 1 }).lean();
+  if (stages.length === 0) return { total: 0, byStage: [] };
+
+  const rows = await Requirement.aggregate([
+    { $match: { coordinators: new mongoose.Types.ObjectId(actor.userId), stage: { $in: stages.map((s) => s._id) } } },
+    { $group: { _id: '$stage', count: { $sum: 1 } } },
+  ]);
+  const countByStage = new Map(rows.map((r) => [idOf(r._id), r.count]));
+  const byStage = stages
+    .map((s) => ({ stage: s.name, count: countByStage.get(idOf(s._id)) ?? 0 }))
+    .filter((s) => s.count > 0);
+  return { total: byStage.reduce((sum, s) => sum + s.count, 0), byStage };
+}
+
 /** One card with its full timeline: the stage history and every update
  *  written on it. Someone who can't see the card gets the same 404 as a card
  *  that doesn't exist, so ids can't be probed. */
