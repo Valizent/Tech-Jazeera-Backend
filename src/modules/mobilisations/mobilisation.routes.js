@@ -27,7 +27,6 @@ import {
   decideMobilisationSchema,
   mobilisationDocumentCategorySchema,
   mobilisationDocumentParamSchema,
-  mobilisationSuggestionQuerySchema,
   mobilisationIqamaLookupQuerySchema,
   mobilisationPreviousWorkersQuerySchema,
   workerHistoryQuerySchema,
@@ -43,11 +42,6 @@ router.use(requireStaff);
 router.get('/', validate({ query: listMobilisationsSchema }), asyncHandler(mobilisationController.list));
 // Before the /:id catch-all, or these are read as a mobilisation id.
 router.get('/coordinators', asyncHandler(mobilisationController.listCoordinatorCandidates));
-router.get(
-  '/suggestions',
-  validate({ query: mobilisationSuggestionQuerySchema }),
-  asyncHandler(mobilisationController.suggestions)
-);
 router.get(
   '/lookup-by-iqama',
   validate({ query: mobilisationIqamaLookupQuerySchema }),

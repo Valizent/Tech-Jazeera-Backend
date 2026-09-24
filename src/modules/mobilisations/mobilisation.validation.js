@@ -234,14 +234,6 @@ export const exportMobilisationsSchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
-/** GET /mobilisations/suggestions?field=... — `site` only now: worker
- *  identity (name/Iqama) is recognized by the Iqama lookup instead (see
- *  lookupWorkerByIqama), and nationality always used the CountrySelect
- *  picker, never this. */
-export const mobilisationSuggestionQuerySchema = z.object({
-  field: z.enum(['site']),
-});
-
 /** GET /mobilisations/lookup-by-iqama?iqamaNumber=... — a SupplierEmployee/
  *  Freelancer worker has no Employee record, so this is how "he's been
  *  mobilised before" is recognized: full 10-digit Iqama only, no partial

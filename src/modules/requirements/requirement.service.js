@@ -441,6 +441,19 @@ export async function updateRequirement(id, data, actor) {
     requirement.coordinators = next;
   }
   if (data.clientName !== undefined) Object.assign(requirement, await resolveClient(data.clientName));
+  // Real bug fix (2026-09-24): a requirement's own edit form always resends its
+  // current `neededBy` (even when the user only touched an unrelated field), so
+  // this can't simply reject any past `neededBy` the way createRequirementSchema
+  // does — an untouched, since-elapsed date must still save. Only a genuine
+  // CHANGE to a new past date is rejected.
+  if (data.neededBy !== undefined && data.neededBy !== null) {
+    const changing = !requirement.neededBy || new Date(data.neededBy).getTime() !== new Date(requirement.neededBy).getTime();
+    if (changing) {
+      const today = new Date();
+      const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+      if (new Date(data.neededBy) < todayUtc) throw new ApiError(400, "Needed-by date can't be in the past.");
+    }
+  }
   for (const key of ['jobTitle', 'headcount', 'neededBy', 'site', 'notes']) {
     if (data[key] !== undefined) requirement[key] = data[key];
   }

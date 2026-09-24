@@ -264,20 +264,6 @@ export async function listCoordinatorCandidates() {
 }
 
 /**
- * Live autocomplete source for the free-typed worker-identity fields
- * (SupplierEmployee/Freelancer workers never get an Employee record — see
- * mobilisation.model.js). Deliberately lighter than the JobTitle picklist:
- * no managed collection, no permission gate on write (there's no write path
- * at all), just "what's been typed before" — a suggestion aid, not a
- * validated enum, same spirit as EmployeeForm's static Nationality
- * `<datalist>` but sourced live instead of from a hardcoded list.
- */
-export async function getFieldSuggestions(field) {
-  const values = await Mobilisation.distinct(field, { [field]: { $nin: [null, ''] } });
-  return values.sort((a, b) => a.localeCompare(b)).slice(0, 100);
-}
-
-/**
  * "Is this worker already known?" — a SupplierEmployee/Freelancer has no
  * Employee record, so their only durable identity is their Iqama number.
  * Once someone's been mobilised before (any status, any coordinator — this

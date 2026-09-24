@@ -20,12 +20,6 @@ export async function listCoordinatorCandidates(req, res) {
   res.json(new ApiResponse('Coordinators.', candidates));
 }
 
-/** GET /api/mobilisations/suggestions?field=... — 200 → data: string[] */
-export async function suggestions(req, res) {
-  const values = await mobilisationService.getFieldSuggestions(req.query.field);
-  res.json(new ApiResponse('Suggestions.', values));
-}
-
 /** GET /api/mobilisations/lookup-by-iqama?iqamaNumber=... — 200 → data: worker snapshot | null */
 export async function lookupByIqama(req, res) {
   const worker = await mobilisationService.lookupWorkerByIqama(req.query.iqamaNumber);

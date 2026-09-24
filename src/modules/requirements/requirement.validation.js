@@ -23,6 +23,23 @@ const dateOnly = z
   .refine(isRealDate, 'Enter a valid date.')
   .transform((s) => new Date(`${s}T00:00:00.000Z`));
 
+/** Today at UTC midnight — matches `dateOnly`'s own UTC-midnight construction,
+ *  so "needed by today" compares exactly, never off by a timezone. */
+const todayUtc = () => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+};
+
+/** Real bug fix (2026-09-24, a real user report): nothing stopped a requirement
+ *  being raised with a `neededBy` already in the past (e.g. added the 24th,
+ *  needed by the 4th). Only wired into CREATE — a requirement is always new, so
+ *  there is no "unchanged" case to protect. `updateRequirement` (the service)
+ *  applies the equivalent rule itself instead of here, since it must allow
+ *  resaving an untouched, now-stale `neededBy` on a requirement whose other
+ *  fields are being edited (see its own comment) — a check Zod can't make
+ *  without the existing record. */
+const notPastDate = (date) => date === undefined || date >= todayUtc();
+
 const optionalStr = (max) => z.preprocess(emptyToUndef, z.string().trim().max(max).optional());
 const clearableStr = (max) => z.preprocess(emptyToNull, z.string().trim().max(max).nullable().optional());
 
@@ -35,7 +52,7 @@ export const createRequirementSchema = z.object({
   clientName,
   jobTitle,
   headcount: z.preprocess(emptyToUndef, headcount.default(1)),
-  neededBy: z.preprocess(emptyToUndef, dateOnly.optional()),
+  neededBy: z.preprocess(emptyToUndef, dateOnly.optional()).refine(notPastDate, "Needed-by date can't be in the past."),
   site: optionalStr(150),
   notes: optionalStr(2000),
   coordinators: coordinators.optional(), // defaults to the caller
