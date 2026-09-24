@@ -44,6 +44,10 @@ import { countStaleRequirements } from '../requirements/requirement.service.js';
 import { countOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ExitReentry from '../exitDocuments/exitReentry.model.js';
+import { getStandbyWorkforce } from '../deployments/deployment.service.js';
+import User from '../auth/user.model.js';
+import { monthBounds } from '../mobilisationTargets/mobilisationTarget.service.js';
+import ApiError from '../../utils/ApiError.js';
 
 export const EXPIRY_WARNING_DAYS = 30;
 const TREND_MONTHS = 6;
@@ -437,16 +441,22 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
           { $group: { _id: null, total: { $sum: '$salary' } } },
         ])
       : Promise.resolve([]),
-    // A Coordinator's "clients" are the distinct clients their team is
-    // currently placed at — not every client in the system. approvalStatus:
-    // 'Approved' on the company-wide count — a client still Pending isn't
-    // really "active" in the business sense yet (it also can't have any
-    // deployments, so the Coordinator branch is already implicitly correct).
-    !canReadClients
-      ? Promise.resolve(0)
-      : teamIds
-        ? Deployment.find({ status: 'Active', worker: { $in: teamIds } }).distinct('client').then((ids) => ids.length)
-        : Client.countDocuments({ status: 'Active', approvalStatus: 'Approved' }),
+    // FIX (2026-09-22, real user report): this used to narrow a Coordinator
+    // to only the distinct clients THEIR OWN team currently has an active
+    // deployment at — treating Client like a team-owned resource the way
+    // Employee/Document/Deployment/Attendance genuinely are. It isn't: a
+    // client (like a Subcontractor, whose own count right below has never
+    // been scoped) is a shared, company-wide resource — any coordinator can
+    // mobilise any worker to any client through any subcontractor,
+    // regardless of who originally added it or who's currently placed
+    // there. Confirmed against the app's own real team-scoped list (the
+    // 13/15 September QA audits' own "Coordinator team-scoping closed on
+    // Attendance/Documents/Assets/EOSB/Deployment/Timesheets" — Client was
+    // never on it) — this was the one inconsistent case. Now always the
+    // real company-wide count for every role, same as
+    // activeSubcontractorsCount below. approvalStatus: 'Approved' — a
+    // client still Pending isn't really "active" in the business sense yet.
+    canReadClients ? Client.countDocuments({ status: 'Active', approvalStatus: 'Approved' }) : Promise.resolve(0),
     // Skipped entirely for a Coordinator regardless of any grant — see the
     // doc comment above (Quotation has no data-model link to a team at all).
     !canReadQuotations || isCoordinator
@@ -637,64 +647,95 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
   };
 }
 
-/** How much an idle own-outsourced workforce is costing — derived from `Employee.salary`,
- *  the same compensation data `getDashboard`'s own `monthlyPayroll` figure sums, so this
- *  reuses that figure's own `payroll` gate (2026-09-22 fix — this used to hardcode
- *  Admin/Manager/HR directly, the same anti-pattern already fixed on the main dashboard). */
+/**
+ * Standby workforce, with an idle-cost estimate layered on top — gated on the same
+ * `payroll` read grant `getDashboard`'s own `monthlyPayroll` figure uses (2026-09-22
+ * fix — this used to hardcode Admin/Manager/HR directly).
+ *
+ * FIX (2026-09-22, real user report — a screenshot of this widget showing "No workers
+ * on standby" right next to the real Standby List page showing two real workers free):
+ * this used to run its own, independent definition of "on standby" — every
+ * `Employee.type: 'Outsourced'` with no currently-Active Deployment. That population is
+ * always empty in real use: 'Outsourced' is a legacy type the live Mobilisation flow
+ * has never actually written (an "Own Employee" mobilisation only ever picks a
+ * `type:'Own'` Employee with a Worker login — see MobilisationForm's own picker filter
+ * — and a SupplierEmployee/Freelancer mobilisation has no Employee record at all), so
+ * this widget could never show a real result regardless of how many workers were
+ * actually free. Fixed to build on `getStandbyWorkforce` — the SAME real population the
+ * Standby List page already correctly computes — instead of a second, independent
+ * definition that can drift from (and, here, silently never matched) the real one.
+ *
+ * The idle-cost estimate only applies to `ownEmployees`: they're the one population this
+ * company actually pays a salary to regardless of deployment status (see
+ * employee.model.js's own `requiredForOwnPayroll`/`type` doc comments), so an idle one
+ * is a real, honest cost. A SupplierEmployee/Freelancer's wage is the subcontractor's
+ * business (or a per-placement Freelancer fee) — this company owes them nothing while
+ * they're not placed, so `moneyLost` is deliberately `null` for that half, never a
+ * fabricated figure — same "never invent a number the data doesn't support" rule this
+ * app follows everywhere else (GOSI, commission formulas, etc.).
+ */
 export async function getStandbyAnalysis(actor) {
   if (!(await canAccessSection('payroll', actor, 'read'))) return [];
 
-  // Find all active Outsourced workers
-  const activeOutsourced = await Employee.find({ type: 'Outsourced', status: 'Active' })
-    .select('_id fullName employeeId joiningDate salary designation')
-    .lean();
+  const { ownEmployees, subcontractedWorkers } = await getStandbyWorkforce();
+  if (ownEmployees.length === 0 && subcontractedWorkers.length === 0) return [];
 
-  if (activeOutsourced.length === 0) return [];
-  const workerIds = activeOutsourced.map((w) => w._id);
-
-  // Find all active deployments for these workers
-  const activeDeployments = await Deployment.find({ worker: { $in: workerIds }, status: 'Active' })
-    .select('worker')
-    .lean();
-  
-  const deployedWorkerIds = new Set(activeDeployments.map((d) => d.worker.toString()));
-
-  // Find latest deployment for all workers to calculate days since last deployment
-  const latestDeployments = await Deployment.aggregate([
-    { $match: { worker: { $in: workerIds } } },
-    { $sort: { endDate: -1 } },
-    { $group: { _id: '$worker', endDate: { $first: '$endDate' } } }
-  ]);
-  const latestDeploymentByWorker = new Map(latestDeployments.map((d) => [d._id.toString(), d.endDate]));
-
-  const standbyWorkers = [];
   const now = Date.now();
+  const result = [];
 
-  for (const worker of activeOutsourced) {
-    if (deployedWorkerIds.has(worker._id.toString())) continue;
+  if (ownEmployees.length > 0) {
+    const ids = ownEmployees.map((e) => e._id);
+    const [salaryRows, latestDeployments] = await Promise.all([
+      Employee.find({ _id: { $in: ids } }).select('salary joiningDate').lean(),
+      // The most recent ENDED deployment per worker — a worker never yet placed has
+      // none, and falls back to their joiningDate below (same as the widget's own
+      // pre-fix logic, just no longer scoped to the dead 'Outsourced' type).
+      Deployment.aggregate([
+        { $match: { worker: { $in: ids }, endDate: { $ne: null } } },
+        { $sort: { endDate: -1 } },
+        { $group: { _id: '$worker', endDate: { $first: '$endDate' } } },
+      ]),
+    ]);
+    const extraById = new Map(salaryRows.map((e) => [e._id.toString(), e]));
+    const lastEndById = new Map(latestDeployments.map((d) => [d._id.toString(), d.endDate]));
 
-    const lastDeploymentEnd = latestDeploymentByWorker.get(worker._id.toString());
-    const referenceDate = lastDeploymentEnd ? new Date(lastDeploymentEnd) : new Date(worker.joiningDate);
-    
-    // Calculate days on standby (max 0 to prevent negative if dates are in future somehow)
-    const daysOnStandby = Math.max(0, Math.ceil((now - referenceDate.getTime()) / 86_400_000));
-    const dailyCost = (worker.salary || 0) / 30;
-    const moneyLost = Math.round(daysOnStandby * dailyCost);
+    for (const w of ownEmployees) {
+      const extra = extraById.get(w._id.toString());
+      const referenceDate = lastEndById.get(w._id.toString()) ?? extra?.joiningDate;
+      const daysOnStandby = referenceDate
+        ? Math.max(0, Math.ceil((now - new Date(referenceDate).getTime()) / 86_400_000))
+        : 0;
+      // Salary is optional for an 'Own'-type Employee (see employee.model.js) — 0 is
+      // the honest floor when none was ever entered, never an invented estimate.
+      const dailyCost = (extra?.salary || 0) / 30;
+      result.push({
+        _id: String(w._id),
+        fullName: w.fullName,
+        employeeId: w.employeeId,
+        designation: w.designation,
+        daysOnStandby,
+        moneyLost: Math.round(daysOnStandby * dailyCost),
+      });
+    }
+  }
 
-    standbyWorkers.push({
-      _id: worker._id,
-      fullName: worker.fullName,
-      employeeId: worker.employeeId,
-      designation: worker.designation,
+  for (const w of subcontractedWorkers) {
+    const daysOnStandby = w.lastEndDate
+      ? Math.max(0, Math.ceil((now - new Date(w.lastEndDate).getTime()) / 86_400_000))
+      : 0;
+    result.push({
+      _id: w.iqamaNumber,
+      fullName: w.workerName,
+      employeeId: w.iqamaNumber,
+      workerType: w.workerType,
+      subcontractorName: w.subcontractorName ?? null,
+      designation: null,
       daysOnStandby,
-      moneyLost,
-      lastDeploymentEnd: lastDeploymentEnd || null,
-      joiningDate: worker.joiningDate
+      moneyLost: null,
     });
   }
 
-  // Sort by most days on standby by default
-  return standbyWorkers.sort((a, b) => b.daysOnStandby - a.daysOnStandby);
+  return result.sort((a, b) => b.daysOnStandby - a.daysOnStandby);
 }
 
 export async function getCoordinatorDrillDown(actor, coordinatorId) {
@@ -715,10 +756,17 @@ export async function getCoordinatorDrillDown(actor, coordinatorId) {
   const openTasks = await DailyUpdate.countDocuments({ kind: 'Task', coordinator: coordinatorId, status: 'Open' });
   const completedTasks = await DailyUpdate.countDocuments({ kind: 'Task', coordinator: coordinatorId, status: 'Done' });
 
-  // Mobilisation profit for this coordinator
+  // Mobilisation profit for this coordinator. FIX (2026-09-22): this used to match
+  // status: { $in: ['Deployed', 'Approved'] } — 'Deployed' has never been a real
+  // Mobilisation status (see MOBILISATION_STATUSES: Draft/PendingReview/Approved/
+  // Rejected/Completed), so that half of the $in silently matched nothing and this
+  // figure quietly excluded every Completed mobilisation. Now the same
+  // ['Approved', 'Completed'] definition sumProgress (mobilisationTarget.service.js)
+  // and getCoordinatorLeaderboard (below) both use — one real definition of
+  // "counts toward profit," not three independently-typed ones.
   const mobilisations = await Mobilisation.aggregate([
-    { $match: { 'coordinators.user': new mongoose.Types.ObjectId(coordinatorId), status: { $in: ['Deployed', 'Approved'] } } },
-    { $group: { _id: null, totalProfit: { $sum: '$profitPerMonth' } } }
+    { $match: { 'coordinators.user': new mongoose.Types.ObjectId(coordinatorId), status: { $in: ['Approved', 'Completed'] }, archived: { $ne: true } } },
+    { $group: { _id: null, totalProfit: { $sum: { $ifNull: ['$profitPerMonth', 0] } } } }
   ]);
 
   const totalProfit = mobilisations[0]?.totalProfit ?? 0;
@@ -727,5 +775,73 @@ export async function getCoordinatorDrillDown(actor, coordinatorId) {
     recentLogs: logs,
     tasks: { open: openTasks, completed: completedTasks },
     totalMonthlyProfit: totalProfit
+  };
+}
+
+/**
+ * Coordinator Mobilisation Leaderboard (2026-09-22, a real user ask — "where is
+ * the coordinator mobilisation count/leaderboard for MM/GM/FM/COO etc?"). Every
+ * real Coordinator (the same roster mobilisation.service.js's own
+ * listCoordinatorCandidates uses for the "invite a joint coordinator" picker) with
+ * their mobilisation count + estimated profit for one calendar month — a full
+ * roster, not just coordinators who happen to have a Mobilisation Target set (the
+ * only per-coordinator view that existed before this, buried inside "Manage
+ * Targets" → Progress, and gated behind mobilisationTargets write specifically).
+ *
+ * Gate: mobilisationsViewer read — the SAME grant the existing "Global mobilisation
+ * pipeline" dashboard widget and company-wide mobilisationsByStatus/
+ * activeMobilisationRevenue figures already require (see getDashboard's own doc
+ * comment) — so MM/GM/FM/COO/Admin see this without needing target-management
+ * rights, the user's own explicit choice between the two options put to them.
+ *
+ * "Counts" = Approved/Completed mobilisations whose mobilisationDate falls in the
+ * selected month — the exact same definition sumProgress (mobilisationTarget.
+ * service.js) uses for a coordinator's own Target progress, sharing monthBounds so
+ * the two can never quietly disagree on a boundary date. No single ranking column
+ * — count and profit are both returned; the client sorts by whichever the viewer
+ * picks (the user's own choice — "both, no single ranking").
+ */
+export async function getCoordinatorLeaderboard(actor, monthStr) {
+  if (!(await canAccessSection('mobilisationsViewer', actor, 'read'))) {
+    throw new ApiError(403, 'You do not have permission to view the coordinator leaderboard.');
+  }
+
+  const month = monthStr || new Date().toISOString().slice(0, 7);
+  const { start, end } = monthBounds(month);
+
+  const [coordinators, statsRows] = await Promise.all([
+    User.find({ role: 'Coordinator' }).select('name').sort({ name: 1 }).lean(),
+    Mobilisation.aggregate([
+      {
+        $match: {
+          status: { $in: ['Approved', 'Completed'] },
+          mobilisationDate: { $gte: start, $lt: end },
+          archived: { $ne: true },
+        },
+      },
+      { $unwind: '$coordinators' },
+      {
+        $group: {
+          _id: '$coordinators.user',
+          count: { $sum: 1 },
+          profit: { $sum: { $ifNull: ['$profitPerMonth', 0] } },
+        },
+      },
+    ]),
+  ]);
+
+  const statsById = new Map(statsRows.map((r) => [r._id.toString(), r]));
+
+  return {
+    month,
+    rows: coordinators.map((c) => {
+      const stats = statsById.get(c._id.toString());
+      return {
+        _id: c._id,
+        name: c.name,
+        count: stats?.count ?? 0,
+        profit: stats?.profit ?? 0,
+      };
+    }),
   };
 }

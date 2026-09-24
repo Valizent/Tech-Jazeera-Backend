@@ -6,11 +6,17 @@
  * own target read is always allowed (no gate) so the dashboard widget works for
  * everyone who is a Coordinator.
  *
- * Progress counting: Approved + Completed mobilisations where the coordinator
- * is listed on the `coordinators` array (any position — primary or joint) and
- * the `mobilisationDate` falls within the target month. This matches the
- * user's confirmed rule: both primary and joint coordinators count.
+ * Progress: SUM of profitPerMonth (2026-09-22, real user correction — used to
+ * be a plain COUNT) across Approved + Completed mobilisations where the
+ * coordinator is listed on the `coordinators` array (any position — primary
+ * or joint) and the `mobilisationDate` falls within the target month. Same
+ * filter as the original count-based version, just summed instead of
+ * counted — this matches the user's own confirmed rule (both primary and
+ * joint coordinators count) exactly as before. A mobilisation with no
+ * profitPerMonth yet set (null — see mobilisation.model.js) contributes 0,
+ * never breaking the sum.
  */
+import mongoose from 'mongoose';
 import MobilisationTarget from './mobilisationTarget.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import User from '../auth/user.model.js';
@@ -18,23 +24,43 @@ import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 
-/** Returns [firstDayOfMonth, firstDayOfNextMonth) as Date objects. */
-function monthBounds(month) {
+/** Returns [firstDayOfMonth, firstDayOfNextMonth) as Date objects. Exported so
+ *  the dashboard's Coordinator Leaderboard (dashboard.service.js) computes
+ *  "this month" the exact same way a coordinator's own Target/progress does
+ *  — one shared definition, not two independently-written ones that could
+ *  quietly drift (e.g. UTC vs. local, inclusive vs. exclusive) and disagree
+ *  on a mobilisation dated right at a month boundary. */
+export function monthBounds(month) {
   const [year, mon] = month.split('-').map(Number);
   const start = new Date(year, mon - 1, 1);
   const end = new Date(year, mon, 1); // exclusive upper bound
   return { start, end };
 }
 
-/** How many Approved/Completed mobilisations a coordinator has in a month. */
-async function countProgress(coordinatorId, month) {
+/** Sum of profitPerMonth across a coordinator's Approved/Completed
+ *  mobilisations in a month — the coordinator's real estimated monthly
+ *  profit contribution, what "progress" toward a Riyal target means. */
+async function sumProgress(coordinatorId, month) {
   const { start, end } = monthBounds(month);
-  return Mobilisation.countDocuments({
-    'coordinators.user': coordinatorId,
-    status: { $in: ['Approved', 'Completed'] },
-    mobilisationDate: { $gte: start, $lt: end },
-    archived: { $ne: true },
-  });
+  // Real bug found and fixed during this feature's own verification: unlike
+  // find()/countDocuments(), an aggregate() $match does NOT auto-cast a
+  // plain string to ObjectId — every real caller here passes a string
+  // (req.user.id straight off the JWT), which silently matched ZERO
+  // documents (no error, just achieved:0 for every real coordinator) until
+  // this explicit cast was added. Same class of gap the 15 September
+  // QA audit fixed elsewhere in this app for the same reason.
+  const [row] = await Mobilisation.aggregate([
+    {
+      $match: {
+        'coordinators.user': new mongoose.Types.ObjectId(coordinatorId),
+        status: { $in: ['Approved', 'Completed'] },
+        mobilisationDate: { $gte: start, $lt: end },
+        archived: { $ne: true },
+      },
+    },
+    { $group: { _id: null, total: { $sum: { $ifNull: ['$profitPerMonth', 0] } } } },
+  ]);
+  return row?.total ?? 0;
 }
 
 export async function canManageTargets(actor) {
@@ -113,7 +139,7 @@ export async function getMyTarget(actor, month) {
 
   if (!targetDoc) return null;
 
-  const achieved = await countProgress(actor.userId, month);
+  const achieved = await sumProgress(actor.userId, month);
   return {
     _id: targetDoc._id,
     month: targetDoc.month,
@@ -141,7 +167,7 @@ export async function getAllProgress(actor, month) {
 
   const withProgress = await Promise.all(
     targets.map(async (t) => {
-      const achieved = await countProgress(t.coordinator._id, month);
+      const achieved = await sumProgress(t.coordinator._id, month);
       return {
         _id: t._id,
         coordinator: t.coordinator,

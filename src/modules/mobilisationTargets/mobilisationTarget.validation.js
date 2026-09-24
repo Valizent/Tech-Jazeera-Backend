@@ -13,7 +13,12 @@ const monthSchema = z
 export const setTargetSchema = z.object({
   coordinatorId: id,
   month: monthSchema,
-  target: z.number().int().min(1, 'Target must be at least 1.').max(500),
+  // A Riyal amount (2026-09-22, real user correction — was a mobilisation
+  // count, hence the old .int()/.max(500)). Money, so decimals are real;
+  // the max is a sanity bound against a fat-fingered entry, not a real
+  // business ceiling — same posture as this app's other "sanity bound, not
+  // a real limit" caps (e.g. deployment/mobilisation export row caps).
+  target: z.number().min(1, 'Target must be at least 1.').max(10_000_000),
   incentivePercent: z.number().min(0).max(100).optional(),
 });
 

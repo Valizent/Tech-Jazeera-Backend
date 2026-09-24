@@ -1,8 +1,14 @@
 /**
  * MobilisationTarget — one document per coordinator per calendar month.
- * Stores the target mobilisation count and the incentive percentage that
- * kicks in for every mobilisation BEYOND the target (the coordinator earns
- * that % of each extra mobilisation's profitPerMonth as a bonus).
+ * Stores the target — a Riyal amount of estimated monthly profit the
+ * coordinator's Approved/Completed mobilisations should bring to the
+ * company (2026-09-22, real user correction: this used to be a plain
+ * mobilisation COUNT; a coordinator's real value to the company is the
+ * profit their placements bring in, not how many they closed) — and the
+ * incentive percentage that kicks in for every mobilisation counted AFTER
+ * the coordinator's cumulative profit crosses that Riyal target (the
+ * coordinator earns that % of each such mobilisation's own profitPerMonth
+ * as a bonus).
  *
  * Unique on { coordinator, month } — only one active target per
  * coordinator per month (upsert semantics in the service layer).
@@ -21,7 +27,8 @@ const mobilisationTargetSchema = new mongoose.Schema(
       match: [/^\d{4}-\d{2}$/, 'Month must be YYYY-MM.'],
     },
 
-    /** Number of Approved/Completed mobilisations the coordinator must reach. */
+    /** Riyal amount of estimated monthly profit (sum of profitPerMonth
+     *  across Approved/Completed mobilisations) the coordinator must reach. */
     target: { type: Number, required: true, min: 1 },
 
     /**

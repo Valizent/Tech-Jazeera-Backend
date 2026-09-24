@@ -13,7 +13,7 @@ import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { requireStaffOrExecutive } from '../../middleware/rbac.js';
 import { validate } from '../../middleware/validate.js';
-import { dashboardQuerySchema } from './dashboard.validation.js';
+import { dashboardQuerySchema, monthQuerySchema } from './dashboard.validation.js';
 import * as dashboardController from './dashboard.controller.js';
 
 const router = Router();
@@ -31,6 +31,16 @@ router.get(
   requireAuth,
   requireStaffOrExecutive,
   asyncHandler(dashboardController.standbyAnalysis)
+);
+
+// Before the /coordinator-drill-down/:id catch-all-ish param route, so a literal
+// "leaderboard" path segment is never read as a coordinator id.
+router.get(
+  '/coordinator-leaderboard',
+  requireAuth,
+  requireStaffOrExecutive,
+  validate({ query: monthQuerySchema }),
+  asyncHandler(dashboardController.coordinatorLeaderboard)
 );
 
 // We need a validation schema for the coordinator ID, let's reuse a standard param id validator if it exists, or just do it in the controller/service.
