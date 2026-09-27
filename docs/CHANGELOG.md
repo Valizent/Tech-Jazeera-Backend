@@ -1543,3 +1543,62 @@ when requested):**
   deliberate, flagged simplifications (no separate semi-annual-%
   document; a single cumulative `amountReceived`, not a per-installment
   ledger).
+- **Real invoice tracking + escalating payment reminders + a Payments Due
+  page COMPLETE (27 September 2026, a same-day follow-up)** — from a
+  screenshot of the Deployment detail page's Monthly Hours table, the user
+  asked for a real invoice-tracking layer on top of the billing lifecycle
+  above: who invoiced what, a real reference copy of the invoice, and
+  reminders that actually escalate instead of firing once. `sendInvoice`
+  is now a real form (Clerk enters `invoiceNumber`+`invoiceDate`, uploads a
+  PDF copy of the real ERPNext-made invoice — reusing
+  `reimbursement.model.js`'s exact receipt-upload pattern, not a new one).
+  Hours reaching Approved now notifies the Clerk it's ready to invoice;
+  sending the invoice notifies the mobilisation's coordinators + whoever
+  holds `mobilisationsViewer` write (reused as the "MM" audience). The old
+  one-shot 50-day-overdue check is replaced with a real escalation:
+  `deploymentBilling.job.js`'s new `checkPaymentDueEscalation` fires at
+  10/5/3/2/1/0 days remaining, then EVERY SINGLE DAY once overdue (a
+  mounting drumbeat, not one notification) — and fixed the audience while
+  rewriting it (coordinators + MM, not `deploymentsHours`/
+  `deploymentsPaymentDecide`, the wrong circle for a "your client owes
+  money" nag). A new `getPaymentsDue(actor)` (same coordinator-own/
+  `mobilisationsViewer`-sees-all visibility) backs a real `PaymentsDuePage`
+  at `/deployments/payments-due` (a new Sales & Clients nav entry, sibling
+  to Standby List) and a new `countPaymentsDueSoon(actor)` (same list,
+  filtered to the same ≤10-day window the escalation job itself starts
+  nagging at) feeds a new "Payments due soon" row into the dashboard's
+  existing "Waiting on you" widget. Verified: 12/12 script-based
+  assertions against a disposable fixture (4 monthly-hours entries —
+  soon-due/overdue/far-due/already-Approved) covering visibility,
+  sort order, and the dashboard row's exact count, exercised through the
+  real `getDashboard()` code path, not a mocked one; full server suite
+  re-run green (42/42); `eslint` clean (0 errors) across every touched
+  file in both repos; a live browser click-through (throwaway test admin,
+  fully cleaned up after) confirming the new nav entry/page render
+  correctly in both English and Arabic, including full RTL layout. See
+  `docs/REAL-REVENUE-TARGETS-notes.md`'s 27 September follow-up section
+  for the full write-up.
+- **"Estimate" labeling gap on Mobilisation's rate-card profit fields,
+  found and fixed (27 September 2026, from a user screenshot comparison)**
+  — the user compared the new "Actual Performance" dashboard widget
+  (showing a real negative profit/hour for August, since real expenses
+  were recorded but no client payment had been verified yet) against the
+  Deployment Overview export's totals row (showing a large positive
+  "Profit per hour") and flagged what looked like a data inconsistency.
+  Traced to a real labeling gap, not a calculation bug: `Mobilisation.
+  profitPerMonth`'s label already said "(estimate)", but its two siblings
+  computed from the exact same pre-deployment rate card —
+  `profitPerHour`/`otProfitPerHour` — carried no such qualifier anywhere
+  they're shown (`MobilisationDetailPage`, the Deployment Overview modal/
+  export, the dashboard's active-mobilisation card). Fixed by extending
+  the same existing convention to both siblings in en/ar, and by adding an
+  explicit cross-reference to the dashboard's `activeRevenue` widget hint
+  ("…a rate-card estimate, not a real received payment — see Actual
+  Performance below for that"), since the two widgets sit directly
+  stacked on the dashboard — the exact layout the user's screenshot showed.
+  Zero calculation logic touched. Verified: JSON validity + full en/ar key
+  parity, `eslint` clean, and a live browser click-through (throwaway
+  admin, cleaned up after) confirming the new labels render correctly on
+  the Deployment Overview modal (screenshot-matched against the user's own
+  report) and `MobilisationDetailPage`, in both languages. See
+  `docs/REAL-REVENUE-TARGETS-notes.md`'s second 27 September follow-up.

@@ -703,6 +703,18 @@ export async function getPaymentsDue(actor) {
 }
 
 /**
+ * The dashboard's "Payments due soon" row (same visibility as getPaymentsDue
+ * above, reused rather than duplicated) — "soon" mirrors
+ * deploymentBilling.job.js's own PRE_DUE_MILESTONES window (escalation
+ * reminders start at 10 days remaining), so this count only ever moves in
+ * step with when a coordinator/MM actually starts getting nagged about it.
+ */
+export async function countPaymentsDueSoon(actor) {
+  const rows = await getPaymentsDue(actor);
+  return rows.filter((r) => r.daysRemaining != null && r.daysRemaining <= 10).length;
+}
+
+/**
  * Record (or correct) how much the client has actually paid for one already-
  * invoiced month. Cumulative, not a ledger of individual receipts — the
  * process the user described is one client payment per month's invoice, not

@@ -159,3 +159,143 @@ payment decisions) — nobody but Admin can use this pipeline until then.
   this without a breaking change.
 - The 45/50-day overdue job is company-wide, not Coordinator-scoped (same
   posture as the existing `expiryAlert`/`overdueInvoice` jobs).
+
+## Follow-up (27 September 2026): real invoice tracking + escalating payment
+## reminders + a Payments Due page
+
+M4/M5 above tracked ONLY dates (`invoiceSentAt`/`invoiceDueAt`) and a plain
+received amount — the user asked (from a screenshot of the Deployment
+detail page's Monthly Hours table) for a real invoice-tracking layer on top:
+who invoiced what, a real reference copy of the invoice, and reminders that
+actually escalate as the due date approaches instead of firing once.
+
+- **A real "Send Invoice" form.** `sendInvoice` now requires
+  `invoiceNumber` + `invoiceDate` (both typed by the Clerk) plus an uploaded
+  PDF copy of the real invoice — the invoice itself is still made in
+  ERPNext, same M4/M5 framing; this is a reference copy for this app's own
+  tracking, not a second source of truth. Reuses
+  `financialRequests/reimbursement.model.js`'s exact receipt-upload shape
+  (`middleware/upload.js`'s `uploadSingle`/`signedDownloadUrl`/
+  `destroyDocumentFile`, Cloudinary, field name `"file"`) rather than
+  inventing a second upload pattern. New `monthlyHoursSchema` fields:
+  `invoiceNumber`, `invoiceDate`, `invoiceFile` (fileName/resourceType/
+  originalName/mimeType/size — identical sub-shape to
+  `ReimbursementClaim.receipt`). New `GET
+  /api/deployments/:id/monthly-hours/:entryId/invoice-file` (signed
+  download, mirrors `reimbursement.service.js`'s `getReceiptFile`).
+- **Notify the Clerk the moment hours are Approved** — `decideMonthlyHours`
+  now also notifies whoever holds `deploymentsInvoicing` write on Approve,
+  closing the gap where invoicing only ever happened if someone remembered
+  to check.
+- **Notify on invoice sent** — once a Clerk sends the invoice, a new
+  `paymentTrackingAudience()` helper notifies both the mobilisation's own
+  coordinators AND whoever holds `mobilisationsViewer` write (reused as the
+  "MM" audience, not a new Section Access key — the same broad-visibility
+  circle that already sees this mobilisation's commercial data once
+  Approved).
+- **Escalating reminders, replacing the old one-shot 50-day check.**
+  `deploymentBilling.job.js`'s payment-overdue check was rewritten as
+  `checkPaymentDueEscalation`: a new `escalationStage(daysRemaining)`
+  helper fires at 10/5/3/2/1/0 days remaining (`t-minus-N`, each a distinct
+  dedupe key so every milestone notifies exactly once), then — once
+  genuinely overdue — fires EVERY SINGLE DAY (`overdue-N`, N = days past
+  due, still unique per day so it keeps nagging rather than going silent
+  after one notification). Audience is the same `paymentTrackingAudience()`
+  used for "invoice sent" (coordinators + MM) — a real fix, not just a
+  rename: the previous one-shot version notified `deploymentsHours`/
+  `deploymentsPaymentDecide` write members instead, the wrong audience for
+  a "your client owes money" nag. `checkTimesheetOverdue` (the 45-day
+  timesheet-missing check) is unchanged.
+- **A real "Payments Due" list + dashboard row.** `getPaymentsDue(actor)`
+  returns every invoiced-but-not-fully-approved monthly-hours entry across
+  every Deployment, soonest-due first — same visibility rule as
+  `paymentTrackingAudience`: a Coordinator sees only mobilisations they're
+  on, anyone holding `mobilisationsViewer` read sees everything. New client
+  page `PaymentsDuePage.jsx` at `/deployments/payments-due` (no dedicated
+  Section Access gate on the route — the data is already correctly scoped
+  server-side, same reasoning as the Mobilisation worker-history page),
+  reached from a new "Payments Due" Sales & Clients nav entry, sibling to
+  Standby List. A new `countPaymentsDueSoon(actor)` (reuses
+  `getPaymentsDue`, filtered to `daysRemaining <= 10` — deliberately the
+  same window the escalation job starts nagging at, so this count only
+  ever moves in step with when a coordinator/MM actually starts getting
+  reminders) backs a new "Payments due soon" row in the dashboard's
+  existing "Waiting on you" widget (`getMyPendingActions`), linking to the
+  same page.
+
+**Verified**: a disposable Client/Coordinator/other-Coordinator/Admin/
+Mobilisation/Deployment fixture (4 monthly-hours entries: soon-due,
+overdue, far-due, already-Approved) exercised directly against
+`getPaymentsDue`/`countPaymentsDueSoon`/the full `getDashboard()` code
+path — 12/12 assertions: the mobilisation's own coordinator sees exactly
+the 3 non-Approved entries sorted soonest-first, an unrelated coordinator
+sees none, Admin sees everything via the `mobilisationsViewer`
+short-circuit, and the dashboard's "Payments due soon" row shows the
+correct count (2 — soon + overdue, not the far one) for the coordinator on
+the mobilisation and is entirely absent (not zero — filtered out, same as
+every other "Waiting on you" row) for the unrelated one. Full server test
+suite re-run green (42/42) and `eslint` clean (0 errors) across every
+touched file in both repos. A live browser click-through (throwaway test
+admin, cleaned up after) confirmed: the "Payments Due" nav entry and page
+render correctly in both English and Arabic (including full RTL layout —
+screenshot-verified), the empty state renders correctly against real dev
+data (no invoice has been sent through the new form yet, so nothing is
+due), and the dashboard's "Waiting on you" widget correctly shows no
+"Payments due soon" row while the real count is zero. All throwaway
+fixtures (client, users, mobilisation, deployment, refresh tokens,
+audit-log rows) confirmed removed from the dev database afterward.
+
+## Follow-up (27 September 2026): "estimate" labeling gap on Mobilisation's
+## rate-card profit fields, found from a user screenshot comparison
+
+The user compared two dashboard/report screens and flagged what looked like
+a data inconsistency: the new "Actual Performance" widget showed a NEGATIVE
+profit per hour (-2.53) for August 2026, while the Deployment Overview
+export's totals row showed a large POSITIVE "Profit per hour" (131.00) for
+the same live data. These are not actually in conflict — they are two
+fundamentally different numbers that happen to share a near-identical
+column name:
+
+- **"Actual Performance"'s `profitPerHour`** = real net profit (verified
+  `amountReceived` minus real recorded expenses) ÷ real worked
+  `actualHours`, for one specific closed calendar month. August 2026 is
+  negative simply because real expenses (FTA/allowance/mobilisation cost/
+  deductions) were recorded but no client payment had yet been verified as
+  received for that month (`amountReceived: 0`) — an honest, expected state
+  early in a billing cycle, not a bug.
+- **The Deployment Overview / Mobilisation export's `profitPerHour`/
+  `otProfitPerHour`** = `Mobilisation.profitPerHour`/`otProfitPerHour` — a
+  pure rate-card figure (`clientRate - clientCommission [- subcontractor
+  side]`, `otClientRate - otEmployeeRate`) computed once at mobilisation
+  time, per the model's own doc comment: "This is a pre-deployment ESTIMATE
+  off the contracted/target hours only." It has no dependency on whether
+  those hours were ever actually worked, invoiced, or paid.
+
+The REAL gap, once traced: `profitPerMonth`'s i18n label already said
+"Profit per month (estimate)", but its two siblings computed from the
+exact same rate card — `profitPerHour`/`otProfitPerHour` — carried no such
+qualifier anywhere they're shown (`MobilisationDetailPage`, the Deployment
+Overview modal/export, and the dashboard's "Company/Your active
+mobilisation profit per hour" card). A viewer had no label-level cue that
+two adjacent "profit per hour" figures on different screens were entirely
+different KINDS of number. Fixed by extending the SAME existing
+`profitPerMonth (estimate)` convention to its two siblings — a pure
+labeling fix, zero calculation logic touched:
+- `staffMobilisations.detail.fields.profitPerHour`/`otProfitPerHour` →
+  "Profit per hour (estimate)" / "OT profit per hour (estimate)" (en);
+  matching "(تقديري)" suffix added in ar.
+- The dashboard's `activeRevenue` widget hint gained an explicit
+  cross-reference: "…a rate-card estimate, not a real received payment
+  (see Actual Performance below for that)" — chosen over adding "(estimate)"
+  to the card's own all-caps title, since the two widgets sit directly
+  stacked on the dashboard (the exact layout in the user's own screenshot)
+  and the hint text is always visible, not a hover-only tooltip.
+
+**Verified**: JSON validity + full en/ar key-parity check on both locale
+files; `eslint` clean; a live browser click-through (throwaway admin,
+cleaned up after) confirmed the new "(estimate)"/"(تقديري)" labels render
+correctly on the Deployment Overview modal (screenshot-matched against the
+user's own reported screenshot) and on `MobilisationDetailPage`, and the
+dashboard's active-mobilisation-profit-per-hour hint now reads correctly
+in Arabic with a working cross-reference to "الأداء الفعلي" (Actual
+Performance).

@@ -44,7 +44,7 @@ import { countStaleRequirements, getMyRequirementsSummary } from '../requirement
 import { countOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ExitReentry from '../exitDocuments/exitReentry.model.js';
-import { getStandbyWorkforce, getActualPerformanceSummary } from '../deployments/deployment.service.js';
+import { getStandbyWorkforce, getActualPerformanceSummary, countPaymentsDueSoon } from '../deployments/deployment.service.js';
 import User from '../auth/user.model.js';
 import { monthBounds, NON_OWN_EMPLOYEE_FILTER, realRevenueByCoordinator } from '../mobilisationTargets/mobilisationTarget.service.js';
 import MobilisationTarget from '../mobilisationTargets/mobilisationTarget.model.js';
@@ -305,9 +305,10 @@ const PENDING_ACTION_MODULES = [
 //     annotateCanDecide so it skips its own query entirely.
 async function getMyPendingActions(actor, mySectionAccess) {
   if (!actor?.userId) return [];
-  const [staleRequirements, openTasks, itemsByModule] = await Promise.all([
+  const [staleRequirements, openTasks, paymentsDueSoon, itemsByModule] = await Promise.all([
     countStaleRequirements(actor),
     countOpenTasks(actor),
+    countPaymentsDueSoon(actor),
     Promise.all(
       PENDING_ACTION_MODULES.map(({ Model, pendingStatus }) =>
         Model.find({ status: pendingStatus }).select('workflow currentStep steps status').lean()
@@ -341,6 +342,7 @@ async function getMyPendingActions(actor, mySectionAccess) {
     ...perModule,
     { label: 'Stale requirements', url: '/requirements', count: staleRequirements },
     { label: 'Open tasks', url: '/daily-updates?tab=tasks', count: openTasks },
+    { label: 'Payments due soon', url: '/deployments/payments-due', count: paymentsDueSoon },
   ].filter((m) => m.count > 0);
 }
 
