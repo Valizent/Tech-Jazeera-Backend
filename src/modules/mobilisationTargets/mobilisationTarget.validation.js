@@ -20,6 +20,7 @@ export const setTargetSchema = z.object({
   // a real limit" caps (e.g. deployment/mobilisation export row caps).
   target: z.number().min(1, 'Target must be at least 1.').max(10_000_000),
   incentivePercent: z.number().min(0).max(100).optional(),
+  semiAnnualIncentivePercent: z.number().min(0).max(100).optional(),
 });
 
 export const getProgressSchema = z.object({
@@ -28,6 +29,10 @@ export const getProgressSchema = z.object({
 
 export const getMyTargetSchema = z.object({
   month: monthSchema.optional(),
+});
+
+export const getSemiAnnualSchema = z.object({
+  endMonth: monthSchema.optional(),
 });
 
 export const targetIdParamSchema = z.object({ id });

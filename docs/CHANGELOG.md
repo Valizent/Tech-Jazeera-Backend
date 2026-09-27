@@ -1502,3 +1502,44 @@ when requested):**
   server code touched. Verified: client lint clean (0 errors), production
   build clean, new key confirmed present and correct in both compiled
   locale bundles.
+- **Real-Revenue Coordinator Targets COMPLETE (27 September 2026)** — a
+  7-part rebuild of the coordinator-target/incentive mechanism, replacing
+  the 2026-09-22 profit-estimate version with one based on real client
+  payments, matching the company's actual invoicing/payment process end to
+  end. Explicit framing from the user that shaped every choice: "accounting
+  is done by ERPNext, our app is for HR and our manpower management" — so
+  this extends `Deployment.monthlyHours` (the existing manpower-billing
+  record) rather than the formal `Invoice`/`Quotation` models, which stay
+  completely untouched. M1: the dashboard's active-mobilisation estimate
+  switched from `profitPerMonth` to `profitPerHour`. M2: Own-Employee
+  mobilisations excluded from the Riyal target (shown as a count instead),
+  shared consistently across the target/leaderboard/drill-down figures. M3:
+  a configurable per-coordinator `sharePercent` on joint mobilisations,
+  replacing the old "everyone gets full credit" rule. M4: a real billing
+  lifecycle on the monthly-hours entry itself (`invoiceSentAt`/
+  `invoiceDueAt`, a 50-day window) gated by a new `deploymentsInvoicing`
+  Section Access key (the "Clerk" step). M5: payment recording +
+  Financial-Manager approval (new `deploymentsPaymentDecide` key) —
+  `achieved` is now computed LIVE from every Approved payment, split by
+  coordinator share, credited to the SERVICE month, never cached. M6: a new
+  daily job (`deploymentBilling.job.js`) flagging a 45-day-overdue
+  timesheet or a 50-day-overdue payment, reusing the existing
+  `notifyUser` dedupe mechanism — no new tracking fields needed. M7: a
+  rolling 6-month semi-annual tracker with its own standing incentive %,
+  paying out on the NET PROFIT of just the excess over target (not the
+  whole period), reusing Deployment's own `computeMonthlyRevenueAndExpenses`
+  formula. Verified: 14/14 assertions for M1/M2 and 21/21 for the full
+  M3–M7 pipeline (a real joint 70/30 mobilisation run through send-invoice
+  → record-payment → FM-decide → correct target split, leaderboard/
+  drill-down agreement, and the semi-annual excess/incentive math), plus a
+  live browser click-through of the new billing UI (Send Invoice → Record
+  Payment → the Approve confirmation modal, all rendering exactly correct
+  copy and amounts) and a clean client production build. All throwaway
+  test data fully removed from the dev database afterward. **User action
+  needed**: grant `deploymentsInvoicing`/`deploymentsPaymentDecide` from
+  the Section Access page to the real roles who should hold them — nobody
+  but Admin can use this pipeline until then. See
+  `docs/REAL-REVENUE-TARGETS-notes.md` for the full write-up, including two
+  deliberate, flagged simplifications (no separate semi-annual-%
+  document; a single cumulative `amountReceived`, not a per-installment
+  ledger).

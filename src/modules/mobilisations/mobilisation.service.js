@@ -1109,6 +1109,93 @@ export async function confirmCoordinator(id, userId, actor) {
 }
 
 /**
+ * Set every coordinator's revenue share in one call (2026-09-27, the user's
+ * own ask, replacing the old "every joint coordinator gets full credit"
+ * rule). All-or-nothing: `shares` must name EXACTLY the mobilisation's
+ * current coordinators (no missing, no extra) and sum to 100 — a partial
+ * set (some explicit, some not) would be ambiguous about what the unset
+ * ones get, so it's rejected outright rather than guessed at. Same gate as
+ * addCoordinator/removeCoordinator: primary coordinator or Admin, Draft/
+ * Rejected only (a share only matters before this becomes the real revenue
+ * record it'll be read from at Approved).
+ */
+export async function setCoordinatorShares(id, shares, actor) {
+  const mobilisation = await Mobilisation.findById(id);
+  if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
+  if (!['Draft', 'Rejected'].includes(mobilisation.status)) {
+    throw new ApiError(400, 'Coordinator shares can only be changed on a Draft or Rejected mobilisation.');
+  }
+  assertPrimaryOrAdmin(mobilisation, actor);
+
+  const currentIds = mobilisation.coordinators.map((c) => c.user.toString()).sort();
+  const givenIds = shares.map((s) => s.userId).sort();
+  if (JSON.stringify(currentIds) !== JSON.stringify(givenIds)) {
+    throw new ApiError(400, 'Shares must be given for exactly the current set of coordinators, no more, no fewer.');
+  }
+  const total = shares.reduce((sum, s) => sum + s.sharePercent, 0);
+  if (Math.abs(total - 100) > 0.01) {
+    throw new ApiError(400, `Shares must sum to 100 (got ${total}).`);
+  }
+
+  const shareById = new Map(shares.map((s) => [s.userId, s.sharePercent]));
+  for (const c of mobilisation.coordinators) c.sharePercent = shareById.get(c.user.toString());
+  await mobilisation.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'mobilisation.coordinator.setShares',
+    targetType: 'Mobilisation',
+    targetId: mobilisation._id,
+    meta: { shares },
+    ip: actor.ip,
+  });
+  return mobilisation.toObject();
+}
+
+/** Clear every coordinator's share back to null — reverts to the even-split
+ *  default. Same gate as setCoordinatorShares. */
+export async function clearCoordinatorShares(id, actor) {
+  const mobilisation = await Mobilisation.findById(id);
+  if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
+  if (!['Draft', 'Rejected'].includes(mobilisation.status)) {
+    throw new ApiError(400, 'Coordinator shares can only be changed on a Draft or Rejected mobilisation.');
+  }
+  assertPrimaryOrAdmin(mobilisation, actor);
+
+  for (const c of mobilisation.coordinators) c.sharePercent = null;
+  await mobilisation.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'mobilisation.coordinator.clearShares',
+    targetType: 'Mobilisation',
+    targetId: mobilisation._id,
+    ip: actor.ip,
+  });
+  return mobilisation.toObject();
+}
+
+/**
+ * A coordinator's effective revenue share on a mobilisation — their own
+ * explicit `sharePercent` if every coordinator has one set (validated to
+ * sum to 100 by setCoordinatorShares), otherwise an even split across
+ * however many coordinators are on the record (the pre-2026-09-27 default
+ * behavior, and what every existing mobilisation still gets since it has no
+ * explicit shares). Returns 0 if the given user isn't actually a
+ * coordinator on this mobilisation. Exported for the real-revenue crediting
+ * logic (mobilisationTarget.service.js) to split a payment between joint
+ * coordinators.
+ */
+export function effectiveSharePercent(mobilisation, coordinatorUserId) {
+  const coordinators = mobilisation.coordinators ?? [];
+  const entry = coordinators.find((c) => c.user.toString() === coordinatorUserId.toString());
+  if (!entry) return 0;
+  const allExplicit = coordinators.length > 0 && coordinators.every((c) => c.sharePercent != null);
+  if (allExplicit) return entry.sharePercent;
+  return 100 / coordinators.length;
+}
+
+/**
  * Real bug fix (2026-09-16, a user-reported inconsistency): "needs your
  * review" for the CURRENT step — shared by submitMobilisation
  * (notifySubmission, below) and approveMobilisation's own `decideApprovalStep`

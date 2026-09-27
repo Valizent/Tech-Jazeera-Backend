@@ -23,6 +23,7 @@ import {
   mobilisationIdParamSchema,
   mobilisationCoordinatorParamSchema,
   addCoordinatorSchema,
+  setCoordinatorSharesSchema,
   commercialDetailsSchema,
   decideMobilisationSchema,
   mobilisationDocumentCategorySchema,
@@ -106,6 +107,16 @@ router.patch(
   '/:id/coordinators/:userId/confirm',
   validate({ params: mobilisationCoordinatorParamSchema }),
   asyncHandler(mobilisationController.confirmCoordinator)
+);
+router.put(
+  '/:id/coordinator-shares',
+  validate({ params: mobilisationIdParamSchema, body: setCoordinatorSharesSchema }),
+  asyncHandler(mobilisationController.setCoordinatorShares)
+);
+router.delete(
+  '/:id/coordinator-shares',
+  validate({ params: mobilisationIdParamSchema }),
+  asyncHandler(mobilisationController.clearCoordinatorShares)
 );
 router.post(
   '/:id/submit',

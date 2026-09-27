@@ -52,6 +52,8 @@ export const SECTION_KEYS = [
   'clientsManage',
   'deploymentsHours',
   'deploymentsHoursDecide',
+  'deploymentsInvoicing',
+  'deploymentsPaymentDecide',
   'deploymentsRelease',
   'deploymentsEdit',
   'subcontractorsManage',

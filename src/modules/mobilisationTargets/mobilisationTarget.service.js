@@ -6,38 +6,42 @@
  * own target read is always allowed (no gate) so the dashboard widget works for
  * everyone who is a Coordinator.
  *
- * Progress: SUM of profitPerMonth (2026-09-22, real user correction — used to
- * be a plain COUNT) across Approved + Completed mobilisations where the
- * coordinator is listed on the `coordinators` array (any position — primary
- * or joint) and the `mobilisationDate` falls within the target month. Same
- * filter as the original count-based version, just summed instead of
- * counted — this matches the user's own confirmed rule (both primary and
- * joint coordinators count) exactly as before. A mobilisation with no
- * profitPerMonth yet set (null — see mobilisation.model.js) contributes 0,
- * never breaking the sum.
+ * Progress — REAL revenue (2026-09-27, replacing the original 2026-09-22
+ * estimate-based version, the user's own explicit ask: a target should
+ * reflect money that actually arrived, not a figure computed the moment a
+ * mobilisation was approved). `achieved` is now the SUM, across every
+ * Deployment.monthlyHours entry for the target month with
+ * `paymentDecisionStatus === 'Approved'` (a Financial-Manager sign-off — see
+ * deployment.service.js's decidePayment), of that entry's `amountReceived`
+ * split by the coordinator's `effectiveSharePercent` on the Deployment's
+ * source Mobilisation (mobilisation.service.js — full credit if the
+ * coordinator is alone, an even or admin-set split if joint). Computed LIVE
+ * on every read (realRevenueByCoordinator, below) — never cached/pushed to a
+ * separate ledger — the same "never trust a stored financial figure,
+ * recompute" discipline Payroll/Invoice totals already follow.
  *
- * Own-Employee exclusion (2026-09-27, real user correction): a mobilisation
- * of the company's OWN staff (`workerType: 'Employee'`) never contributes to
+ * Own-Employee exclusion (2026-09-27, real user correction): a Deployment of
+ * the company's OWN staff (`workerType: 'Employee'`) never contributes to
  * this sum — a coordinator's real value to the company is bringing in
  * supplied/outsourced workers, not deploying existing employees. Own-Employee
  * mobilisations still count (and are surfaced separately, see
  * `countOwnEmployee`/`ownEmployeeCount` below) as a plain count the
- * coordinator/MM can see, just never as Riyal progress. `NON_OWN_EMPLOYEE_FILTER`
- * is shared with dashboard.service.js's Coordinator Leaderboard/Drill-down —
- * those surface the SAME "profit toward target" figure in two more places, so
- * the exclusion is defined once here and imported, not redefined three times
- * (the same reasoning `monthBounds` is already shared for).
+ * coordinator/MM can see, just never as Riyal progress.
  */
 import mongoose from 'mongoose';
 import MobilisationTarget from './mobilisationTarget.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
+import Deployment from '../deployments/deployment.model.js';
 import User from '../auth/user.model.js';
+import { effectiveSharePercent } from '../mobilisations/mobilisation.service.js';
+import { computeMonthlyRevenueAndExpenses } from '../deployments/deployment.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 
-/** Shared match fragment excluding Own-Employee mobilisations from any
- *  "profit toward target" aggregate — see this file's own top doc comment. */
+/** Shared match fragment excluding Own-Employee mobilisations from the
+ *  activity-count aggregates below (getCoordinatorLeaderboard's `count`,
+ *  countOwnEmployee's own inverse) — see this file's own top doc comment. */
 export const NON_OWN_EMPLOYEE_FILTER = { workerType: { $ne: 'Employee' } };
 
 /** Returns [firstDayOfMonth, firstDayOfNextMonth) as Date objects. Exported so
@@ -53,31 +57,240 @@ export function monthBounds(month) {
   return { start, end };
 }
 
-/** Sum of profitPerMonth across a coordinator's Approved/Completed
- *  mobilisations in a month — the coordinator's real estimated monthly
- *  profit contribution, what "progress" toward a Riyal target means. */
-async function sumProgress(coordinatorId, month) {
-  const { start, end } = monthBounds(month);
-  // Real bug found and fixed during this feature's own verification: unlike
-  // find()/countDocuments(), an aggregate() $match does NOT auto-cast a
-  // plain string to ObjectId — every real caller here passes a string
-  // (req.user.id straight off the JWT), which silently matched ZERO
-  // documents (no error, just achieved:0 for every real coordinator) until
-  // this explicit cast was added. Same class of gap the 15 September
-  // QA audit fixed elsewhere in this app for the same reason.
-  const [row] = await Mobilisation.aggregate([
+const round2 = (n) => Math.round(n * 100) / 100;
+
+/**
+ * Every coordinator's REAL revenue credit for one calendar month, company-
+ * wide, in a single query — the one shared definition sumProgress/
+ * sumProgressBatch (below) and dashboard.service.js's Coordinator
+ * Leaderboard/Drill-down all read from, so the three can never quietly
+ * disagree (the same reasoning monthBounds is already shared for). Excludes
+ * Own-Employee Deployments (workerType) and any archived Deployment.
+ * Returns Map<coordinatorIdString, totalAmount>.
+ */
+export async function realRevenueByCoordinator(month) {
+  const rows = await Deployment.aggregate([
+    { $match: { workerType: { $ne: 'Employee' }, archived: { $ne: true } } },
+    { $unwind: '$monthlyHours' },
+    { $match: { 'monthlyHours.month': month, 'monthlyHours.paymentDecisionStatus': 'Approved' } },
     {
-      $match: {
-        'coordinators.user': new mongoose.Types.ObjectId(coordinatorId),
-        status: { $in: ['Approved', 'Completed'] },
-        mobilisationDate: { $gte: start, $lt: end },
-        archived: { $ne: true },
-        ...NON_OWN_EMPLOYEE_FILTER,
+      $lookup: {
+        from: 'mobilisations',
+        localField: 'mobilisation',
+        foreignField: '_id',
+        as: 'mob',
       },
     },
-    { $group: { _id: null, total: { $sum: { $ifNull: ['$profitPerMonth', 0] } } } },
+    { $unwind: '$mob' },
+    { $project: { amountReceived: '$monthlyHours.amountReceived', coordinators: '$mob.coordinators' } },
   ]);
-  return row?.total ?? 0;
+
+  const totals = new Map();
+  for (const row of rows) {
+    const mobStub = { coordinators: row.coordinators ?? [] };
+    for (const c of mobStub.coordinators) {
+      const uid = c.user.toString();
+      const share = effectiveSharePercent(mobStub, uid);
+      const credited = round2((row.amountReceived || 0) * (share / 100));
+      totals.set(uid, round2((totals.get(uid) ?? 0) + credited));
+    }
+  }
+  return totals;
+}
+
+/**
+ * Same population as realRevenueByCoordinator, but also returns each
+ * coordinator's share of the NET PROFIT behind that revenue — for the
+ * semi-annual incentive (below), which is based on profit, not gross
+ * revenue. Reuses deployment.service.js's own computeMonthlyRevenueAndExpenses
+ * (the exact formula Deployment's own per-entry `profit` column already
+ * shows) rather than re-deriving it — one definition, not two. Since
+ * `achieved` is based on `amountReceived`, never the full computed
+ * `revenue` (a payment can be partial), the credited profit is scaled by
+ * the same received/revenue ratio before being split by coordinator share
+ * — a partially-paid month contributes only its paid-for share of profit
+ * too. Returns { revenueTotals, profitTotals }, both
+ * Map<coordinatorIdString, amount>.
+ */
+async function realRevenueAndProfitByCoordinator(month) {
+  const deployments = await Deployment.find({
+    workerType: { $ne: 'Employee' },
+    archived: { $ne: true },
+    monthlyHours: { $elemMatch: { month, paymentDecisionStatus: 'Approved' } },
+  })
+    .select('monthlyHours mobilisation')
+    .populate({
+      path: 'mobilisation',
+      select:
+        'coordinators workerType clientRate clientCommission otClientRate otEmployeeRate subcontractorRate subcontractorCommission fta allowance mobilisationCost',
+    })
+    .lean();
+
+  const revenueTotals = new Map();
+  const profitTotals = new Map();
+  for (const d of deployments) {
+    if (!d.mobilisation) continue;
+    const entry = d.monthlyHours.find((m) => m.month === month && m.paymentDecisionStatus === 'Approved');
+    if (!entry) continue;
+    const { revenue, profit } = computeMonthlyRevenueAndExpenses(entry, d.mobilisation, d.monthlyHours) ?? {};
+    if (!revenue) continue;
+    // Capped at 1 — a real-world payment can exceed the computed estimate
+    // (e.g. a negotiated adjustment); never credit MORE profit than the
+    // entry's own computed profit.
+    const receivedRatio = Math.min(1, (entry.amountReceived || 0) / revenue);
+    const receivedRevenue = round2(entry.amountReceived || 0);
+    const receivedProfit = round2(profit * receivedRatio);
+
+    for (const c of d.mobilisation.coordinators ?? []) {
+      const uid = c.user.toString();
+      const share = effectiveSharePercent(d.mobilisation, uid) / 100;
+      revenueTotals.set(uid, round2((revenueTotals.get(uid) ?? 0) + receivedRevenue * share));
+      profitTotals.set(uid, round2((profitTotals.get(uid) ?? 0) + receivedProfit * share));
+    }
+  }
+  return { revenueTotals, profitTotals };
+}
+
+/** 'YYYY-MM' strings for the 6 calendar months ending at (and including)
+ *  `endMonth`, oldest first — the semi-annual tracker's rolling window. */
+function last6Months(endMonth) {
+  const [y, m] = endMonth.split('-').map(Number);
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(y, m - 1 - i, 1);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return months;
+}
+
+/**
+ * One coordinator's semi-annual real-revenue progress, rolling 6-month
+ * window ending at `endMonth`. `semiAnnualTarget` is the SUM of each of
+ * those 6 months' own individual MobilisationTarget.target (a coordinator's
+ * monthly target can change month to month, so this isn't just "the latest
+ * ×6"). `incentivePercent` is whichever month's `semiAnnualIncentivePercent`
+ * was most recently set (see the model's own doc comment on why there's no
+ * separate semi-annual document). The incentive applies ONLY to the net
+ * profit behind the EXCESS over target (the user's own confirmed rule) —
+ * computed by applying the whole window's own profit-to-revenue ratio to
+ * just the excess revenue, since profit isn't tracked per-riyal, only
+ * per-placement.
+ */
+export async function getMySemiAnnualProgress(actor, endMonth) {
+  const months = last6Months(endMonth);
+  const uid = actor.userId.toString();
+  let achieved = 0;
+  let netProfit = 0;
+  let semiAnnualTarget = 0;
+  let incentivePercent = 0;
+  let hasAnyTarget = false;
+
+  for (const month of months) {
+    const [{ revenueTotals, profitTotals }, targetDoc] = await Promise.all([
+      realRevenueAndProfitByCoordinator(month),
+      MobilisationTarget.findOne({ coordinator: uid, month }).lean(),
+    ]);
+    achieved = round2(achieved + (revenueTotals.get(uid) ?? 0));
+    netProfit = round2(netProfit + (profitTotals.get(uid) ?? 0));
+    if (targetDoc) {
+      hasAnyTarget = true;
+      semiAnnualTarget += targetDoc.target;
+      incentivePercent = targetDoc.semiAnnualIncentivePercent ?? 0;
+    }
+  }
+
+  if (!hasAnyTarget) return null; // widget hides itself, same as getMyTarget
+
+  const excess = Math.max(0, round2(achieved - semiAnnualTarget));
+  const marginRatio = achieved > 0 ? netProfit / achieved : 0;
+  const excessNetProfit = round2(excess * marginRatio);
+  const incentiveAmount = round2(excessNetProfit * (incentivePercent / 100));
+
+  return {
+    windowMonths: months,
+    semiAnnualTarget,
+    achieved,
+    netProfit,
+    excess,
+    excessNetProfit,
+    incentivePercent,
+    incentiveAmount,
+    hit: semiAnnualTarget > 0 && achieved >= semiAnnualTarget,
+  };
+}
+
+/**
+ * Same figure as getMySemiAnnualProgress, for every coordinator who has at
+ * least one target set within the window — management view. Computes each
+ * month's revenue/profit/targets ONCE (not once per coordinator), same N+1
+ * avoidance sumProgressBatch already established.
+ */
+export async function getAllSemiAnnualProgress(actor, endMonth) {
+  if (!(await canManageTargets(actor))) {
+    throw new ApiError(403, 'You do not have permission to view mobilisation targets.');
+  }
+  const months = last6Months(endMonth);
+
+  const perMonth = await Promise.all(
+    months.map(async (month) => {
+      const [{ revenueTotals, profitTotals }, targets] = await Promise.all([
+        realRevenueAndProfitByCoordinator(month),
+        MobilisationTarget.find({ month }).lean(),
+      ]);
+      return { revenueTotals, profitTotals, targetByCoordinator: new Map(targets.map((t) => [t.coordinator.toString(), t])) };
+    })
+  );
+
+  const coordinatorIds = new Set();
+  for (const { targetByCoordinator } of perMonth) {
+    for (const uid of targetByCoordinator.keys()) coordinatorIds.add(uid);
+  }
+  if (coordinatorIds.size === 0) return { windowMonths: months, rows: [] };
+
+  const coordinators = await User.find({ _id: { $in: [...coordinatorIds] } })
+    .select('name email')
+    .lean();
+
+  const rows = coordinators.map((c) => {
+    const uid = c._id.toString();
+    let achieved = 0;
+    let netProfit = 0;
+    let semiAnnualTarget = 0;
+    let incentivePercent = 0;
+    for (const { revenueTotals, profitTotals, targetByCoordinator } of perMonth) {
+      achieved = round2(achieved + (revenueTotals.get(uid) ?? 0));
+      netProfit = round2(netProfit + (profitTotals.get(uid) ?? 0));
+      const t = targetByCoordinator.get(uid);
+      if (t) {
+        semiAnnualTarget += t.target;
+        incentivePercent = t.semiAnnualIncentivePercent ?? 0;
+      }
+    }
+    const excess = Math.max(0, round2(achieved - semiAnnualTarget));
+    const marginRatio = achieved > 0 ? netProfit / achieved : 0;
+    const excessNetProfit = round2(excess * marginRatio);
+    const incentiveAmount = round2(excessNetProfit * (incentivePercent / 100));
+    return {
+      coordinator: c,
+      semiAnnualTarget,
+      achieved,
+      netProfit,
+      excess,
+      excessNetProfit,
+      incentivePercent,
+      incentiveAmount,
+      hit: semiAnnualTarget > 0 && achieved >= semiAnnualTarget,
+    };
+  });
+
+  return { windowMonths: months, rows: rows.sort((a, b) => a.coordinator.name.localeCompare(b.coordinator.name)) };
+}
+
+/** A single coordinator's real revenue credit for one month — see
+ *  realRevenueByCoordinator's own doc comment. */
+async function sumProgress(coordinatorId, month) {
+  const totals = await realRevenueByCoordinator(month);
+  return totals.get(coordinatorId.toString()) ?? 0;
 }
 
 /** Count of a coordinator's Own-Employee mobilisations in a month — shown
@@ -115,32 +328,20 @@ async function countOwnEmployeeBatch(coordinatorIds, month) {
 }
 
 /**
- * Same figure as sumProgress, batched across MANY coordinators in one query
- * (2026-09-24, a real N+1 found while looking for further performance wins —
- * getAllProgress used to call sumProgress once PER coordinator with a target
- * that month, the exact class of per-item-aggregate pattern the 21 September
- * performance audit fixed elsewhere in this app (P3/P4) — invisible today at
- * 2 real coordinators, but the same growth-risk shape). Mirrors
- * dashboard.service.js's getCoordinatorLeaderboard, which computes the
- * identical figure company-wide via the same $unwind+$group shape.
+ * Same figure as sumProgress, for MANY coordinators at once — just
+ * realRevenueByCoordinator's own map, narrowed to the ids asked for (that
+ * function already computes company-wide in one query, so there's no
+ * separate N+1 to avoid here the way the old per-coordinator
+ * Mobilisation.aggregate version had to).
  */
 async function sumProgressBatch(coordinatorIds, month) {
-  const { start, end } = monthBounds(month);
-  const rows = await Mobilisation.aggregate([
-    {
-      $match: {
-        'coordinators.user': { $in: coordinatorIds.map((id) => new mongoose.Types.ObjectId(id)) },
-        status: { $in: ['Approved', 'Completed'] },
-        mobilisationDate: { $gte: start, $lt: end },
-        archived: { $ne: true },
-        ...NON_OWN_EMPLOYEE_FILTER,
-      },
-    },
-    { $unwind: '$coordinators' },
-    { $match: { 'coordinators.user': { $in: coordinatorIds.map((id) => new mongoose.Types.ObjectId(id)) } } },
-    { $group: { _id: '$coordinators.user', total: { $sum: { $ifNull: ['$profitPerMonth', 0] } } } },
-  ]);
-  return new Map(rows.map((r) => [r._id.toString(), r.total]));
+  const totals = await realRevenueByCoordinator(month);
+  const idSet = new Set(coordinatorIds.map((id) => id.toString()));
+  const filtered = new Map();
+  for (const [uid, total] of totals) {
+    if (idSet.has(uid)) filtered.set(uid, total);
+  }
+  return filtered;
 }
 
 export async function canManageTargets(actor) {
@@ -156,7 +357,7 @@ export async function setTarget(data, actor) {
   if (!(await canManageTargets(actor))) {
     throw new ApiError(403, 'You do not have permission to manage mobilisation targets.');
   }
-  const { coordinatorId, month, target, incentivePercent } = data;
+  const { coordinatorId, month, target, incentivePercent, semiAnnualIncentivePercent } = data;
 
   // Confirm the target user actually exists and is a Coordinator.
   const coordUser = await User.findById(coordinatorId).select('name role').lean();
@@ -172,6 +373,7 @@ export async function setTarget(data, actor) {
       month,
       target,
       incentivePercent: incentivePercent ?? 0,
+      semiAnnualIncentivePercent: semiAnnualIncentivePercent ?? 0,
       setBy: actor.userId,
     },
     { upsert: true, new: true, runValidators: true }
@@ -182,7 +384,7 @@ export async function setTarget(data, actor) {
     action: 'mobilisationTarget.set',
     targetType: 'MobilisationTarget',
     targetId: doc._id,
-    meta: { coordinatorId, coordinatorName: coordUser.name, month, target, incentivePercent },
+    meta: { coordinatorId, coordinatorName: coordUser.name, month, target, incentivePercent, semiAnnualIncentivePercent },
     ip: actor.ip,
   });
 
@@ -268,6 +470,7 @@ export async function getAllProgress(actor, month) {
       month: t.month,
       target: t.target,
       incentivePercent: t.incentivePercent,
+      semiAnnualIncentivePercent: t.semiAnnualIncentivePercent,
       setBy: t.setBy,
       achieved,
       remaining: Math.max(0, t.target - achieved),

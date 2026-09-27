@@ -526,6 +526,156 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
   return deployment.toObject();
 }
 
+const INVOICE_DUE_DAYS = 50;
+
+/** Every user who can decide a payment right now — mirrors
+ *  decidersOfDeploymentsHours above, just against 'deploymentsPaymentDecide'. */
+async function decidersOfDeploymentsPayment() {
+  const settings = await getSectionAccess('deploymentsPaymentDecide');
+  return membersOfRoles(settings.writeApprovalRoles);
+}
+
+/**
+ * Mark a month's Approved hours entry as invoiced to the client — the
+ * "Clerk" step of the real billing process the user described. Only ever
+ * WHEN (and who), never a separately-editable amount — see the model's own
+ * doc comment on why there's no stored `billedAmount`.
+ */
+export async function sendInvoice(deploymentId, entryId, actor) {
+  const allowed = await canAccessSection('deploymentsInvoicing', actor);
+  if (!allowed) throw new ApiError(403, 'You do not have permission to send a client invoice.');
+
+  const deployment = await Deployment.findById(deploymentId);
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  const entry = deployment.monthlyHours.id(entryId);
+  if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
+  if (entry.status !== 'Approved') {
+    throw new ApiError(400, 'Only hours already approved can be invoiced.');
+  }
+  if (entry.invoiceSentAt) {
+    throw new ApiError(400, 'This month has already been invoiced.');
+  }
+
+  const now = new Date();
+  entry.invoiceSentAt = now;
+  entry.invoiceSentBy = actor.userId;
+  entry.invoiceDueAt = new Date(now.getTime() + INVOICE_DUE_DAYS * 86_400_000);
+  await deployment.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'deployment.monthlyHours.invoiceSent',
+    targetType: 'Deployment',
+    targetId: deployment._id,
+    meta: { month: entry.month },
+    ip: actor.ip,
+  });
+  return deployment.toObject();
+}
+
+/**
+ * Record (or correct) how much the client has actually paid for one already-
+ * invoiced month. Cumulative, not a ledger of individual receipts — the
+ * process the user described is one client payment per month's invoice, not
+ * routine partial installments; a real multi-installment need can extend
+ * this later without a breaking change (same "don't build for a hypothetical"
+ * reasoning CLAUDE.md's own hard rules already call for). Re-recording after
+ * a decision resets `paymentDecisionStatus` back to 'Pending' — same
+ * implicit-resubmit rule updateMonthlyHours already applies to a Rejected
+ * hours entry.
+ */
+export async function recordPayment(deploymentId, entryId, data, actor) {
+  const isOfficeSecretary = actor.role === 'Office Secretary';
+  const allowed = isOfficeSecretary || (await canAccessSection('deploymentsHours', actor));
+  if (!allowed) throw new ApiError(403, 'You do not have permission to record a received payment.');
+
+  const deployment = await Deployment.findById(deploymentId);
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  const entry = deployment.monthlyHours.id(entryId);
+  if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
+  if (!entry.invoiceSentAt) {
+    throw new ApiError(400, 'This month has not been invoiced yet.');
+  }
+
+  entry.amountReceived = data.amountReceived;
+  entry.paymentReceivedAt = new Date();
+  entry.paymentDecisionStatus = 'Pending';
+  entry.paymentDecidedBy = null;
+  entry.paymentDecidedAt = null;
+  entry.paymentDecisionNote = null;
+  await deployment.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'deployment.monthlyHours.paymentRecorded',
+    targetType: 'Deployment',
+    targetId: deployment._id,
+    meta: { month: entry.month, amountReceived: data.amountReceived },
+    ip: actor.ip,
+  });
+
+  const deciders = await decidersOfDeploymentsPayment();
+  for (const userId of deciders) {
+    await notifyUser(userId, {
+      type: 'RequestStatus',
+      title: `A payment for ${deployment.workerName} (${entry.month}) needs your approval`,
+      body: `SAR ${data.amountReceived} recorded as received.`,
+      url: `/deployments/${deployment._id}`,
+    });
+  }
+  return deployment.toObject();
+}
+
+/**
+ * Financial-Manager sign-off on a recorded payment. Approving does NOT
+ * itself write anything to a coordinator's target — mobilisationTarget.
+ * service.js computes `achieved` LIVE by aggregating every Approved
+ * payment across Deployment.monthlyHours each time a target is read, the
+ * same "never trust a cached figure" discipline this whole app already
+ * follows — so there is no separate ledger to keep in sync here.
+ */
+export async function decidePayment(deploymentId, entryId, data, actor) {
+  const allowed = await canAccessSection('deploymentsPaymentDecide', actor);
+  if (!allowed) throw new ApiError(403, 'You do not have permission to approve a received payment.');
+
+  const deployment = await Deployment.findById(deploymentId);
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  const entry = deployment.monthlyHours.id(entryId);
+  if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
+  if (entry.paymentDecisionStatus !== 'Pending') {
+    throw new ApiError(400, 'Only a pending payment can be decided.');
+  }
+
+  entry.paymentDecisionStatus = data.decision;
+  entry.paymentDecidedBy = actor.userId;
+  entry.paymentDecidedAt = new Date();
+  entry.paymentDecisionNote = data.note || null;
+  await deployment.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'deployment.monthlyHours.paymentDecide',
+    targetType: 'Deployment',
+    targetId: deployment._id,
+    meta: { month: entry.month, decision: data.decision, amountReceived: entry.amountReceived },
+    ip: actor.ip,
+  });
+
+  await notifyUser(entry.enteredBy.toString(), {
+    type: 'RequestStatus',
+    title:
+      data.decision === 'Approved'
+        ? `Payment for ${deployment.workerName} (${entry.month}) approved`
+        : `Payment for ${deployment.workerName} (${entry.month}) rejected`,
+    body: data.note || undefined,
+    url: `/deployments/${deployment._id}`,
+  });
+  return deployment.toObject();
+}
+
 /**
  * Demobilise (formerly Release): ends this one placement. What happens to
  * the worker next depends on the reason (see deployment.model.js's
@@ -903,7 +1053,7 @@ function firstApprovedEntryId(entries) {
  *            + (this deployment's chronologically-first-Approved entry only) mobilisationCost
  *   profit   = revenue − expenses, always.
  */
-function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries) {
+export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries) {
   if (!mobilisation) return null;
   const isSupplier = mobilisation.workerType === 'SupplierEmployee';
 

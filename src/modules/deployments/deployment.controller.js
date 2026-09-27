@@ -63,6 +63,24 @@ export async function decideMonthlyHours(req, res) {
   res.json(new ApiResponse('Decision recorded.', deployment));
 }
 
+/** POST /api/deployments/:id/monthly-hours/:entryId/send-invoice — 200 → data: deployment */
+export async function sendInvoice(req, res) {
+  const deployment = await deploymentService.sendInvoice(req.params.id, req.params.entryId, actor(req));
+  res.json(new ApiResponse('Invoice marked as sent.', deployment));
+}
+
+/** PATCH /api/deployments/:id/monthly-hours/:entryId/payment — 200 → data: deployment */
+export async function recordPayment(req, res) {
+  const deployment = await deploymentService.recordPayment(req.params.id, req.params.entryId, req.body, actor(req));
+  res.json(new ApiResponse('Payment recorded.', deployment));
+}
+
+/** PATCH /api/deployments/:id/monthly-hours/:entryId/payment/decide — 200 → data: deployment */
+export async function decidePayment(req, res) {
+  const deployment = await deploymentService.decidePayment(req.params.id, req.params.entryId, req.body, actor(req));
+  res.json(new ApiResponse('Payment decision recorded.', deployment));
+}
+
 /** POST /api/deployments/:id/demobilise — 200 → data: null */
 export async function demobilise(req, res) {
   await deploymentService.demobiliseDeployment(req.params.id, req.body, actor(req));

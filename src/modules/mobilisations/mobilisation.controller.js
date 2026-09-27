@@ -123,6 +123,18 @@ export async function confirmCoordinator(req, res) {
   res.json(new ApiResponse('Confirmed.', mobilisation));
 }
 
+/** PUT /api/mobilisations/:id/coordinator-shares — 200 → data: mobilisation */
+export async function setCoordinatorShares(req, res) {
+  const mobilisation = await mobilisationService.setCoordinatorShares(req.params.id, req.body.shares, actor(req));
+  res.json(new ApiResponse('Coordinator shares set.', mobilisation));
+}
+
+/** DELETE /api/mobilisations/:id/coordinator-shares — 200 → data: mobilisation */
+export async function clearCoordinatorShares(req, res) {
+  const mobilisation = await mobilisationService.clearCoordinatorShares(req.params.id, actor(req));
+  res.json(new ApiResponse('Coordinator shares reset to even split.', mobilisation));
+}
+
 /** POST /api/mobilisations/:id/submit — 200 → data: mobilisation (PendingReview) */
 export async function submit(req, res) {
   const mobilisation = await mobilisationService.submitMobilisation(req.params.id, actor(req));

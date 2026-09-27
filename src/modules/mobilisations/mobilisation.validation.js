@@ -274,6 +274,17 @@ export const addCoordinatorSchema = z.object({
   user: id('user'),
 });
 
+export const setCoordinatorSharesSchema = z.object({
+  shares: z
+    .array(
+      z.object({
+        userId: id('coordinator'),
+        sharePercent: z.number().min(0).max(100),
+      })
+    )
+    .min(1),
+});
+
 /** Section 2 — filled by whoever holds the CURRENT approval step (Office
  *  Secretary, then Marketing Manager, once configured), during review.
  *  Every field is optional individually: a reviewer fills in what they have

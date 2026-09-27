@@ -178,6 +178,45 @@ const monthlyHoursSchema = new mongoose.Schema(
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     decidedAt: { type: Date, default: null },
     decisionNote: { type: String, trim: true, maxlength: 500, default: null },
+
+    // --- Real-revenue billing lifecycle (2026-09-27, the user's own ask) ---
+    // Only reachable once `status === 'Approved'` above — the client bill is
+    // for confirmed hours, never a disputed figure. No separate "billed
+    // amount" field: `computeMonthlyRevenueAndExpenses`'s own `revenue`
+    // (clientRate×contractHours + otClientRate×otHours) already IS that
+    // number, recomputed live like every other financial figure in this app
+    // — storing a second, separately-editable copy would be exactly the
+    // "never trust a cached figure" anti-pattern this app avoids everywhere
+    // else. Sending the invoice only records WHEN/WHO, not a new amount.
+    invoiceSentAt: { type: Date, default: null },
+    invoiceSentBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    // Fixed 50-day window from the user's own described process — computed
+    // once at send time, not re-derived, so a later change to the window
+    // length never silently reopens/recloses an already-sent invoice's due
+    // date. Read by the overdue background job (deploymentPayment.job.js).
+    invoiceDueAt: { type: Date, default: null },
+
+    // What the client has actually PAID for this month, cumulative — the
+    // figure a coordinator's REAL target credit is based on (never the
+    // full computed `revenue` above, since payment can be partial or
+    // delayed by months — see mobilisationTarget.service.js). Entered by
+    // whoever holds 'deploymentsHours' write (e.g. Office Secretary), same
+    // as the hours themselves.
+    amountReceived: { type: Number, default: 0, min: 0 },
+    paymentReceivedAt: { type: Date, default: null },
+    // Financial-Manager sign-off (2026-09-27) before amountReceived counts
+    // toward any coordinator's target — separate from the hours-approval
+    // status above (a different real person/role signs off on money vs.
+    // hours), same single-level embedded-entry decide pattern as `status`
+    // itself (deployment.service.js's decidePayment mirrors decideMonthlyHours).
+    // null until a payment is actually recorded (never implies "awaiting
+    // approval" before any money has even arrived); editing amountReceived
+    // after a decision resets this back to 'Pending', same "editing resets
+    // to Pending" rule the hours entry itself already follows.
+    paymentDecisionStatus: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: null },
+    paymentDecidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    paymentDecidedAt: { type: Date, default: null },
+    paymentDecisionNote: { type: String, trim: true, maxlength: 500, default: null },
   },
   { timestamps: true }
 );

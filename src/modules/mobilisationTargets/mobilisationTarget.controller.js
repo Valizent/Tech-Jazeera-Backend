@@ -26,6 +26,20 @@ export async function getProgress(req, res) {
   res.json(new ApiResponse('Mobilisation target progress.', result));
 }
 
+/** GET /api/mobilisation-targets/semi-annual/my?endMonth=YYYY-MM — own rolling 6-month progress. */
+export async function getMySemiAnnual(req, res) {
+  const endMonth = req.query.endMonth ?? new Date().toISOString().slice(0, 7);
+  const result = await targetService.getMySemiAnnualProgress(actor(req), endMonth);
+  res.json(new ApiResponse('Your semi-annual progress.', result));
+}
+
+/** GET /api/mobilisation-targets/semi-annual?endMonth=YYYY-MM — all coordinators. */
+export async function getSemiAnnual(req, res) {
+  const endMonth = req.query.endMonth ?? new Date().toISOString().slice(0, 7);
+  const result = await targetService.getAllSemiAnnualProgress(actor(req), endMonth);
+  res.json(new ApiResponse('Semi-annual progress.', result));
+}
+
 /** POST /api/mobilisation-targets — upsert a target. */
 export async function set(req, res) {
   const target = await targetService.setTarget(req.body, actor(req));

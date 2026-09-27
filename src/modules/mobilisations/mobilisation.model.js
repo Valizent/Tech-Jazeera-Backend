@@ -108,6 +108,16 @@ const coordinatorSchema = new mongoose.Schema(
     isPrimary: { type: Boolean, default: false },
     confirmed: { type: Boolean, default: false },
     confirmedAt: { type: Date, default: null },
+    // Real revenue share (2026-09-27, the user's own ask): how this joint
+    // mobilisation's REAL received/approved revenue splits between its
+    // coordinators for target-crediting purposes — replaces the old "every
+    // joint coordinator gets 100% credit" rule. Null on every coordinator
+    // (the default, and every pre-existing mobilisation) means "split evenly
+    // across however many coordinators are on this record" — see
+    // effectiveSharePercent in mobilisation.service.js. Either every
+    // coordinator has an explicit share summing to 100, or none do — no
+    // partial-set state (enforced in setCoordinatorShares).
+    sharePercent: { type: Number, default: null, min: 0, max: 100 },
   },
   { _id: false }
 );

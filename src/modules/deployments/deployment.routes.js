@@ -57,6 +57,8 @@ import {
   addMonthlyHoursSchema,
   updateMonthlyHoursSchema,
   decideMonthlyHoursSchema,
+  recordPaymentSchema,
+  decidePaymentSchema,
   demobiliseDeploymentSchema,
 } from './deployment.validation.js';
 import * as deploymentController from './deployment.controller.js';
@@ -68,6 +70,8 @@ router.use(requireStaff);
 
 const canRelease = requireSectionAccess('deploymentsRelease', 'write');
 const canDecideHours = requireSectionAccess('deploymentsHoursDecide', 'write');
+const canInvoice = requireSectionAccess('deploymentsInvoicing', 'write');
+const canDecidePayment = requireSectionAccess('deploymentsPaymentDecide', 'write');
 const canReadDeploymentsGate = requireSectionAccess('deploymentsRelease', 'read');
 // Office Secretary is deny-by-default for Section Access entirely (see
 // canAccessSection's floor) — hardcoded through here too, same as the
@@ -113,6 +117,23 @@ router.patch(
   canDecideHours,
   validate({ params: monthlyHoursEntryParamSchema, body: decideMonthlyHoursSchema }),
   asyncHandler(deploymentController.decideMonthlyHours)
+);
+router.post(
+  '/:id/monthly-hours/:entryId/send-invoice',
+  canInvoice,
+  validate({ params: monthlyHoursEntryParamSchema }),
+  asyncHandler(deploymentController.sendInvoice)
+);
+router.patch(
+  '/:id/monthly-hours/:entryId/payment',
+  validate({ params: monthlyHoursEntryParamSchema, body: recordPaymentSchema }),
+  asyncHandler(deploymentController.recordPayment)
+);
+router.patch(
+  '/:id/monthly-hours/:entryId/payment/decide',
+  canDecidePayment,
+  validate({ params: monthlyHoursEntryParamSchema, body: decidePaymentSchema }),
+  asyncHandler(deploymentController.decidePayment)
 );
 router.post(
   '/:id/demobilise',

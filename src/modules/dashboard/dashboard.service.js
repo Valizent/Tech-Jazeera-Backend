@@ -46,7 +46,7 @@ import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ExitReentry from '../exitDocuments/exitReentry.model.js';
 import { getStandbyWorkforce, getActualPerformanceSummary } from '../deployments/deployment.service.js';
 import User from '../auth/user.model.js';
-import { monthBounds, NON_OWN_EMPLOYEE_FILTER } from '../mobilisationTargets/mobilisationTarget.service.js';
+import { monthBounds, NON_OWN_EMPLOYEE_FILTER, realRevenueByCoordinator } from '../mobilisationTargets/mobilisationTarget.service.js';
 import MobilisationTarget from '../mobilisationTargets/mobilisationTarget.model.js';
 import ApiError from '../../utils/ApiError.js';
 
@@ -850,35 +850,16 @@ export async function getCoordinatorDrillDown(actor, coordinatorId, monthStr) {
   const openTasks = await DailyUpdate.countDocuments({ kind: 'Task', coordinator: coordinatorId, status: 'Open' });
   const completedTasks = await DailyUpdate.countDocuments({ kind: 'Task', coordinator: coordinatorId, status: 'Done' });
 
-  // Mobilisation profit for this coordinator, for ONE calendar month.
-  // FIX (2026-09-24, a real inconsistency found while adding the Coordinator
-  // Leaderboard's Target column): this used to sum EVERY Approved/Completed
-  // mobilisation ever, with no date filter at all — a different figure than
-  // the leaderboard row you click to open this same modal, which is (and
-  // always was) scoped to one month via mobilisationDate. Same
-  // `getCoordinatorLeaderboard`/`sumProgress` definition now: Approved +
-  // Completed, mobilisationDate within the month, month defaults to current
-  // when omitted — so a Target comparison and "the number I clicked" are
-  // finally the same number in two places, not three quietly-different ones.
-  // Also excludes Own-Employee mobilisations (2026-09-27, NON_OWN_EMPLOYEE_FILTER)
-  // — same reasoning as sumProgress: this is still "the target figure," just
-  // viewed here.
+  // Real revenue credited to this coordinator, for ONE calendar month — the
+  // exact same figure (and same underlying function) as their own Target
+  // card's `achieved` and the Coordinator Leaderboard's `profit` column, so
+  // "the number I clicked" is never a fourth quietly-different one. See
+  // mobilisationTarget.service.js's realRevenueByCoordinator (2026-09-27,
+  // replacing the old profitPerMonth-estimate figure this used to show —
+  // the user's own ask: real received money, not an estimate).
   const month = monthStr || new Date().toISOString().slice(0, 7);
-  const { start, end } = monthBounds(month);
-  const mobilisations = await Mobilisation.aggregate([
-    {
-      $match: {
-        'coordinators.user': new mongoose.Types.ObjectId(coordinatorId),
-        status: { $in: ['Approved', 'Completed'] },
-        mobilisationDate: { $gte: start, $lt: end },
-        archived: { $ne: true },
-        ...NON_OWN_EMPLOYEE_FILTER,
-      },
-    },
-    { $group: { _id: null, totalProfit: { $sum: { $ifNull: ['$profitPerMonth', 0] } } } }
-  ]);
-
-  const totalProfit = mobilisations[0]?.totalProfit ?? 0;
+  const revenueByCoordinator = await realRevenueByCoordinator(month);
+  const totalProfit = revenueByCoordinator.get(coordinatorId.toString()) ?? 0;
 
   return {
     month,
@@ -904,15 +885,17 @@ export async function getCoordinatorDrillDown(actor, coordinatorId, monthStr) {
  * comment) — so MM/GM/FM/COO/Admin see this without needing target-management
  * rights, the user's own explicit choice between the two options put to them.
  *
- * "Counts" = Approved/Completed mobilisations whose mobilisationDate falls in the
- * selected month — the exact same definition sumProgress (mobilisationTarget.
- * service.js) uses for a coordinator's own Target progress, sharing monthBounds so
- * the two can never quietly disagree on a boundary date. No single ranking column
- * — count and profit are both returned; the client sorts by whichever the viewer
- * picks (the user's own choice — "both, no single ranking"). Also shares
- * sumProgress's NON_OWN_EMPLOYEE_FILTER (2026-09-27) — both count and profit here
- * are the same population the Target card counts, not a broader "everything this
- * coordinator did" figure.
+ * "Counts" = Approved/Completed mobilisations whose mobilisationDate falls in
+ * the selected month (a pure activity metric, excluding Own-Employee via the
+ * shared NON_OWN_EMPLOYEE_FILTER). "Profit" is a DIFFERENT thing as of
+ * 2026-09-27 — real revenue credited that month (mobilisationTarget.
+ * service.js's realRevenueByCoordinator, the exact same figure a coordinator's
+ * own Target card and Drill-down modal show), which can include money just
+ * received for a mobilisation approved months ago. The two numbers measure
+ * different things on purpose: new deals this month vs. money collected this
+ * month. No single ranking column — both are returned; the client sorts by
+ * whichever the viewer picks (the user's own choice — "both, no single
+ * ranking").
  */
 export async function getCoordinatorLeaderboard(actor, monthStr) {
   if (!(await canAccessSection('mobilisationsViewer', actor, 'read'))) {
@@ -922,7 +905,7 @@ export async function getCoordinatorLeaderboard(actor, monthStr) {
   const month = monthStr || new Date().toISOString().slice(0, 7);
   const { start, end } = monthBounds(month);
 
-  const [coordinators, statsRows, targetRows] = await Promise.all([
+  const [coordinators, countRows, profitByCoordinator, targetRows] = await Promise.all([
     User.find({ role: 'Coordinator' }).select('name').sort({ name: 1 }).lean(),
     Mobilisation.aggregate([
       {
@@ -934,14 +917,9 @@ export async function getCoordinatorLeaderboard(actor, monthStr) {
         },
       },
       { $unwind: '$coordinators' },
-      {
-        $group: {
-          _id: '$coordinators.user',
-          count: { $sum: 1 },
-          profit: { $sum: { $ifNull: ['$profitPerMonth', 0] } },
-        },
-      },
+      { $group: { _id: '$coordinators.user', count: { $sum: 1 } } },
     ]),
+    realRevenueByCoordinator(month),
     // This month's Riyal target per coordinator, if management has set one
     // (mobilisationTargets module — see its own model doc comment). Not
     // every coordinator has one, so this is a separate optional lookup, not
@@ -952,20 +930,17 @@ export async function getCoordinatorLeaderboard(actor, monthStr) {
     MobilisationTarget.find({ month }).select('coordinator target').lean(),
   ]);
 
-  const statsById = new Map(statsRows.map((r) => [r._id.toString(), r]));
+  const countById = new Map(countRows.map((r) => [r._id.toString(), r.count]));
   const targetById = new Map(targetRows.map((t) => [t.coordinator.toString(), t.target]));
 
   return {
     month,
-    rows: coordinators.map((c) => {
-      const stats = statsById.get(c._id.toString());
-      return {
-        _id: c._id,
-        target: targetById.get(c._id.toString()) ?? null,
-        name: c.name,
-        count: stats?.count ?? 0,
-        profit: stats?.profit ?? 0,
-      };
-    }),
+    rows: coordinators.map((c) => ({
+      _id: c._id,
+      target: targetById.get(c._id.toString()) ?? null,
+      name: c.name,
+      count: countById.get(c._id.toString()) ?? 0,
+      profit: profitByCoordinator.get(c._id.toString()) ?? 0,
+    })),
   };
 }

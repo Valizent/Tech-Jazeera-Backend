@@ -138,6 +138,18 @@ export const decideMonthlyHoursSchema = z.object({
   note: optionalStr(500),
 });
 
+/** Record (or correct) the amount the client has actually paid for one
+ *  already-invoiced month. */
+export const recordPaymentSchema = z.object({
+  amountReceived: z.coerce.number({ error: 'Enter the amount received.' }).min(0, 'Cannot be negative.').max(10_000_000, 'That looks too high — check the figure.'),
+});
+
+/** Approve/Reject a Pending recorded payment. */
+export const decidePaymentSchema = z.object({
+  decision: z.enum(DECISIONS, { error: 'Choose Approved or Rejected.' }),
+  note: optionalStr(500),
+});
+
 /**
  * Demobilise (formerly Release) — `reason` drives what happens to the
  * worker (see deployment.model.js's DEMOBILISATION_OUTCOME). `exitOutcome`
