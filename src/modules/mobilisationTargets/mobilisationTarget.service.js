@@ -15,6 +15,18 @@
  * joint coordinators count) exactly as before. A mobilisation with no
  * profitPerMonth yet set (null — see mobilisation.model.js) contributes 0,
  * never breaking the sum.
+ *
+ * Own-Employee exclusion (2026-09-27, real user correction): a mobilisation
+ * of the company's OWN staff (`workerType: 'Employee'`) never contributes to
+ * this sum — a coordinator's real value to the company is bringing in
+ * supplied/outsourced workers, not deploying existing employees. Own-Employee
+ * mobilisations still count (and are surfaced separately, see
+ * `countOwnEmployee`/`ownEmployeeCount` below) as a plain count the
+ * coordinator/MM can see, just never as Riyal progress. `NON_OWN_EMPLOYEE_FILTER`
+ * is shared with dashboard.service.js's Coordinator Leaderboard/Drill-down —
+ * those surface the SAME "profit toward target" figure in two more places, so
+ * the exclusion is defined once here and imported, not redefined three times
+ * (the same reasoning `monthBounds` is already shared for).
  */
 import mongoose from 'mongoose';
 import MobilisationTarget from './mobilisationTarget.model.js';
@@ -23,6 +35,10 @@ import User from '../auth/user.model.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
+
+/** Shared match fragment excluding Own-Employee mobilisations from any
+ *  "profit toward target" aggregate — see this file's own top doc comment. */
+export const NON_OWN_EMPLOYEE_FILTER = { workerType: { $ne: 'Employee' } };
 
 /** Returns [firstDayOfMonth, firstDayOfNextMonth) as Date objects. Exported so
  *  the dashboard's Coordinator Leaderboard (dashboard.service.js) computes
@@ -56,11 +72,46 @@ async function sumProgress(coordinatorId, month) {
         status: { $in: ['Approved', 'Completed'] },
         mobilisationDate: { $gte: start, $lt: end },
         archived: { $ne: true },
+        ...NON_OWN_EMPLOYEE_FILTER,
       },
     },
     { $group: { _id: null, total: { $sum: { $ifNull: ['$profitPerMonth', 0] } } } },
   ]);
   return row?.total ?? 0;
+}
+
+/** Count of a coordinator's Own-Employee mobilisations in a month — shown
+ *  alongside the Riyal progress above so an Own-Employee deployment is still
+ *  visible to the coordinator/MM, just never added to the target amount. */
+async function countOwnEmployee(coordinatorId, month) {
+  const { start, end } = monthBounds(month);
+  return Mobilisation.countDocuments({
+    'coordinators.user': new mongoose.Types.ObjectId(coordinatorId),
+    workerType: 'Employee',
+    status: { $in: ['Approved', 'Completed'] },
+    mobilisationDate: { $gte: start, $lt: end },
+    archived: { $ne: true },
+  });
+}
+
+/** Batched version of countOwnEmployee — same N+1 avoidance as sumProgressBatch. */
+async function countOwnEmployeeBatch(coordinatorIds, month) {
+  const { start, end } = monthBounds(month);
+  const rows = await Mobilisation.aggregate([
+    {
+      $match: {
+        'coordinators.user': { $in: coordinatorIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        workerType: 'Employee',
+        status: { $in: ['Approved', 'Completed'] },
+        mobilisationDate: { $gte: start, $lt: end },
+        archived: { $ne: true },
+      },
+    },
+    { $unwind: '$coordinators' },
+    { $match: { 'coordinators.user': { $in: coordinatorIds.map((id) => new mongoose.Types.ObjectId(id)) } } },
+    { $group: { _id: '$coordinators.user', count: { $sum: 1 } } },
+  ]);
+  return new Map(rows.map((r) => [r._id.toString(), r.count]));
 }
 
 /**
@@ -82,6 +133,7 @@ async function sumProgressBatch(coordinatorIds, month) {
         status: { $in: ['Approved', 'Completed'] },
         mobilisationDate: { $gte: start, $lt: end },
         archived: { $ne: true },
+        ...NON_OWN_EMPLOYEE_FILTER,
       },
     },
     { $unwind: '$coordinators' },
@@ -167,7 +219,10 @@ export async function getMyTarget(actor, month) {
 
   if (!targetDoc) return null;
 
-  const achieved = await sumProgress(actor.userId, month);
+  const [achieved, ownEmployeeCount] = await Promise.all([
+    sumProgress(actor.userId, month),
+    countOwnEmployee(actor.userId, month),
+  ]);
   return {
     _id: targetDoc._id,
     month: targetDoc.month,
@@ -176,6 +231,7 @@ export async function getMyTarget(actor, month) {
     achieved,
     remaining: Math.max(0, targetDoc.target - achieved),
     hit: achieved >= targetDoc.target,
+    ownEmployeeCount,
   };
 }
 
@@ -199,10 +255,10 @@ export async function getAllProgress(actor, month) {
   // this used to call sumProgress once PER target (one Mobilisation.aggregate
   // per coordinator) — now one batched aggregate for every coordinator with a
   // target this month at once. See sumProgressBatch's own doc comment.
-  const achievedById = await sumProgressBatch(
-    targets.map((t) => t.coordinator._id),
-    month
-  );
+  const [achievedById, ownEmployeeCountById] = await Promise.all([
+    sumProgressBatch(targets.map((t) => t.coordinator._id), month),
+    countOwnEmployeeBatch(targets.map((t) => t.coordinator._id), month),
+  ]);
 
   const withProgress = targets.map((t) => {
     const achieved = achievedById.get(t.coordinator._id.toString()) ?? 0;
@@ -216,6 +272,7 @@ export async function getAllProgress(actor, month) {
       achieved,
       remaining: Math.max(0, t.target - achieved),
       hit: achieved >= t.target,
+      ownEmployeeCount: ownEmployeeCountById.get(t.coordinator._id.toString()) ?? 0,
     };
   });
 

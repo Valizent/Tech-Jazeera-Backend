@@ -46,7 +46,7 @@ import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ExitReentry from '../exitDocuments/exitReentry.model.js';
 import { getStandbyWorkforce, getActualPerformanceSummary } from '../deployments/deployment.service.js';
 import User from '../auth/user.model.js';
-import { monthBounds } from '../mobilisationTargets/mobilisationTarget.service.js';
+import { monthBounds, NON_OWN_EMPLOYEE_FILTER } from '../mobilisationTargets/mobilisationTarget.service.js';
 import MobilisationTarget from '../mobilisationTargets/mobilisationTarget.model.js';
 import ApiError from '../../utils/ApiError.js';
 
@@ -163,11 +163,15 @@ export const IDENTITY_DOCS = [
 const daysUntil = (date) => Math.ceil((new Date(date).getTime() - Date.now()) / 86_400_000);
 
 /**
- * Live estimated revenue from mobilisations active at any point this calendar month —
- * the sum of each active mobilisation's own `profitPerMonth` estimate (the same
- * commercial figure Mobilisation/Deployment already treat as sensitive), not a fresh
- * calculation of its own. Called only once the caller's gate (own work for a
- * Coordinator, `mobilisationsViewer` read for anyone else — see getDashboard) is open.
+ * Live estimated PROFIT PER HOUR from mobilisations active at any point this
+ * calendar month — the sum of each active mobilisation's own `profitPerHour`
+ * rate (the same commercial figure Mobilisation/Deployment already treat as
+ * sensitive), not a fresh calculation of its own. Changed 2026-09-27 from
+ * `profitPerMonth` to `profitPerHour` (the user's own ask — a monthly total
+ * conflated "how much work is scheduled" with "how profitable it is"; the
+ * hourly rate isolates the latter). Called only once the caller's gate (own
+ * work for a Coordinator, `mobilisationsViewer` read for anyone else — see
+ * getDashboard) is open.
  */
 async function computeActiveMobilisationRevenue(actor, isCoordinator) {
   const startOfThisMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -183,8 +187,8 @@ async function computeActiveMobilisationRevenue(actor, isCoordinator) {
   const activeDeployments = await Deployment.find(deploymentFilter).select('mobilisation').lean();
   const mobIds = activeDeployments.map((d) => d.mobilisation).filter(Boolean);
   if (mobIds.length === 0) return 0;
-  const activeMobs = await Mobilisation.find({ _id: { $in: mobIds } }).select('profitPerMonth').lean();
-  return activeMobs.reduce((sum, mob) => sum + (mob.profitPerMonth || 0), 0);
+  const activeMobs = await Mobilisation.find({ _id: { $in: mobIds } }).select('profitPerHour').lean();
+  return activeMobs.reduce((sum, mob) => sum + (mob.profitPerHour || 0), 0);
 }
 
 const ACTIVE_REVENUE_TREND_MONTHS = 6;
@@ -200,6 +204,10 @@ const ACTIVE_REVENUE_TREND_MONTHS = 6;
  * spanning it, one Mobilisation fetch for every distinct id touched across all 6
  * months), not one round trip per month — same discipline getProfitOverview's own
  * trend already established (see this file's 2026-09-22 P3 fix's doc comment).
+ *
+ * Sums `profitPerHour` per trailing month (2026-09-27, same change as the
+ * point-in-time figure above) — each month's value is "the combined hourly
+ * profit rate of whoever was active that month," not a monthly total.
  */
 async function computeActiveMobilisationRevenueTrend(actor, isCoordinator) {
   const now = new Date();
@@ -229,8 +237,8 @@ async function computeActiveMobilisationRevenueTrend(actor, isCoordinator) {
   const allMobIds = [...new Set(deployments.map((d) => d.mobilisation?.toString()).filter(Boolean))];
   const profitById = new Map();
   if (allMobIds.length > 0) {
-    const mobs = await Mobilisation.find({ _id: { $in: allMobIds } }).select('profitPerMonth').lean();
-    for (const m of mobs) profitById.set(m._id.toString(), m.profitPerMonth || 0);
+    const mobs = await Mobilisation.find({ _id: { $in: allMobIds } }).select('profitPerHour').lean();
+    for (const m of mobs) profitById.set(m._id.toString(), m.profitPerHour || 0);
   }
 
   return months.map(({ month, start, end }) => ({
@@ -852,6 +860,9 @@ export async function getCoordinatorDrillDown(actor, coordinatorId, monthStr) {
   // Completed, mobilisationDate within the month, month defaults to current
   // when omitted — so a Target comparison and "the number I clicked" are
   // finally the same number in two places, not three quietly-different ones.
+  // Also excludes Own-Employee mobilisations (2026-09-27, NON_OWN_EMPLOYEE_FILTER)
+  // — same reasoning as sumProgress: this is still "the target figure," just
+  // viewed here.
   const month = monthStr || new Date().toISOString().slice(0, 7);
   const { start, end } = monthBounds(month);
   const mobilisations = await Mobilisation.aggregate([
@@ -861,6 +872,7 @@ export async function getCoordinatorDrillDown(actor, coordinatorId, monthStr) {
         status: { $in: ['Approved', 'Completed'] },
         mobilisationDate: { $gte: start, $lt: end },
         archived: { $ne: true },
+        ...NON_OWN_EMPLOYEE_FILTER,
       },
     },
     { $group: { _id: null, totalProfit: { $sum: { $ifNull: ['$profitPerMonth', 0] } } } }
@@ -897,7 +909,10 @@ export async function getCoordinatorDrillDown(actor, coordinatorId, monthStr) {
  * service.js) uses for a coordinator's own Target progress, sharing monthBounds so
  * the two can never quietly disagree on a boundary date. No single ranking column
  * — count and profit are both returned; the client sorts by whichever the viewer
- * picks (the user's own choice — "both, no single ranking").
+ * picks (the user's own choice — "both, no single ranking"). Also shares
+ * sumProgress's NON_OWN_EMPLOYEE_FILTER (2026-09-27) — both count and profit here
+ * are the same population the Target card counts, not a broader "everything this
+ * coordinator did" figure.
  */
 export async function getCoordinatorLeaderboard(actor, monthStr) {
   if (!(await canAccessSection('mobilisationsViewer', actor, 'read'))) {
@@ -915,6 +930,7 @@ export async function getCoordinatorLeaderboard(actor, monthStr) {
           status: { $in: ['Approved', 'Completed'] },
           mobilisationDate: { $gte: start, $lt: end },
           archived: { $ne: true },
+          ...NON_OWN_EMPLOYEE_FILTER,
         },
       },
       { $unwind: '$coordinators' },
