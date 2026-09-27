@@ -48,6 +48,8 @@ import { requireAuth } from '../../middleware/auth.js';
 import { requireStaff } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
+import { uploadSingle, destroyDocumentFile } from '../../middleware/upload.js';
+import logger from '../../config/logger.js';
 import {
   listDeploymentsSchema,
   exportDeploymentsSchema,
@@ -57,6 +59,7 @@ import {
   addMonthlyHoursSchema,
   updateMonthlyHoursSchema,
   decideMonthlyHoursSchema,
+  sendInvoiceSchema,
   recordPaymentSchema,
   decidePaymentSchema,
   demobiliseDeploymentSchema,
@@ -84,6 +87,10 @@ const canReadDeployments = asyncHandler(async (req, res, next) => {
 router.get('/', canReadDeployments, validate({ query: listDeploymentsSchema }), asyncHandler(deploymentController.list));
 // Before the /:id catch-all, or "standby"/"export" are read as a deployment id.
 router.get('/standby', canReadDeployments, asyncHandler(deploymentController.standby));
+// No canReadDeployments gate — visibility is its own rule (own mobilisations
+// for a Coordinator, or 'mobilisationsViewer' for MM/Admin), computed in the
+// service, same as Requirements/Daily Updates' "own work needs no grant".
+router.get('/payments-due', asyncHandler(deploymentController.paymentsDue));
 router.get(
   '/export',
   canReadDeployments,
@@ -121,8 +128,14 @@ router.patch(
 router.post(
   '/:id/monthly-hours/:entryId/send-invoice',
   canInvoice,
-  validate({ params: monthlyHoursEntryParamSchema }),
+  uploadSingle,
+  validate({ params: monthlyHoursEntryParamSchema, body: sendInvoiceSchema }),
   asyncHandler(deploymentController.sendInvoice)
+);
+router.get(
+  '/:id/monthly-hours/:entryId/invoice-file',
+  validate({ params: monthlyHoursEntryParamSchema }),
+  asyncHandler(deploymentController.invoiceFile)
 );
 router.patch(
   '/:id/monthly-hours/:entryId/payment',
@@ -141,4 +154,17 @@ router.post(
   validate({ params: deploymentIdParamSchema, body: demobiliseDeploymentSchema }),
   asyncHandler(deploymentController.demobilise)
 );
+
+/** Same orphaned-upload cleanup as financialRequests.routes.js/me.routes.js/
+ *  document.routes.js — only the send-invoice POST above ever sets req.file
+ *  on this router. */
+router.use((err, req, res, next) => {
+  if (req.file?.filename) {
+    destroyDocumentFile(req.file.filename).catch((cleanupErr) =>
+      logger.error(`[deployments] orphaned invoice upload ${req.file.filename}: ${cleanupErr.message}`)
+    );
+  }
+  next(err);
+});
+
 export default router;

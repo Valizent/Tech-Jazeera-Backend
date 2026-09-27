@@ -187,9 +187,33 @@ const monthlyHoursSchema = new mongoose.Schema(
     // number, recomputed live like every other financial figure in this app
     // — storing a second, separately-editable copy would be exactly the
     // "never trust a cached figure" anti-pattern this app avoids everywhere
-    // else. Sending the invoice only records WHEN/WHO, not a new amount.
+    // else. Sending the invoice records WHEN/WHO plus the real invoice's own
+    // identity (2026-09-27 follow-up, the user's own ask): the actual
+    // invoice document is created in ERPNext, not this app — `invoiceNumber`/
+    // `invoiceDate` are what the Clerk typed off that real document, and
+    // `invoiceFile` is just a reference copy for this app's own tracking.
     invoiceSentAt: { type: Date, default: null },
     invoiceSentBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    invoiceNumber: { type: String, trim: true, default: null },
+    invoiceDate: { type: Date, default: null },
+    // Same shape/pattern as ReimbursementClaim's own `receipt` (financialRequests/
+    // reimbursement.model.js) — a single embedded file via the generic
+    // Cloudinary upload middleware (middleware/upload.js), not the Documents
+    // module (a different trust category, same reasoning that file's own doc
+    // comment gives). _id disabled — a value object, not an entity.
+    invoiceFile: {
+      type: new mongoose.Schema(
+        {
+          fileName: { type: String, required: true }, // Cloudinary public_id
+          resourceType: { type: String, required: true }, // 'raw', from the upload middleware
+          originalName: { type: String, required: true },
+          mimeType: { type: String, required: true },
+          size: { type: Number, required: true },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
     // Fixed 50-day window from the user's own described process — computed
     // once at send time, not re-derived, so a later change to the window
     // length never silently reopens/recloses an already-sent invoice's due

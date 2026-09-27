@@ -2,26 +2,35 @@
  * Deployment billing overdue job (2026-09-27, the user's own described
  * process) — structurally mirrors mobilisationStale.job.js/overdueInvoice.
  * job.js (same setInterval registration in server.js, same notifyUser
- * dedupeKey fan-out — a fixed key per item+recipient means "notify once,
- * ever," so a daily re-scan never re-spams). Two independent checks:
+ * dedupeKey fan-out). Two independent checks:
  *
  *  - Timesheet overdue: a fully-elapsed calendar month, for an Active
  *    Deployment, with no monthlyHours entry yet — the user's own "45 days
  *    maximum" window for the client to send their timesheet. Notifies
  *    whoever holds 'deploymentsHours' write (they're the one who has to
- *    chase it).
- *  - Payment overdue: a monthlyHours entry that's been invoiced
- *    (`invoiceSentAt` set) but not yet fully resolved
- *    (`paymentDecisionStatus !== 'Approved'`) past its `invoiceDueAt` (set
- *    at send time, 50 days out — see deployment.service.js's sendInvoice).
- *    Notifies whoever holds 'deploymentsHours' write (chasing the client)
- *    AND 'deploymentsPaymentDecide' write (the Financial Manager, who needs
- *    to know real money is late).
+ *    chase it). Fixed "notify once, ever" dedupeKey — a single nudge is
+ *    enough here.
+ *  - Payment due escalation (2026-09-27 follow-up, the user's own ask): a
+ *    monthlyHours entry that's been invoiced (`invoiceSentAt` set) but not
+ *    yet fully resolved (`paymentDecisionStatus !== 'Approved'`) — notifies
+ *    with INCREASING frequency as its `invoiceDueAt` (50 days out — see
+ *    deployment.service.js's sendInvoice) approaches: at 10/5/3/2/1/0 days
+ *    remaining, then EVERY SINGLE DAY once overdue (a real mounting
+ *    drumbeat, not a one-time notice) — each stage gets its own dedupeKey,
+ *    and "overdue" embeds the exact day count so it's a fresh key daily.
+ *    Audience is deliberately NOT deploymentsHours/deploymentsPaymentDecide
+ *    here — it's every coordinator on the source Mobilisation ("mainly
+ *    coordinators" — they own the client relationship and are the ones who
+ *    actually call/email to get paid) plus whoever holds 'mobilisationsViewer'
+ *    write (this company's real MM already does — reused rather than a new
+ *    Section Access key just for this audience).
  *
- * Company-wide, not Coordinator-scoped, same reasoning expiryAlert.job.js
- * gives for its own fan-out: whoever already owns this data company-wide.
+ * Timesheet-overdue stays company-wide, same reasoning expiryAlert.job.js
+ * gives for its own fan-out; payment-due escalation is per-mobilisation
+ * (coordinator-scoped by nature of who it notifies).
  */
 import Deployment from '../deployments/deployment.model.js';
+import Mobilisation from '../mobilisations/mobilisation.model.js';
 import { getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
 import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { notifyUser } from './notification.service.js';
@@ -88,40 +97,70 @@ async function checkTimesheetOverdue() {
   return { found, sent };
 }
 
-async function checkPaymentOverdue() {
-  const now = new Date();
+// Days-remaining thresholds that each fire exactly once (closing gaps as the
+// deadline nears is what makes this feel like "more and more"); anything
+// past 0 (overdue) is handled separately below since it fires every day.
+const PRE_DUE_MILESTONES = [10, 5, 3, 2, 1, 0];
+
+/** Which escalation stage (if any) fires today for this many days remaining
+ *  until the invoice is due. `null` = nothing to send today. A negative
+ *  number (already overdue) always returns a fresh, day-specific stage —
+ *  that's the "every single day once overdue" half of the ask. */
+function escalationStage(daysRemaining) {
+  if (daysRemaining < 0) return `overdue-${Math.abs(daysRemaining)}`;
+  if (PRE_DUE_MILESTONES.includes(daysRemaining)) return `t-minus-${daysRemaining}`;
+  return null;
+}
+
+async function checkPaymentDueEscalation() {
   const deployments = await Deployment.find({
     archived: { $ne: true },
-    monthlyHours: {
-      $elemMatch: { invoiceSentAt: { $ne: null }, paymentDecisionStatus: { $ne: 'Approved' }, invoiceDueAt: { $lt: now } },
-    },
+    monthlyHours: { $elemMatch: { invoiceSentAt: { $ne: null }, paymentDecisionStatus: { $ne: 'Approved' } } },
   })
-    .select('workerName monthlyHours')
+    .select('workerName clientName mobilisation monthlyHours')
     .lean();
   if (deployments.length === 0) return { found: 0, sent: 0 };
 
-  const [hoursRecipients, fmRecipients] = await Promise.all([
-    writeMembers('deploymentsHours'),
-    writeMembers('deploymentsPaymentDecide'),
-  ]);
-  const recipients = [...new Set([...hoursRecipients, ...fmRecipients].map((id) => id.toString()))];
-  if (recipients.length === 0) return { found: 0, sent: 0 };
+  const mmSettings = await getSectionAccess('mobilisationsViewer');
+  const mmRecipients = (await membersOfRoles(mmSettings.writeApprovalRoles)).map((id) => id.toString());
+  const coordinatorsCache = new Map(); // mobilisationId -> [coordinatorIdString]
 
+  const now = Date.now();
   let found = 0;
   let sent = 0;
   for (const d of deployments) {
+    if (!d.mobilisation) continue;
     for (const entry of d.monthlyHours) {
-      if (!entry.invoiceSentAt || entry.paymentDecisionStatus === 'Approved') continue;
-      if (!entry.invoiceDueAt || new Date(entry.invoiceDueAt) >= now) continue;
+      if (!entry.invoiceSentAt || entry.paymentDecisionStatus === 'Approved' || !entry.invoiceDueAt) continue;
+      const daysRemaining = Math.ceil((new Date(entry.invoiceDueAt).getTime() - now) / 86_400_000);
+      const stage = escalationStage(daysRemaining);
+      if (!stage) continue;
       found += 1;
-      const days = daysSince(entry.invoiceDueAt);
-      for (const userId of recipients) {
+
+      const mobId = d.mobilisation.toString();
+      if (!coordinatorsCache.has(mobId)) {
+        const mob = await Mobilisation.findById(mobId).select('coordinators').lean();
+        coordinatorsCache.set(mobId, (mob?.coordinators ?? []).map((c) => c.user.toString()));
+      }
+      const audience = [...new Set([...coordinatorsCache.get(mobId), ...mmRecipients])];
+
+      const title =
+        daysRemaining < 0
+          ? `Payment overdue for ${d.workerName} (${entry.month})`
+          : `Payment due in ${daysRemaining} day(s) for ${d.workerName} (${entry.month})`;
+      const invoiceRef = entry.invoiceNumber ? `Invoice ${entry.invoiceNumber} — ` : '';
+      const body =
+        daysRemaining < 0
+          ? `${invoiceRef}${Math.abs(daysRemaining)} day(s) past due — follow up with ${d.clientName}.`
+          : `${invoiceRef}due ${new Date(entry.invoiceDueAt).toDateString()} — time to follow up with ${d.clientName}.`;
+
+      for (const userId of audience) {
         const result = await notifyUser(userId, {
           type: 'RequestStatus',
-          title: `Payment overdue for ${d.workerName} (${entry.month})`,
-          body: `${days} day(s) past the invoice due date with no approved payment.`,
-          url: `/deployments/${d._id}`,
-          dedupeKey: `deployment-payment-overdue:${d._id}:${entry.month}:${userId}`,
+          title,
+          body,
+          url: `/deployments/payments-due`,
+          dedupeKey: `deployment-payment-due:${d._id}:${entry.month}:${stage}:${userId}`,
         });
         if (result.wasNew) sent += 1;
       }
@@ -131,7 +170,7 @@ async function checkPaymentOverdue() {
 }
 
 export async function runDeploymentBillingCheck() {
-  const [timesheet, payment] = await Promise.all([checkTimesheetOverdue(), checkPaymentOverdue()]);
+  const [timesheet, payment] = await Promise.all([checkTimesheetOverdue(), checkPaymentDueEscalation()]);
 
   if (timesheet.found === 0 && payment.found === 0) {
     logger.info('[deploymentBillingJob] nothing overdue — skipped.');

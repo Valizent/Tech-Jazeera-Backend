@@ -138,6 +138,13 @@ export const decideMonthlyHoursSchema = z.object({
   note: optionalStr(500),
 });
 
+/** Multipart body (invoiceNumber, invoiceDate, plus a `file` field handled
+ *  by the uploadSingle middleware, not Zod) for sendInvoice. */
+export const sendInvoiceSchema = z.object({
+  invoiceNumber: z.string().trim().min(1, 'Enter the invoice number.').max(100),
+  invoiceDate: z.coerce.date({ error: 'Enter a valid invoice date.' }),
+});
+
 /** Record (or correct) the amount the client has actually paid for one
  *  already-invoiced month. */
 export const recordPaymentSchema = z.object({

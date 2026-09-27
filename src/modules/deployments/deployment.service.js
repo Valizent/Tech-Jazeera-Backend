@@ -26,6 +26,7 @@ import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAcce
 import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { notifyUser } from '../notifications/notification.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
+import { signedDownloadUrl } from '../../middleware/upload.js';
 
 function currentMonthStr() {
   const d = new Date();
@@ -523,6 +524,21 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
     body: data.note || undefined,
     url: `/deployments/${deployment._id}`,
   });
+
+  // 2026-09-27 follow-up, the user's own ask: the Clerk shouldn't have to go
+  // looking for newly-Approved months to invoice — notify the moment hours
+  // clear this step.
+  if (data.decision === 'Approved') {
+    const clerks = await decidersOfDeploymentsInvoicing();
+    for (const userId of clerks) {
+      await notifyUser(userId, {
+        type: 'RequestStatus',
+        title: `${entry.month} hours ready to invoice for ${deployment.workerName}`,
+        body: `${deployment.clientName} — approved and ready for a client invoice.`,
+        url: `/deployments/${deployment._id}`,
+      });
+    }
+  }
   return deployment.toObject();
 }
 
@@ -535,15 +551,52 @@ async function decidersOfDeploymentsPayment() {
   return membersOfRoles(settings.writeApprovalRoles);
 }
 
+/** Same shape, against 'deploymentsInvoicing' — the "Clerk" circle. */
+async function decidersOfDeploymentsInvoicing() {
+  const settings = await getSectionAccess('deploymentsInvoicing');
+  return membersOfRoles(settings.writeApprovalRoles);
+}
+
+/**
+ * Who should see/be nudged about an invoiced-but-not-yet-paid month:
+ * every coordinator on the source Mobilisation (they own the client
+ * relationship — "mainly coordinators", the user's own words) plus whoever
+ * holds 'mobilisationsViewer' write (this company's real MM already does —
+ * reused rather than a new Section Access key just for this, same
+ * broad-visibility circle management already sees commercial data through).
+ */
+async function paymentTrackingAudience(mobilisationId) {
+  const [mobilisation, mmSettings] = await Promise.all([
+    Mobilisation.findById(mobilisationId).select('coordinators').lean(),
+    getSectionAccess('mobilisationsViewer'),
+  ]);
+  const coordinatorIds = (mobilisation?.coordinators ?? []).map((c) => c.user.toString());
+  const mmIds = await membersOfRoles(mmSettings.writeApprovalRoles);
+  return [...new Set([...coordinatorIds, ...mmIds.map((id) => id.toString())])];
+}
+
+function invoiceFileFromUpload(file) {
+  return {
+    fileName: file.filename, // Cloudinary public_id, set by uploadSingle
+    resourceType: 'raw',
+    originalName: file.originalname,
+    mimeType: file.mimetype,
+    size: file.size,
+  };
+}
+
 /**
  * Mark a month's Approved hours entry as invoiced to the client — the
- * "Clerk" step of the real billing process the user described. Only ever
- * WHEN (and who), never a separately-editable amount — see the model's own
- * doc comment on why there's no stored `billedAmount`.
+ * "Clerk" step of the real billing process the user described. Records the
+ * real invoice's own identity (number/date, typed off the actual document
+ * ERPNext generates) plus a reference copy of the PDF — this app never
+ * generates the invoice itself. No separate "billed amount" field — see the
+ * model's own doc comment on why there's no stored copy of that number.
  */
-export async function sendInvoice(deploymentId, entryId, actor) {
+export async function sendInvoice(deploymentId, entryId, data, file, actor) {
   const allowed = await canAccessSection('deploymentsInvoicing', actor);
   if (!allowed) throw new ApiError(403, 'You do not have permission to send a client invoice.');
+  if (!file) throw new ApiError(400, 'A copy of the invoice PDF is required.');
 
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
@@ -561,6 +614,9 @@ export async function sendInvoice(deploymentId, entryId, actor) {
   entry.invoiceSentAt = now;
   entry.invoiceSentBy = actor.userId;
   entry.invoiceDueAt = new Date(now.getTime() + INVOICE_DUE_DAYS * 86_400_000);
+  entry.invoiceNumber = data.invoiceNumber;
+  entry.invoiceDate = data.invoiceDate;
+  entry.invoiceFile = invoiceFileFromUpload(file);
   await deployment.save();
 
   await logAudit({
@@ -568,10 +624,82 @@ export async function sendInvoice(deploymentId, entryId, actor) {
     action: 'deployment.monthlyHours.invoiceSent',
     targetType: 'Deployment',
     targetId: deployment._id,
-    meta: { month: entry.month },
+    meta: { month: entry.month, invoiceNumber: data.invoiceNumber },
     ip: actor.ip,
   });
+
+  const audience = await paymentTrackingAudience(deployment.mobilisation);
+  for (const userId of audience) {
+    await notifyUser(userId, {
+      type: 'RequestStatus',
+      title: `Invoice ${data.invoiceNumber} sent for ${deployment.workerName} (${entry.month})`,
+      body: `${deployment.clientName} — payment due by ${entry.invoiceDueAt.toDateString()}.`,
+      url: `/deployments/payments-due`,
+    });
+  }
   return deployment.toObject();
+}
+
+/** The uploaded invoice-copy file for one entry — a signed, time-limited
+ *  download URL, same pattern as reimbursement.service.js's getReceiptFile. */
+export async function getInvoiceFile(deploymentId, entryId, actor) {
+  const deployment = await Deployment.findById(deploymentId).lean();
+  if (!deployment) throw new ApiError(404, 'Deployment not found.');
+  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  const entry = deployment.monthlyHours.find((m) => m._id.toString() === entryId);
+  if (!entry || !entry.invoiceFile) throw new ApiError(404, 'No invoice file for this month.');
+  return {
+    url: signedDownloadUrl(entry.invoiceFile.fileName, entry.invoiceFile.resourceType),
+    mimeType: entry.invoiceFile.mimeType,
+    originalName: entry.invoiceFile.originalName,
+  };
+}
+
+/**
+ * Every invoiced-but-not-yet-fully-paid month, across every deployment —
+ * the "Payments Due" tracker (2026-09-27, the user's own ask). Visibility:
+ * a Coordinator sees only mobilisations they're on; anyone with
+ * 'mobilisationsViewer' (this company's real MM already holds it, plus
+ * Admin) sees everything — same audience as paymentTrackingAudience's own
+ * notifications, just a pull view instead of a push one. Sorted soonest-due
+ * first so the most urgent ones lead.
+ */
+export async function getPaymentsDue(actor) {
+  const canViewAll = await canAccessSection('mobilisationsViewer', actor);
+  const deployments = await Deployment.find({
+    archived: { $ne: true },
+    monthlyHours: { $elemMatch: { invoiceSentAt: { $ne: null }, paymentDecisionStatus: { $ne: 'Approved' } } },
+  })
+    .select('workerName clientName mobilisation monthlyHours')
+    .populate('mobilisation', 'coordinators serialNumber')
+    .lean();
+
+  const now = Date.now();
+  const rows = [];
+  for (const dep of deployments) {
+    if (!dep.mobilisation) continue;
+    const isMyMobilisation = dep.mobilisation.coordinators?.some((c) => c.user.toString() === actor.userId.toString());
+    if (!canViewAll && !isMyMobilisation) continue;
+
+    for (const entry of dep.monthlyHours) {
+      if (!entry.invoiceSentAt || entry.paymentDecisionStatus === 'Approved') continue;
+      rows.push({
+        deploymentId: dep._id,
+        entryId: entry._id,
+        mobilisationSerial: dep.mobilisation.serialNumber,
+        workerName: dep.workerName,
+        clientName: dep.clientName,
+        month: entry.month,
+        invoiceNumber: entry.invoiceNumber,
+        invoiceDate: entry.invoiceDate,
+        invoiceDueAt: entry.invoiceDueAt,
+        amountReceived: entry.amountReceived,
+        paymentDecisionStatus: entry.paymentDecisionStatus,
+        daysRemaining: entry.invoiceDueAt ? Math.ceil((new Date(entry.invoiceDueAt).getTime() - now) / 86_400_000) : null,
+      });
+    }
+  }
+  return rows.sort((a, b) => (a.daysRemaining ?? Infinity) - (b.daysRemaining ?? Infinity));
 }
 
 /**

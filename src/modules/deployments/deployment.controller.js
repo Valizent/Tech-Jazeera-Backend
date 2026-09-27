@@ -1,7 +1,13 @@
 /**
- * Deployment controller — HTTP translation only.
+ * Deployment controller — HTTP translation only. The invoice-file endpoint
+ * streams bytes (not the JSON envelope), same pattern as reimbursement.
+ * controller.js's own receipt endpoint.
  */
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import ApiError from '../../utils/ApiError.js';
 import ApiResponse from '../../utils/ApiResponse.js';
+import { contentDisposition } from '../../utils/contentDisposition.js';
 import * as deploymentService from './deployment.service.js';
 import { buildDeploymentsListXlsx } from './deployment.export.js';
 
@@ -31,6 +37,12 @@ export async function exportAll(req, res) {
 export async function standby(req, res) {
   const data = await deploymentService.getStandbyWorkforce();
   res.json(new ApiResponse('Standby workforce.', data));
+}
+
+/** GET /api/deployments/payments-due — 200 → data: [{...}] */
+export async function paymentsDue(req, res) {
+  const data = await deploymentService.getPaymentsDue(actor(req));
+  res.json(new ApiResponse('Payments due.', data));
 }
 
 /** GET /api/deployments/:id — 200 → data: deployment */
@@ -63,10 +75,23 @@ export async function decideMonthlyHours(req, res) {
   res.json(new ApiResponse('Decision recorded.', deployment));
 }
 
-/** POST /api/deployments/:id/monthly-hours/:entryId/send-invoice — 200 → data: deployment */
+/** POST /api/deployments/:id/monthly-hours/:entryId/send-invoice — multipart
+ *  (invoiceNumber, invoiceDate, file) — 200 → data: deployment */
 export async function sendInvoice(req, res) {
-  const deployment = await deploymentService.sendInvoice(req.params.id, req.params.entryId, actor(req));
+  const deployment = await deploymentService.sendInvoice(req.params.id, req.params.entryId, req.body, req.file, actor(req));
   res.json(new ApiResponse('Invoice marked as sent.', deployment));
+}
+
+/** GET /api/deployments/:id/monthly-hours/:entryId/invoice-file — streams the invoice PDF */
+export async function invoiceFile(req, res) {
+  const fileData = await deploymentService.getInvoiceFile(req.params.id, req.params.entryId, actor(req));
+  res.setHeader('Content-Type', fileData.mimeType);
+  res.setHeader('Content-Disposition', contentDisposition(fileData.originalName));
+  const upstream = await fetch(fileData.url);
+  if (!upstream.ok || !upstream.body) {
+    throw new ApiError(410, 'The stored invoice file is no longer available.');
+  }
+  await pipeline(Readable.fromWeb(upstream.body), res);
 }
 
 /** PATCH /api/deployments/:id/monthly-hours/:entryId/payment — 200 → data: deployment */
