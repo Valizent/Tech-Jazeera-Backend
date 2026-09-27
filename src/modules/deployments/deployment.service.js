@@ -1323,11 +1323,25 @@ export async function getActualPerformanceSummary() {
       : 0,
   ]);
 
-  const zeroBucket = () => ({ revenue: 0, expenses: 0 });
+  // 2026-09-27, the user's own redesign: Expenses is a real cost the company
+  // incurred (unchanged basis — every Approved entry regardless of payment
+  // status, same as before), shown as its own standalone figure rather than
+  // netted against a computed-revenue estimate. `amountReceived` is real
+  // money the client has actually paid AND a Financial-Manager/Accounts
+  // has verified (`paymentDecisionStatus === 'Approved'` — see
+  // deployment.service.js's decidePayment) — the same verified-payment
+  // basis mobilisationTarget.service.js's realRevenueByCoordinator already
+  // uses for coordinator targets, just company-wide here instead of
+  // per-coordinator. `netProfit` = amountReceived − expenses (a real
+  // cash-in-minus-cost-out figure). `profitPerHour` = that net profit ÷
+  // every Approved entry's actualHours for the period (hours actually
+  // worked is a fact independent of when/whether payment was verified).
+  const zeroBucket = () => ({ expenses: 0, hours: 0, amountReceived: 0 });
   const buckets = { lastMonth: zeroBucket(), monthBeforeLast: zeroBucket(), thisYear: zeroBucket(), sameMonthsLastYear: zeroBucket() };
-  const addTo = (bucket, r) => {
-    bucket.revenue += r.revenue;
-    bucket.expenses += r.expenses;
+  const addTo = (bucket, expenses, hours, received) => {
+    bucket.expenses += expenses;
+    bucket.hours += hours;
+    bucket.amountReceived += received;
   };
 
   for (const dep of deployments) {
@@ -1336,10 +1350,11 @@ export async function getActualPerformanceSummary() {
       if (entry.status !== 'Approved' || !relevantMonthKeys.has(entry.month)) continue;
       const result = computeMonthlyRevenueAndExpenses(entry, dep.mobilisation, dep.monthlyHours);
       if (!result) continue;
-      if (entry.month === lastMonthKey) addTo(buckets.lastMonth, result);
-      if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, result);
-      if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, result);
-      if (sameMonthsLastYear.includes(entry.month)) addTo(buckets.sameMonthsLastYear, result);
+      const received = entry.paymentDecisionStatus === 'Approved' ? entry.amountReceived || 0 : 0;
+      if (entry.month === lastMonthKey) addTo(buckets.lastMonth, result.expenses, entry.actualHours, received);
+      if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, result.expenses, entry.actualHours, received);
+      if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, result.expenses, entry.actualHours, received);
+      if (sameMonthsLastYear.includes(entry.month)) addTo(buckets.sameMonthsLastYear, result.expenses, entry.actualHours, received);
     }
   }
 
@@ -1348,30 +1363,41 @@ export async function getActualPerformanceSummary() {
   buckets.thisYear.expenses += thisYearExp;
   buckets.sameMonthsLastYear.expenses += sameMonthsLastYearExp;
 
-  const profitOf = (b) => money(b.revenue - b.expenses);
-  const lastMonthProfit = profitOf(buckets.lastMonth);
-  const monthBeforeLastProfit = profitOf(buckets.monthBeforeLast);
-  const thisYearProfit = profitOf(buckets.thisYear);
-  const sameMonthsLastYearProfit = profitOf(buckets.sameMonthsLastYear);
+  const netProfitOf = (b) => money(b.amountReceived - b.expenses);
+  const profitPerHourOf = (b) => (b.hours > 0 ? money(netProfitOf(b) / b.hours) : 0);
+
+  const lastMonthNetProfit = netProfitOf(buckets.lastMonth);
+  const monthBeforeLastNetProfit = netProfitOf(buckets.monthBeforeLast);
+  const thisYearNetProfit = netProfitOf(buckets.thisYear);
+  const sameMonthsLastYearNetProfit = netProfitOf(buckets.sameMonthsLastYear);
+
+  const lastMonthProfitPerHour = profitPerHourOf(buckets.lastMonth);
+  const monthBeforeLastProfitPerHour = profitPerHourOf(buckets.monthBeforeLast);
+  const thisYearProfitPerHour = profitPerHourOf(buckets.thisYear);
+  const sameMonthsLastYearProfitPerHour = profitPerHourOf(buckets.sameMonthsLastYear);
 
   return {
     lastMonth: {
       month: lastMonthKey,
-      revenue: money(buckets.lastMonth.revenue),
       expenses: money(buckets.lastMonth.expenses),
-      profit: lastMonthProfit,
-      revenueDeltaPct: pctDelta(buckets.lastMonth.revenue, buckets.monthBeforeLast.revenue),
       expensesDeltaPct: pctDelta(buckets.lastMonth.expenses, buckets.monthBeforeLast.expenses),
-      profitDeltaPct: pctDelta(lastMonthProfit, monthBeforeLastProfit),
+      profitPerHour: lastMonthProfitPerHour,
+      profitPerHourDeltaPct: pctDelta(lastMonthProfitPerHour, monthBeforeLastProfitPerHour),
+      amountReceived: money(buckets.lastMonth.amountReceived),
+      amountReceivedDeltaPct: pctDelta(buckets.lastMonth.amountReceived, buckets.monthBeforeLast.amountReceived),
+      netProfit: lastMonthNetProfit,
+      netProfitDeltaPct: pctDelta(lastMonthNetProfit, monthBeforeLastNetProfit),
     },
     thisYear: {
       year: currentYear,
-      revenue: money(buckets.thisYear.revenue),
       expenses: money(buckets.thisYear.expenses),
-      profit: thisYearProfit,
-      revenueDeltaPct: pctDelta(buckets.thisYear.revenue, buckets.sameMonthsLastYear.revenue),
       expensesDeltaPct: pctDelta(buckets.thisYear.expenses, buckets.sameMonthsLastYear.expenses),
-      profitDeltaPct: pctDelta(thisYearProfit, sameMonthsLastYearProfit),
+      profitPerHour: thisYearProfitPerHour,
+      profitPerHourDeltaPct: pctDelta(thisYearProfitPerHour, sameMonthsLastYearProfitPerHour),
+      amountReceived: money(buckets.thisYear.amountReceived),
+      amountReceivedDeltaPct: pctDelta(buckets.thisYear.amountReceived, buckets.sameMonthsLastYear.amountReceived),
+      netProfit: thisYearNetProfit,
+      netProfitDeltaPct: pctDelta(thisYearNetProfit, sameMonthsLastYearNetProfit),
     },
   };
 }
