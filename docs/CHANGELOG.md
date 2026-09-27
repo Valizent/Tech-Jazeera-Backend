@@ -1602,3 +1602,25 @@ when requested):**
   the Deployment Overview modal (screenshot-matched against the user's own
   report) and `MobilisationDetailPage`, in both languages. See
   `docs/REAL-REVENUE-TARGETS-notes.md`'s second 27 September follow-up.
+- **"Profit per hour" removed from the dashboard's Actual Performance
+  widget (27 September 2026, same-day follow-up)** — the user asked to
+  drop the tile entirely (Expenses/Amount received/Net profit only), not
+  just relabel it. Removed end to end per this file's own no-unused-code
+  rule: `deployment.service.js`'s `getActualPerformanceSummary` dropped its
+  `hours` accumulator, `profitPerHourOf`, and both periods'
+  `profitPerHour`/`profitPerHourDeltaPct` fields (`entry.actualHours` is no
+  longer read by this function at all); `ActualPerformanceWidget.jsx`
+  dropped both `Tile`s and narrowed its grid to 3 real columns; the
+  now-dead `actualPerformance.profitPerHour` i18n key was removed from
+  both locale files rather than left orphaned. Reasoning recorded for why
+  this was a removal, not a fix like the sibling finding above: this
+  figure divided a real, payment-timing-dependent net profit by real
+  worked hours, swinging from a large negative to a large positive purely
+  based on WHEN a payment got verified — a genuinely confusing number,
+  unlike Mobilisation's own stable rate-card profit-per-hour fields.
+  Verified: full server suite green (42/42), `eslint` clean, a clean
+  client production build, and a live browser click-through (throwaway
+  admin, cleaned up after) confirming exactly 3 tiles per period render
+  correctly in Arabic with the real dashboard endpoint still returning
+  200. See `docs/REAL-REVENUE-TARGETS-notes.md`'s third 27 September
+  follow-up.

@@ -299,3 +299,39 @@ user's own reported screenshot) and on `MobilisationDetailPage`, and the
 dashboard's active-mobilisation-profit-per-hour hint now reads correctly
 in Arabic with a working cross-reference to "الأداء الفعلي" (Actual
 Performance).
+
+## Follow-up (27 September 2026): "Profit per hour" removed from Actual
+## Performance entirely — the tile itself, not just the labeling gap
+
+From a screenshot of the redesigned widget, the user asked to drop the
+"Profit per hour" tile from "Actual Performance" altogether, keeping only
+Expenses/Amount received/Net profit. Removed end to end, not just hidden
+client-side — matching this file's own hard rule against unused code:
+
+- **Server**: `deployment.service.js`'s `getActualPerformanceSummary`
+  dropped its `hours` bucket accumulator, `profitPerHourOf`, and the
+  `profitPerHour`/`profitPerHourDeltaPct` keys from both the `lastMonth`
+  and `thisYear` response objects — `entry.actualHours` is no longer read
+  by this function at all (nothing else in the function needed it once the
+  one thing it fed was gone).
+- **Client**: `ActualPerformanceWidget.jsx` dropped both `profitPerHour`
+  `Tile`s (last month + year-to-date), and the grid narrowed from
+  `sm:grid-cols-2 lg:grid-cols-4` to `sm:grid-cols-3` (3 real tiles per
+  period now, not 3 tiles awkwardly sitting in a 4-column grid). The
+  now-dead `actualPerformance.profitPerHour` i18n key was removed from
+  both `en.json`/`ar.json`, not left as an orphan.
+- Worth recording WHY this was a removal and not a mislabeling fix (unlike
+  the sibling Mobilisation-side gap above): this `profitPerHour` divided a
+  REAL net profit (which depends on WHEN a payment happens to get
+  verified) by real worked hours — a number that swings from a large
+  negative to a large positive purely based on payment timing, not on
+  whether the placement is actually profitable, unlike Mobilisation's own
+  stable rate-card `profitPerHour`/`otProfitPerHour`. Removing it, not
+  relabeling it, was the right call.
+
+**Verified**: full server test suite green (42/42), `eslint` clean (0
+errors) on both touched files, a clean client production build, and a live
+browser click-through (throwaway admin, cleaned up after) confirming the
+widget now renders exactly 3 tiles per period (Expenses/Amount received/
+Net profit) in a clean 3-column layout, in Arabic, with no console errors
+from the change and the real `/api/dashboard` request still returning 200.

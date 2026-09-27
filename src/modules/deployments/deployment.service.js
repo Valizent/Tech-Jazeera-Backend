@@ -1473,14 +1473,22 @@ export async function getActualPerformanceSummary() {
   // basis mobilisationTarget.service.js's realRevenueByCoordinator already
   // uses for coordinator targets, just company-wide here instead of
   // per-coordinator. `netProfit` = amountReceived − expenses (a real
-  // cash-in-minus-cost-out figure). `profitPerHour` = that net profit ÷
-  // every Approved entry's actualHours for the period (hours actually
-  // worked is a fact independent of when/whether payment was verified).
-  const zeroBucket = () => ({ expenses: 0, hours: 0, amountReceived: 0 });
+  // cash-in-minus-cost-out figure).
+  //
+  // A `profitPerHour` tile (net profit ÷ actualHours) lived here too until
+  // the same day (the user's own follow-up ask, from a screenshot of the
+  // widget) — removed as confusing rather than fixed: dividing a REAL,
+  // payment-timing-dependent net profit by real worked hours produces a
+  // number with no stable interpretation (it swings from a large negative to
+  // a large positive purely based on WHEN a payment happens to get verified,
+  // not on whether the underlying placement is profitable) — unlike
+  // Mobilisation's own `profitPerHour`/`otProfitPerHour`, a stable rate-card
+  // figure. Removed end to end, not just hidden: no other caller ever read
+  // it, so nothing was left half-computed.
+  const zeroBucket = () => ({ expenses: 0, amountReceived: 0 });
   const buckets = { lastMonth: zeroBucket(), monthBeforeLast: zeroBucket(), thisYear: zeroBucket(), sameMonthsLastYear: zeroBucket() };
-  const addTo = (bucket, expenses, hours, received) => {
+  const addTo = (bucket, expenses, received) => {
     bucket.expenses += expenses;
-    bucket.hours += hours;
     bucket.amountReceived += received;
   };
 
@@ -1491,10 +1499,10 @@ export async function getActualPerformanceSummary() {
       const result = computeMonthlyRevenueAndExpenses(entry, dep.mobilisation, dep.monthlyHours);
       if (!result) continue;
       const received = entry.paymentDecisionStatus === 'Approved' ? entry.amountReceived || 0 : 0;
-      if (entry.month === lastMonthKey) addTo(buckets.lastMonth, result.expenses, entry.actualHours, received);
-      if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, result.expenses, entry.actualHours, received);
-      if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, result.expenses, entry.actualHours, received);
-      if (sameMonthsLastYear.includes(entry.month)) addTo(buckets.sameMonthsLastYear, result.expenses, entry.actualHours, received);
+      if (entry.month === lastMonthKey) addTo(buckets.lastMonth, result.expenses, received);
+      if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, result.expenses, received);
+      if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, result.expenses, received);
+      if (sameMonthsLastYear.includes(entry.month)) addTo(buckets.sameMonthsLastYear, result.expenses, received);
     }
   }
 
@@ -1504,25 +1512,17 @@ export async function getActualPerformanceSummary() {
   buckets.sameMonthsLastYear.expenses += sameMonthsLastYearExp;
 
   const netProfitOf = (b) => money(b.amountReceived - b.expenses);
-  const profitPerHourOf = (b) => (b.hours > 0 ? money(netProfitOf(b) / b.hours) : 0);
 
   const lastMonthNetProfit = netProfitOf(buckets.lastMonth);
   const monthBeforeLastNetProfit = netProfitOf(buckets.monthBeforeLast);
   const thisYearNetProfit = netProfitOf(buckets.thisYear);
   const sameMonthsLastYearNetProfit = netProfitOf(buckets.sameMonthsLastYear);
 
-  const lastMonthProfitPerHour = profitPerHourOf(buckets.lastMonth);
-  const monthBeforeLastProfitPerHour = profitPerHourOf(buckets.monthBeforeLast);
-  const thisYearProfitPerHour = profitPerHourOf(buckets.thisYear);
-  const sameMonthsLastYearProfitPerHour = profitPerHourOf(buckets.sameMonthsLastYear);
-
   return {
     lastMonth: {
       month: lastMonthKey,
       expenses: money(buckets.lastMonth.expenses),
       expensesDeltaPct: pctDelta(buckets.lastMonth.expenses, buckets.monthBeforeLast.expenses),
-      profitPerHour: lastMonthProfitPerHour,
-      profitPerHourDeltaPct: pctDelta(lastMonthProfitPerHour, monthBeforeLastProfitPerHour),
       amountReceived: money(buckets.lastMonth.amountReceived),
       amountReceivedDeltaPct: pctDelta(buckets.lastMonth.amountReceived, buckets.monthBeforeLast.amountReceived),
       netProfit: lastMonthNetProfit,
@@ -1532,8 +1532,6 @@ export async function getActualPerformanceSummary() {
       year: currentYear,
       expenses: money(buckets.thisYear.expenses),
       expensesDeltaPct: pctDelta(buckets.thisYear.expenses, buckets.sameMonthsLastYear.expenses),
-      profitPerHour: thisYearProfitPerHour,
-      profitPerHourDeltaPct: pctDelta(thisYearProfitPerHour, sameMonthsLastYearProfitPerHour),
       amountReceived: money(buckets.thisYear.amountReceived),
       amountReceivedDeltaPct: pctDelta(buckets.thisYear.amountReceived, buckets.sameMonthsLastYear.amountReceived),
       netProfit: thisYearNetProfit,
