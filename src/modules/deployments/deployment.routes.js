@@ -91,6 +91,9 @@ router.get('/standby', canReadDeployments, asyncHandler(deploymentController.sta
 // for a Coordinator, or 'mobilisationsViewer' for MM/Admin), computed in the
 // service, same as Requirements/Daily Updates' "own work needs no grant".
 router.get('/payments-due', asyncHandler(deploymentController.paymentsDue));
+// Same reasoning — visibility (deploymentsInvoicing/mobilisationsViewer read)
+// is computed in the service, not this route-level gate.
+router.get('/ready-to-invoice', asyncHandler(deploymentController.readyToInvoice));
 router.get(
   '/export',
   canReadDeployments,

@@ -5,14 +5,14 @@
  * Every check here re-derives a figure from its own real components and
  * compares it against what's actually stored — the same "never trust a
  * cached total, recompute it" discipline this app already applies live on
- * every read for Invoice/Advance/Mobilisation/Deployment profit; this
- * report is the STANDING, ON-DEMAND version of that discipline, catching
- * drift that a live recompute wouldn't (a cached field that was never
- * recomputed because nothing ever read it, or a one-off write that bypassed
- * the normal service layer entirely, e.g. a direct DB edit).
+ * every read for Advance/Mobilisation/Deployment profit; this report is the
+ * STANDING, ON-DEMAND version of that discipline, catching drift that a
+ * live recompute wouldn't (a cached field that was never recomputed because
+ * nothing ever read it, or a one-off write that bypassed the normal service
+ * layer entirely, e.g. a direct DB edit).
  *
  * Deliberately narrow: this checks that stored AGGREGATES match their own
- * DECLARED COMPONENTS (e.g. Invoice.amountPaid vs. sum(payments[].amount)),
+ * DECLARED COMPONENTS (e.g. SalaryAdvance.amount vs. sum(repayments[].amount)),
  * not that the underlying business FORMULA is correct — re-deriving every
  * module's entire computation here would duplicate (and risk silently
  * diverging from) each service's own already-tested formula. Every finding
@@ -21,7 +21,6 @@
  */
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import Deployment from '../deployments/deployment.model.js';
-import Invoice from '../invoices/invoice.model.js';
 import SalaryAdvance from '../financialRequests/advance.model.js';
 import PayrollRun from '../payroll/payrollRun.model.js';
 
@@ -87,38 +86,13 @@ async function doubleBookedWorkers() {
   return findings;
 }
 
-/** Invoice.amountPaid/balanceDue are cached, updated atomically on every
- *  payment (see invoice.service.js's recordPayment) — this re-sums the real
- *  payments[] ledger independently and compares. */
-async function invoiceLedgerMismatches() {
-  const invoices = await Invoice.find({ 'payments.0': { $exists: true } })
-    .select('invoiceNumber total amountPaid balanceDue payments status')
-    .lean();
-  const findings = [];
-  for (const inv of invoices) {
-    const realPaid = sum(inv.payments, (p) => p.amount);
-    const realBalance = money(inv.total - realPaid);
-    if (realPaid !== money(inv.amountPaid) || realBalance !== money(inv.balanceDue)) {
-      findings.push({
-        category: 'invoiceLedgerMismatch',
-        severity: 'high',
-        summary: `Invoice ${inv.invoiceNumber}: stored amountPaid ${inv.amountPaid}/balanceDue ${inv.balanceDue}, but payments[] sums to ${realPaid} paid / ${realBalance} due.`,
-        targetType: 'Invoice',
-        targetId: inv._id,
-        url: `/invoices/${inv._id}`,
-      });
-    }
-  }
-  return findings;
-}
-
 /** A SalaryAdvance's status should be 'Closed' iff repayments[] sums to
  *  exactly the original amount — and never MORE than it (the atomic $expr
  *  guard in addRepayment should make over-repayment impossible; this is
  *  the standing check that it's actually holding). */
 async function salaryAdvanceLedgerMismatches() {
-  // Unlike Invoice/Deployment/Settlement, SalaryAdvance snapshots no
-  // employee identity fields of its own — only a live `employee` ref —
+  // Unlike Deployment/Settlement, SalaryAdvance snapshots no employee
+  // identity fields of its own — only a live `employee` ref —
   // so this is the one detector that needs a populate for a readable
   // summary line.
   const advances = await SalaryAdvance.find({ status: { $in: ['Approved', 'Closed'] } })
@@ -155,7 +129,7 @@ async function salaryAdvanceLedgerMismatches() {
 
 /** A finalized PayrollRun's run-level totals (totalGross/totalDeductions/
  *  totalNet) should equal the sum of its own lines — same "cached aggregate
- *  vs. its declared components" check as the Invoice one above. Only
+ *  vs. its declared components" check as the SalaryAdvance one above. Only
  *  Finalized runs are checked: a Draft run is still being edited, so a
  *  momentary mismatch there is normal, not a finding. */
 async function payrollRunMismatches() {
@@ -188,7 +162,6 @@ export async function runReconciliation() {
   const results = await Promise.all([
     orphanedMobilisations(),
     doubleBookedWorkers(),
-    invoiceLedgerMismatches(),
     salaryAdvanceLedgerMismatches(),
     payrollRunMismatches(),
   ]);

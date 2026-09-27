@@ -1,36 +1,32 @@
 /**
  * Dashboard service — one aggregation across every module for the management
  * overview. It adds no data of its own; it reads employees, clients,
- * deployments, quotations, documents and the audit log and rolls them up.
+ * deployments, documents and the audit log and rolls them up.
  *
  * Every independent query is fired in parallel (Promise.all) rather than
  * awaited one at a time — but "parallel" is not "free": a full Admin load is
  * still a real ~30+ separate database operations (reproduced and fixed down
  * from 36 on 2026-09-22, a real QA-audit finding — P3; see getMySectionAccess
- * below and getProfitOverview's own doc comment for the two biggest cuts).
- * Corrected 2026-09-22 — this comment previously claimed "one fast round
- * trip," which undersold that real count and was itself a finding in that
- * same audit.
+ * below). Corrected 2026-09-22 — this comment previously claimed "one fast
+ * round trip," which undersold that real count and was itself a finding in
+ * that same audit.
  *
- * HONESTY NOTE (updated P2-M8): Phase 1 had no cost data, so this module
- * originally reported only approved-quotation revenue and a payroll
- * run-rate estimate, never a fabricated profit number. Now that Invoices
- * (P2-M6), finalized Payroll (P2-M5) and Expenses (P2-M7) all exist, a real
- * profit figure — actual billed revenue minus actual payroll cost minus
- * actual expenses, for a real calendar month — is finally honest to show;
- * see getProfitOverview() below and finance.profit.
+ * HONESTY NOTE: the real profit/revenue figure this dashboard shows
+ * (`finance.actualPerformance`, see deployment.service.js's
+ * getActualPerformanceSummary) is built from Approved Deployment monthly-
+ * hours entries and a Financial-Manager-VERIFIED client payment — never from
+ * the old Invoice/Quotation modules, which were removed entirely 2026-09-27
+ * (the user's own instruction: real accounting is ERPNext's job, this app
+ * tracks HR/manpower and the internal financial matters that originate from
+ * staff/worker actions, not a duplicate billing system).
  */
 import mongoose from 'mongoose';
 import Employee, { WORKFORCE_TYPES } from '../employees/employee.model.js';
 import Client from '../clients/client.model.js';
 import Deployment from '../deployments/deployment.model.js';
-import Quotation from '../quotations/quotation.model.js';
 import Document from '../documents/document.model.js';
 import AuditLog from '../audit/audit.model.js';
 import Attendance from '../attendance/attendance.model.js';
-import PayrollRun from '../payroll/payrollRun.model.js';
-import Invoice from '../invoices/invoice.model.js';
-import Expense from '../expenses/expense.model.js';
 import LeaveRequest from '../leave/leaveRequest.model.js';
 import Timesheet from '../timesheets/timesheet.model.js';
 import SalaryAdvance from '../financialRequests/advance.model.js';
@@ -51,103 +47,6 @@ import MobilisationTarget from '../mobilisationTargets/mobilisationTarget.model.
 import ApiError from '../../utils/ApiError.js';
 
 export const EXPIRY_WARNING_DAYS = 30;
-const TREND_MONTHS = 6;
-
-/** "YYYY-MM" → { year, month (1-12), start, end } in UTC. Falls back to the
- *  current calendar month for anything missing/malformed — the query schema
- *  already rejects a malformed string before this runs, so this is really
- *  just the "no month given" default path. */
-function resolveMonth(monthStr) {
-  const now = new Date();
-  let year = now.getUTCFullYear();
-  let month = now.getUTCMonth() + 1; // 1-12
-  if (monthStr) {
-    const [y, m] = monthStr.split('-').map(Number);
-    year = y;
-    month = m;
-  }
-  return {
-    year,
-    month,
-    start: new Date(Date.UTC(year, month - 1, 1)),
-    end: new Date(Date.UTC(year, month, 0, 23, 59, 59, 999)),
-  };
-}
-
-const monthKey = (year, month) => `${year}-${String(month).padStart(2, '0')}`;
-
-/**
- * Real profit for one calendar month — the P2-M8 replacement for the old
- * "profit needs cost data" placeholder, now that Invoices (P2-M6), finalized
- * Payroll (P2-M5), and Expenses (P2-M7) all exist.
- *
- * Methodology, deliberately consistent across all three legs — each is
- * "what was recorded as happening in this month", not a mix of accrual and
- * cash-basis figures that wouldn't add up to anything real:
- *  - revenue: sum of Invoice.grandTotal for invoices ISSUED in the month
- *    (Invoice.date). Not the old approvedRevenue (any Approved quotation,
- *    whether ever invoiced or not) — this is the real billed figure.
- *  - payrollCost: the Finalized PayrollRun's totalNet for that exact
- *    (periodYear, periodMonth) — 0 if no run was ever finalized for it. A
- *    Draft run never counts; an un-finalized month simply has no payroll
- *    cost yet, same as PHASE2-PLAN.md's "Finalized payroll feeds the
- *    dashboard's real cost figure."
- *  - expenses: sum of Expense.amount recorded in the month (Expense.date).
- */
-/**
- * The selected month's real P&L plus a trailing TREND_MONTHS-month history
- * (oldest → newest, selected month last) for the dashboard's bar breakdown.
- *
- * FIX (2026-09-22, a real QA-audit finding — P3): this used to call a
- * per-month `computeMonthProfit(year, month)` six times, each running its
- * own Invoice aggregate + PayrollRun lookup + Expense aggregate — 18
- * database operations for one dashboard load, the single largest chunk of
- * the audit's reproduced 36-operation/2.16s Admin dashboard trace. Same
- * three collections, same math, but each is now ONE query covering the
- * whole 6-month span at once, grouped by month — 3 operations total, not 18.
- */
-async function getProfitOverview(monthStr) {
-  const selected = resolveMonth(monthStr);
-  const months = [];
-  for (let i = TREND_MONTHS - 1; i >= 0; i--) {
-    let y = selected.year;
-    let m = selected.month - i;
-    while (m < 1) {
-      m += 12;
-      y -= 1;
-    }
-    months.push({ y, m, key: monthKey(y, m) });
-  }
-  const rangeStart = resolveMonth(months[0].key).start;
-  const rangeEnd = resolveMonth(months[months.length - 1].key).end;
-
-  const [invoiceRows, expenseRows, payrollRuns] = await Promise.all([
-    Invoice.aggregate([
-      { $match: { date: { $gte: rangeStart, $lte: rangeEnd } } },
-      { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$date' } }, total: { $sum: '$grandTotal' } } },
-    ]),
-    Expense.aggregate([
-      { $match: { date: { $gte: rangeStart, $lte: rangeEnd } } },
-      { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$date' } }, total: { $sum: '$amount' } } },
-    ]),
-    // A small, bounded $or (one clause per trend month) — not a date-range
-    // match, since periodYear/periodMonth are plain numbers, not a Date.
-    PayrollRun.find({ $or: months.map(({ y, m }) => ({ periodYear: y, periodMonth: m })), status: 'Finalized' })
-      .select('periodYear periodMonth totalNet')
-      .lean(),
-  ]);
-  const revenueByMonth = new Map(invoiceRows.map((r) => [r._id, r.total]));
-  const expensesByMonth = new Map(expenseRows.map((r) => [r._id, r.total]));
-  const payrollByMonth = new Map(payrollRuns.map((r) => [monthKey(r.periodYear, r.periodMonth), r.totalNet]));
-
-  const trend = months.map(({ key }) => {
-    const revenue = revenueByMonth.get(key) ?? 0;
-    const payrollCost = payrollByMonth.get(key) ?? 0;
-    const expenses = expensesByMonth.get(key) ?? 0;
-    return { month: key, revenue, payrollCost, expenses, net: revenue - payrollCost - expenses };
-  });
-  return { ...trend[trend.length - 1], trend };
-}
 
 /** Employee identity documents whose expiry we surface on the dashboard —
  *  exported so the P3-F expiry-alert job (notifications/expiryAlert.job.js)
@@ -202,8 +101,8 @@ const ACTIVE_REVENUE_TREND_MONTHS = 6;
  *
  * Batched into 2 queries total for the whole 6-month window (one Deployment fetch
  * spanning it, one Mobilisation fetch for every distinct id touched across all 6
- * months), not one round trip per month — same discipline getProfitOverview's own
- * trend already established (see this file's 2026-09-22 P3 fix's doc comment).
+ * months), not one round trip per month (see this file's 2026-09-22 P3 fix's doc
+ * comment).
  *
  * Sums `profitPerHour` per trailing month (2026-09-27, same change as the
  * point-in-time figure above) — each month's value is "the combined hourly
@@ -350,46 +249,36 @@ async function getMyPendingActions(actor, mySectionAccess) {
  * @param {object} [opts]
  * @param {number} [opts.thresholdDays] override the 30-day alert window (P2-M2,
  *   customizable per viewer — mirrors the same param on the employee list)
- * @param {string} [opts.month] "YYYY-MM" — the period the real-profit section
- *   (P2-M8) shows; defaults to the current calendar month.
  * @param {{role: string, userId: string}} [opts.actor] two independent axes:
  *
  *   1. VISIBILITY — added 2026-09-13, the user's own instruction ("the
  *      dashboard should reflect whatever [Section Access] read access they
  *      have"), replacing a hardcoded `isManager`-based rule that had quietly
- *      drifted out of sync with real grants (a Manager still saw Pipeline/
- *      Quotations here even after losing `quotationsManage`/`invoices` read
- *      via the Section Access login-role-removal migration) and never
- *      applied to Executive at all (who saw full company financials on the
- *      dashboard completely unconditionally, contradicting Executive's own
- *      deny-by-default design elsewhere). Every widget below now checks the
- *      SAME `canAccessSection(key, actor, 'read')` real grant its own module
- *      page is gated by — Admin always passes, same as everywhere else.
+ *      drifted out of sync with real grants and never applied to Executive
+ *      at all (who saw full company financials on the dashboard completely
+ *      unconditionally, contradicting Executive's own deny-by-default design
+ *      elsewhere). Every widget below now checks the SAME
+ *      `canAccessSection(key, actor, 'read')` real grant its own module page
+ *      is gated by — Admin always passes, same as everywhere else.
  *      `expiringDocuments` is a list, not a derived figure, so its two
  *      sources (Employee identity docs vs. generic Documents) are gated
- *      independently instead of all-or-nothing. `profit` used to require
- *      read on all three of Invoices/Payroll/Expenses at once (a profit
- *      figure built from only some of its real inputs would be an actual
- *      number that means something else entirely) — replaced 2026-09-15
- *      (the user's own ask, a Coordinator/Manager/HR cost-and-profit view)
- *      with its own dedicated `dashboardProfit` key: still the exact same
- *      server-computed figure (nothing about the math changed), but an
- *      Admin can now grant a role visibility into the AGGREGATE number
- *      without handing them read access to every individual invoice,
- *      payroll run, and expense line — the same "a derived figure gets its
- *      own narrower authorization" precedent Mobilisation/Deployment's own
- *      `profit` fields already follow.
+ *      independently instead of all-or-nothing. The real-profit figure
+ *      (`finance.actualPerformance`, built from Approved Deployment
+ *      monthly-hours entries + verified client payments — see
+ *      deployment.service.js's getActualPerformanceSummary, and this file's
+ *      own doc comment at the top) has its own dedicated `dashboardProfit`
+ *      key: an Admin can grant a role visibility into the AGGREGATE number
+ *      without handing them read access to every individual payroll run or
+ *      expense line — the same "a derived figure gets its own narrower
+ *      authorization" precedent Mobilisation/Deployment's own `profit`
+ *      fields already follow.
  *   2. SCOPING — unchanged, and orthogonal to (1): when actor.role is
  *      'Coordinator', whatever they CAN read is further narrowed to their
  *      own team (deployments, workforce, the clients their team is placed
  *      at, expiring documents) — a data-scoping rule tied to the real
  *      Employee.coordinator hierarchy, not an access-grant question.
- *      Quotations specifically still has no honest per-team figure to
- *      compute at all regardless of any grant (Quotation only links to
- *      Client, never to an Employee/Coordinator) — same "never fabricate a
- *      figure the data doesn't support" rule `profit` follows.
  */
-export async function getDashboard({ thresholdDays, month, actor } = {}) {
+export async function getDashboard({ thresholdDays, actor } = {}) {
   const days = thresholdDays ?? EXPIRY_WARNING_DAYS;
   const threshold = new Date(Date.now() + days * 86_400_000);
   const identityExpiryOr = IDENTITY_DOCS.map(([key]) => ({
@@ -401,13 +290,6 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
   // shares the same scope. Unrelated to the read-access checks below — see
   // this function's own doc comment (SCOPING vs. VISIBILITY).
   const isCoordinator = actor?.role === 'Coordinator';
-  // "Pending quotations" is personal (their own Drafts) for a Manager
-  // (the generic login a BDM-titled person holds) instead of the
-  // company-wide count — they have no real per-item approval step over a
-  // quotation they didn't author. Unrelated to whether they can see
-  // quotations at all (canReadQuotations, below) — this only picks WHICH
-  // quotations, once that gate is already open.
-  const isManager = actor?.role === 'Manager';
   const teamIds = isCoordinator
     ? await Employee.find({ coordinator: actor.userId, type: { $in: WORKFORCE_TYPES } }).distinct('_id')
     : null;
@@ -428,7 +310,6 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
   const canReadEmployees = canRead('employeeCreate');
   const canReadDeployments = canRead('deploymentsRelease');
   const canReadClients = canRead('clientsManage');
-  const canReadQuotations = canRead('quotationsManage');
   const canReadPayroll = canRead('payroll');
   const canSeeProfit = canRead('dashboardProfit');
   const canReadAuditLog = canRead('auditLog');
@@ -478,14 +359,11 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     empStatusAgg,
     payrollAgg,
     activeClients,
-    quoteAgg,
     expiringEmployees,
     expiringDocs,
     recentActivity,
     pendingClientApprovals,
     markedToday,
-    profitOverview,
-    personalPendingQuotations,
     myPendingActions,
     mobilisationsAgg,
     activeSubcontractorsCount,
@@ -526,11 +404,6 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // activeSubcontractorsCount below. approvalStatus: 'Approved' — a
     // client still Pending isn't really "active" in the business sense yet.
     canReadClients ? Client.countDocuments({ status: 'Active', approvalStatus: 'Approved' }) : Promise.resolve(0),
-    // Skipped entirely for a Coordinator regardless of any grant — see the
-    // doc comment above (Quotation has no data-model link to a team at all).
-    !canReadQuotations || isCoordinator
-      ? Promise.resolve([])
-      : Quotation.aggregate([{ $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$grandTotal' } } }]),
     canReadEmployees
       ? Employee.find(employeeExpiryFilter)
           .select('fullName employeeId passport visa iqama medical drivingLicense')
@@ -550,15 +423,6 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
     // markedTodayFilter when applicable, same as every other team-scoped
     // query above.
     canReadAttendance ? Attendance.countDocuments(markedTodayFilter) : Promise.resolve(0),
-    // P2-M8 real profit — gated by its own 'dashboardProfit' key (see
-    // canSeeProfit above and this function's own doc comment).
-    canSeeProfit ? getProfitOverview(month) : Promise.resolve(null),
-    // A Manager's "pending quotations" is personal (their own Drafts) — see
-    // this function's own doc comment. Only computed once the quotations
-    // gate itself is open.
-    canReadQuotations && isManager
-      ? Quotation.countDocuments({ status: 'Draft', createdBy: actor.userId })
-      : Promise.resolve(null),
     // "Pending on me" across every workflow-integrated request type — see
     // getMyPendingActions above. Computed for every viewer (Admin included);
     // empty array where nothing is actionable. Unrelated to the read-access
@@ -601,9 +465,8 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       ? computeActiveMobilisationRevenueTrend(actor, isCoordinator)
       : Promise.resolve(null),
     // Real, closed-book Actual Performance (Revenue/Expenses/Net Profit from
-    // Approved monthly timesheets) — gated on canSeeProfit (dashboardProfit),
-    // the SAME key the existing Invoice-based profit figure uses, not a new
-    // permission tier. See getActualPerformanceSummary's own doc comment.
+    // Approved monthly timesheets) — gated on canSeeProfit (dashboardProfit).
+    // See getActualPerformanceSummary's own doc comment.
     canSeeProfit ? getActualPerformanceSummary() : Promise.resolve(null),
     // A coordinator's own open Requirements pipeline (2026-09-24, a real user
     // ask) — the "My Requirements" dashboard widget. Coordinator-only (this is
@@ -616,16 +479,6 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
   const workforceByStatus = { Active: 0, 'On Leave': 0, Exited: 0 };
   for (const row of empStatusAgg) workforceByStatus[row._id] = row.count;
   const totalWorkers = Object.values(workforceByStatus).reduce((a, b) => a + b, 0);
-
-  // Quotations by status + finance
-  const quotationsByStatus = { Draft: 0, Approved: 0, Rejected: 0 };
-  let approvedRevenue = 0;
-  let pendingRevenue = 0;
-  for (const row of quoteAgg) {
-    quotationsByStatus[row._id] = row.count;
-    if (row._id === 'Approved') approvedRevenue = row.total;
-    if (row._id === 'Draft') pendingRevenue = row.total;
-  }
 
   // Merge expiring employee identity docs + uploaded documents, soonest first
   const expiringDocuments = [];
@@ -665,13 +518,6 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       onLeave: canReadEmployees ? workforceByStatus['On Leave'] : null,
       totalWorkers: canReadEmployees ? totalWorkers : null,
       activeClients: canReadClients ? activeClients : null,
-      pendingQuotations: !canReadQuotations
-        ? null
-        : isManager
-          ? personalPendingQuotations
-          : teamIds
-            ? null
-            : quotationsByStatus.Draft,
       // Always the real count of whatever's actually in expiringDocuments
       // below (itself built from independently-gated sources) — naturally 0
       // when neither contributing source is readable, no extra gate needed.
@@ -680,10 +526,7 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       markedToday: canReadAttendance ? markedToday : null,
     },
     finance: {
-      approvedRevenue: canReadQuotations && !isCoordinator ? approvedRevenue : null,
-      pendingRevenue: canReadQuotations && !isCoordinator ? pendingRevenue : null,
       monthlyPayroll: canReadPayroll ? (payrollAgg[0]?.total ?? 0) : null,
-      profit: profitOverview,
       // Revenue from mobilisations active this month — a Coordinator's own, or the
       // company total once granted mobilisationsViewer read (see canAccessSection batch
       // above and computeActiveMobilisationRevenue). Already null from that gated query
@@ -699,7 +542,6 @@ export async function getDashboard({ thresholdDays, month, actor } = {}) {
       actualPerformance
     },
     workforceByStatus: canReadEmployees ? workforceByStatus : null,
-    quotationsByStatus: canReadQuotations && !isCoordinator ? quotationsByStatus : null,
     expiringDocuments: expiringDocuments.slice(0, 10),
     recentActivity: canReadAuditLog ? recentActivity : null,
     // "Pending on me" — see getMyPendingActions. Always an array (never null),

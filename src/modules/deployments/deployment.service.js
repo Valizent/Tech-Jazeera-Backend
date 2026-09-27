@@ -715,6 +715,51 @@ export async function countPaymentsDueSoon(actor) {
 }
 
 /**
+ * Every Approved-but-not-yet-invoiced monthly-hours entry across every
+ * Deployment — the Clerk's own "Ready to Invoice" queue (2026-09-27, moved
+ * out of hunting through individual Deployment detail pages into its own
+ * home under Financial, the user's own ask). Visibility is deliberately
+ * different from getPaymentsDue's own coordinator-own/mobilisationsViewer
+ * split: a coordinator never invoices their own placements, so they get no
+ * view here at all — only whoever holds `deploymentsInvoicing` read (the
+ * Clerk) or `mobilisationsViewer` read (MM/Admin oversight), the people who
+ * actually act on this queue. Sorted oldest-approved-first, so the month
+ * that's been waiting longest leads.
+ */
+export async function getReadyToInvoice(actor) {
+  const allowed =
+    (await canAccessSection('deploymentsInvoicing', actor, 'read')) ||
+    (await canAccessSection('mobilisationsViewer', actor, 'read'));
+  if (!allowed) return [];
+
+  const deployments = await Deployment.find({
+    archived: { $ne: true },
+    monthlyHours: { $elemMatch: { status: 'Approved', invoiceSentAt: null } },
+  })
+    .select('workerName clientName mobilisation monthlyHours')
+    .populate('mobilisation', 'serialNumber')
+    .lean();
+
+  const rows = [];
+  for (const dep of deployments) {
+    for (const entry of dep.monthlyHours) {
+      if (entry.status !== 'Approved' || entry.invoiceSentAt) continue;
+      rows.push({
+        deploymentId: dep._id,
+        entryId: entry._id,
+        mobilisationSerial: dep.mobilisation?.serialNumber,
+        workerName: dep.workerName,
+        clientName: dep.clientName,
+        month: entry.month,
+        actualHours: entry.actualHours,
+        hoursApprovedAt: entry.decidedAt,
+      });
+    }
+  }
+  return rows.sort((a, b) => new Date(a.hoursApprovedAt) - new Date(b.hoursApprovedAt));
+}
+
+/**
  * Record (or correct) how much the client has actually paid for one already-
  * invoiced month. Cumulative, not a ledger of individual receipts — the
  * process the user described is one client payment per month's invoice, not

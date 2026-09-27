@@ -43,7 +43,6 @@ export const SECTION_KEYS = [
   'companySettings',
   'mobilisationsViewer',
   'mobilisationsSelfMobilise',
-  'invoices',
   'eosb',
   'financialRequests',
   'auditLog',
@@ -62,7 +61,6 @@ export const SECTION_KEYS = [
   'attendanceOfficeLocation',
   'documentsManage',
   'assetsManage',
-  'quotationsManage',
   'ramadanManage',
   'team',
   'approvalHierarchy',
@@ -71,17 +69,14 @@ export const SECTION_KEYS = [
   'exitDocuments',
   'holidays',
   // Added 2026-09-15, the user's own ask (a Coordinator/Manager/HR
-  // cost-and-profit view): gates the Dashboard's company-wide profit
-  // figure (Revenue from invoices − Payroll cost − Expenses) on its OWN
-  // key, independent from needing raw read access to Invoices/Payroll/
-  // Expenses individually — same "a derived figure gets its own narrower
+  // cost-and-profit view): gates the Dashboard's real "Actual Performance"
+  // profit figure (verified client payments − Expenses, see
+  // deployment.service.js's getActualPerformanceSummary) on its OWN key,
+  // independent from needing raw read access to Payroll/Expenses
+  // individually — same "a derived figure gets its own narrower
   // authorization, decoupled from the raw underlying fields' own access
   // grants" precedent Mobilisation/Deployment's own `profit` field already
-  // follows. Before this, the widget required read on all three of those
-  // sections at once — correct for data-integrity (never show a partial
-  // figure) but meant seeing one aggregate number required exposure to
-  // every individual invoice/payroll run/expense line. See
-  // dashboard.service.js's getDashboard.
+  // follows. See dashboard.service.js's getDashboard.
   'dashboardProfit',
   // Added 2026-09-15, the QA audit's own suggestion #6 ("add reconciliation
   // checks for ledger totals, finalized payroll, and deployments missing

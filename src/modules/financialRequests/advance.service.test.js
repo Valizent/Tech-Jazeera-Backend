@@ -1,7 +1,7 @@
 /**
  * advance.service.test.js — regression coverage for the SalaryAdvance
  * repayment ledger's real, QA-audit-found bugs (docs/QA-AUDIT-2026-09-15-
- * notes.md), the sibling of invoice.service.js's recordPayment:
+ * notes.md):
  *   S1: pipeline-update injection via an unwrapped `$`-prefixed field.
  *   F5: raw IEEE-754 float drift (1.10 + 0.10 !== 1.20 exactly) rejected a
  *       legitimate final repayment that should close the advance at zero.

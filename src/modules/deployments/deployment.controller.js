@@ -45,6 +45,12 @@ export async function paymentsDue(req, res) {
   res.json(new ApiResponse('Payments due.', data));
 }
 
+/** GET /api/deployments/ready-to-invoice — 200 → data: [{...}] */
+export async function readyToInvoice(req, res) {
+  const data = await deploymentService.getReadyToInvoice(actor(req));
+  res.json(new ApiResponse('Ready to invoice.', data));
+}
+
 /** GET /api/deployments/:id — 200 → data: deployment */
 export async function get(req, res) {
   const deployment = await deploymentService.getDeployment(req.params.id, actor(req));

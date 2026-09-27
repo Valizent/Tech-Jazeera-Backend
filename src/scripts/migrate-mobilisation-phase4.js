@@ -34,7 +34,7 @@
 import env from '../config/env.js'; // validates env before we touch the DB
 import mongoose from 'mongoose';
 import Mobilisation from '../modules/mobilisations/mobilisation.model.js';
-import { nextSequence } from '../modules/quotations/counter.model.js';
+import { nextSequence } from '../modules/shared/counter.model.js';
 
 await mongoose.connect(env.mongodbUri, { serverSelectionTimeoutMS: 10_000 });
 

@@ -1624,3 +1624,65 @@ when requested):**
   correctly in Arabic with the real dashboard endpoint still returning
   200. See `docs/REAL-REVENUE-TARGETS-notes.md`'s third 27 September
   follow-up.
+- **Invoice/Quotation/Credit Note modules removed entirely; Deployment
+  billing relocated to a new Financial section (27 September 2026)** — the
+  user drew a hard line, restated more forcefully than an earlier session's
+  similar framing: real accounting/invoicing (client invoices, credit
+  notes, ZATCA/VAT compliance) is ERPNext's job, not this app's — and asked
+  why they couldn't find where "the Clerk" was supposed to send an invoice
+  at all (the answer: a button buried inside a specific Deployment's detail
+  page, no real work queue). Confirmed the exact scope directly with the
+  user first (`AskUserQuestion`, all four answers explicit) before touching
+  anything: Invoice + Credit Note **removed entirely** (not hidden);
+  Quotations **removed too** (it only ever fed Invoice); the Deployment
+  billing tracker built the previous session specifically to avoid
+  duplicating Invoice (`invoiceNumber`/PDF copy/`amountReceived`/FM
+  approval) **kept as-is**, but moved out of the Deployment detail page
+  into a dedicated Financial-section home; a real Clerk work queue
+  ("Ready to Invoice") **built new**, symmetric to the existing Payments
+  Due page. Three whole server module folders deleted (20 files) plus
+  their only background job and three now-orphaned utilities (ZATCA QR,
+  the shared PDF line-item table, the shared money-math helper); the
+  generic `Counter`/`nextSequence` utility (used by Mobilisation's MOB- and
+  Requirements' REQ- serials, unrelated to Quotation despite living in its
+  folder) was relocated to a new `modules/shared/` first. `dashboard.
+  service.js` lost its entire Invoice-based `getProfitOverview()` (the old
+  `finance.profit`) — not replaced, since `finance.actualPerformance`
+  (Deployment-based, verified-payment, already gated by the same
+  `dashboardProfit` key) already covers real profit honestly. 22 client
+  files deleted (both feature folders whole); two more files
+  (`ProfitCard.jsx`, `QuickActions.jsx`) turned out to already be fully
+  orphaned from the 2026-09-24 dashboard redesign and were deleted too,
+  found while tracing what fed the removed fields. New `GET
+  /api/deployments/ready-to-invoice` + `ReadyToInvoicePage.jsx` at
+  `/financial/ready-to-invoice`; `PaymentsDuePage.jsx` (previously
+  read-only) gained real Record-Payment/Approve-Reject actions and moved
+  to `/financial/payments-due`; both now live under the Financial nav
+  group; `DeploymentDetailPage.jsx` keeps only a read-only billing-status
+  readout and invoice download. No new Section Access keys — both new
+  pages reuse the existing `deploymentsInvoicing`/`deploymentsHours`/
+  `deploymentsPaymentDecide`/`mobilisationsViewer` grants. A now-fully-dead
+  `month` query param on `GET /api/dashboard` (only ever fed the deleted
+  function) was removed end to end, server to client. Two more pre-existing
+  dead i18n blocks (`staffDashboard.pipeline`/`staffDashboard.profit`,
+  remnants of the pre-2026-09-24 layout) found and removed during the i18n
+  sweep. Data safety: the dev DB's 1 real Invoice/1 real Quotation/0 Credit
+  Notes were exported to a JSON backup (outside the repo) before deletion;
+  the MongoDB collections themselves were left in place, inert, not
+  dropped — a separate, explicit action if ever wanted. Production's own
+  Invoice/Quotation/CreditNote data (if any) was never inspected or
+  touched — no credentials to that database exist in this session.
+  Verified: full server suite 34/34 (down from 42 — the 8 lost tests were
+  the two deleted modules' own), `eslint` clean (0 errors) on BOTH full
+  repos (not just touched files — confirms no dangling import survived), a
+  real server boot connecting to MongoDB and reaching `app.listen` cleanly,
+  a clean client production build with the en/ar locale chunks measurably
+  smaller, full en/ar JSON key-parity, and a live browser click-through
+  (throwaway admin, fully cleaned up after) against real dev data — Ready
+  to Invoice and Payments Due both correctly listing real entries with
+  working action buttons (not clicked, to avoid mutating real data), the
+  Deployment detail page correctly reduced to read-only, and confirmation
+  via the app's own audit log that the real user was independently
+  exercising the new Ready to Invoice page during this same verification
+  window. See `docs/INVOICE-QUOTATION-REMOVAL-notes.md` for the full
+  finding-by-finding breakdown.

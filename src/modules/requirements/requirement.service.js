@@ -37,7 +37,7 @@ import Mobilisation from '../mobilisations/mobilisation.model.js';
 import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
-import { nextSequence } from '../quotations/counter.model.js';
+import { nextSequence } from '../shared/counter.model.js';
 import { getSectionAccess, resolveOwnTeamAccess } from '../sectionAccess/sectionAccess.service.js';
 import { listActiveCoordinators } from '../../utils/listActiveCoordinators.js';
 import { membersOfRoles } from '../approvals/approvalEngine.service.js';

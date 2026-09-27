@@ -28,7 +28,7 @@ import {
 } from '../approvals/approvalEngine.service.js';
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
 import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.js';
-import { nextSequence } from '../quotations/counter.model.js';
+import { nextSequence } from '../shared/counter.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import { createDeploymentFromMobilisation } from '../deployments/deployment.service.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';

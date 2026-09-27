@@ -7,15 +7,12 @@ import { getDashboard } from './dashboard.service.js';
 /**
  * GET /api/dashboard?thresholdDays=  — 200 → data: the full rolled-up overview.
  * A Coordinator sees their own team throughout — deployments, workforce
- * counts, payroll, clients, expiring documents, and activity. Quotations and
- * quotation-derived revenue are omitted for a Coordinator (null), since
- * there's no data-model link from a Coordinator's team to a quotation. Every
- * other role still sees the full company-wide overview.
+ * counts, payroll, clients, expiring documents, and activity. Every other
+ * role sees the full company-wide overview.
  */
 export async function overview(req, res) {
   const data = await getDashboard({
     thresholdDays: req.query.thresholdDays,
-    month: req.query.month,
     actor: { role: req.user.role, userId: req.user.id },
   });
   res.json(new ApiResponse('Dashboard.', data));

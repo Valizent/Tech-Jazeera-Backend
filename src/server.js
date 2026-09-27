@@ -16,7 +16,6 @@ import { startPeriodicMonitoring } from './config/monitoring.js';
 import app from './app.js';
 import { runExpiryAlertCheck } from './modules/notifications/expiryAlert.job.js';
 import { runMobilisationStaleCheck } from './modules/notifications/mobilisationStale.job.js';
-import { runOverdueInvoiceCheck } from './modules/notifications/overdueInvoice.job.js';
 import { runDeploymentBillingCheck } from './modules/notifications/deploymentBilling.job.js';
 
 // Without these, a stray unhandled promise rejection or thrown error outside
@@ -72,13 +71,6 @@ const mobilisationStaleInterval = setInterval(
   ONE_DAY_MS
 );
 
-// Same pattern again, offset by 20s so all three jobs' initial runs don't overlap.
-setTimeout(() => runOverdueInvoiceCheck().catch((err) => logger.error(`[overdueInvoiceJob] failed: ${err.message}`)), 20_000);
-const overdueInvoiceInterval = setInterval(
-  () => runOverdueInvoiceCheck().catch((err) => logger.error(`[overdueInvoiceJob] failed: ${err.message}`)),
-  ONE_DAY_MS
-);
-
 // Same pattern again, offset by 25s.
 setTimeout(() => runDeploymentBillingCheck().catch((err) => logger.error(`[deploymentBillingJob] failed: ${err.message}`)), 25_000);
 const deploymentBillingInterval = setInterval(
@@ -95,7 +87,6 @@ async function shutdown(signal) {
   logger.info(`${signal} received — shutting down gracefully...`);
   clearInterval(expiryAlertInterval);
   clearInterval(mobilisationStaleInterval);
-  clearInterval(overdueInvoiceInterval);
   clearInterval(deploymentBillingInterval);
   clearInterval(monitoringInterval);
   server.close(async () => {
