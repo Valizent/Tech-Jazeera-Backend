@@ -116,6 +116,7 @@ router.patch(
 // Same reasoning — visibility (deploymentsInvoicing/mobilisationsViewer read)
 // is computed in the service, not this route-level gate.
 router.get('/ready-to-invoice', asyncHandler(deploymentController.readyToInvoice));
+router.get('/pending-hours', asyncHandler(deploymentController.pendingHoursQueue));
 router.get(
   '/export',
   canReadDeployments,
