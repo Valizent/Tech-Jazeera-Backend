@@ -1170,6 +1170,18 @@ async function findDeployments({ worker, client, site, status, sortBy = 'startDa
       .lean(),
     Deployment.countDocuments(filter),
   ]);
+
+  const Expense = (await import('../expenses/expense.model.js')).default;
+  const deploymentIds = items.map(i => i._id);
+  const expenseTotals = await Expense.aggregate([
+    { $match: { deployment: { $in: deploymentIds } } },
+    { $group: { _id: '$deployment', total: { $sum: '$amount' } } }
+  ]);
+  const expensesByDep = new Map(expenseTotals.map(e => [e._id.toString(), e.total]));
+
+  for (const d of items) {
+    d.recordedExpenses = expensesByDep.get(d._id.toString()) || 0;
+  }
   // otAmount/mobilisation's own commercial fields are both commercial data
   // (see getDeployment's own doc comment) — this list isn't currently
   // rendered anywhere but the Overview modal/Excel export, but never send
@@ -1611,10 +1623,11 @@ export async function getActualPerformanceSummary() {
       const result = computeMonthlyRevenueAndExpenses(entry, dep.mobilisation, dep.monthlyHours);
       if (!result) continue;
       const received = entry.invoiceSentAt ? allocatedByEntryId.get(entry._id.toString()) ?? 0 : 0;
-      if (entry.month === lastMonthKey) addTo(buckets.lastMonth, 0, received);
-      if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, 0, received);
-      if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, 0, received);
-      if (sameMonthsLastYear.includes(entry.month)) addTo(buckets.sameMonthsLastYear, 0, received);
+      const ftaAndAllowance = result.breakdown.expenseFta + result.breakdown.expenseAllowance;
+      if (entry.month === lastMonthKey) addTo(buckets.lastMonth, ftaAndAllowance, received);
+      if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, ftaAndAllowance, received);
+      if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, ftaAndAllowance, received);
+      if (sameMonthsLastYear.includes(entry.month)) addTo(buckets.sameMonthsLastYear, ftaAndAllowance, received);
     }
   }
 

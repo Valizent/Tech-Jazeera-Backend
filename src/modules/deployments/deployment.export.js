@@ -34,6 +34,7 @@ const DEPLOYMENT_COLUMNS = [
   { header: 'Status', key: 'status', width: 12 },
   { header: 'End reason', key: 'endReason', width: 20 },
   { header: 'Notes', key: 'notes', width: 30 },
+  { header: 'Expenses', key: 'recordedExpenses', width: 15 },
 ];
 
 const MOBILISATION_COLUMNS = [
