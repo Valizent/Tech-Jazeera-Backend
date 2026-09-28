@@ -86,6 +86,7 @@ export async function getPendingHoursQueue(actor) {
         enteredAt: entry.createdAt,
         revenue: revExp ? revExp.revenue : null,
         profit: revExp ? revExp.profit : null,
+        profitBreakdown: revExp ? revExp.breakdown : null,
       });
     }
   }
@@ -1263,24 +1264,54 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
   if (!mobilisation) return null;
   const isSupplier = mobilisation.workerType === 'SupplierEmployee';
 
-  const revenue = money((mobilisation.clientRate ?? 0) * entry.contractHours + (mobilisation.otClientRate ?? 0) * entry.otHours);
+  // The regular hours billed to the client is the total actual hours minus any OT hours.
+  const regularClientHours = Math.max(0, entry.actualHours - entry.otHours);
+  const clientInvoiceAmount = money(
+    (mobilisation.clientRate ?? 0) * regularClientHours + 
+    (mobilisation.otClientRate ?? 0) * entry.otHours
+  );
 
+  const revenue = clientInvoiceAmount;
+
+  // The regular hours billed by the subcontractor is their timesheet minus the worker's OT hours
+  // (Since OT is handled separately at otEmployeeRate).
+  const regularSupplierHours = isSupplier ? Math.max(0, (entry.supplierHours ?? 0) - entry.otHours) : 0;
   const subSide = isSupplier ? (mobilisation.subcontractorRate ?? 0) + (mobilisation.subcontractorCommission ?? 0) : 0;
+  
+  const subContractorInvoiceAmount = isSupplier ? money(subSide * regularSupplierHours) : 0;
+
   const isFirstApprovedEntry =
     Array.isArray(allEntries) && entry.status === 'Approved' && entry._id?.toString() === firstApprovedEntryId(allEntries);
   const mobilisationCostDeduction = isFirstApprovedEntry ? mobilisation.mobilisationCost ?? 0 : 0;
 
+  const expenseClientCommission = money((mobilisation.clientCommission ?? 0) * regularClientHours);
+  const expenseFta = money(mobilisation.fta ?? 0);
+  const expenseAllowance = money(mobilisation.allowance ?? 0);
+  const otCalculations = money((mobilisation.otEmployeeRate ?? 0) * entry.otHours);
+  const expenseDeduction = money(entry.deductionAmount ?? 0);
+  
   const expenses = money(
-    (mobilisation.clientCommission ?? 0) * entry.contractHours +
-      subSide * entry.contractHours +
-      (mobilisation.fta ?? 0) +
-      (mobilisation.allowance ?? 0) +
-      (mobilisation.otEmployeeRate ?? 0) * entry.otHours +
-      (entry.deductionAmount ?? 0) +
+    expenseClientCommission +
+      subContractorInvoiceAmount +
+      expenseFta +
+      expenseAllowance +
+      otCalculations +
+      expenseDeduction +
       mobilisationCostDeduction
   );
 
-  return { revenue, expenses, profit: money(revenue - expenses) };
+  const breakdown = {
+    clientInvoiceAmount,
+    subContractorInvoiceAmount,
+    otCalculations,
+    expenseClientCommission,
+    expenseFta,
+    expenseAllowance,
+    expenseDeduction,
+    expenseMobilisationCost: mobilisationCostDeduction,
+  };
+
+  return { revenue, expenses, profit: money(revenue - expenses), breakdown };
 }
 
 /**
