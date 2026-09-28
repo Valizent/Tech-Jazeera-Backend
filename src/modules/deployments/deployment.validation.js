@@ -41,6 +41,8 @@ export const listDeploymentsSchema = z.object({
   worker: id.optional(),
   client: id.optional(),
   status: z.preprocess(emptyToUndef, z.enum(DEPLOYMENT_STATUSES).optional()),
+  site: optionalStr(150),
+  sortBy: z.enum(['startDate', 'workerName', 'clientName', 'site', 'status']).default('startDate'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
@@ -52,6 +54,8 @@ export const exportDeploymentsSchema = z.object({
   worker: id.optional(),
   client: id.optional(),
   status: z.preprocess(emptyToUndef, z.enum(DEPLOYMENT_STATUSES).optional()),
+  site: optionalStr(150),
+  sortBy: z.enum(['startDate', 'workerName', 'clientName', 'site', 'status']).default('startDate'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 

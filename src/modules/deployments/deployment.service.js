@@ -1084,7 +1084,7 @@ function stripMobilisationCommercial(mobilisation) {
  *  visibility/commercial-stripping logic neither should duplicate, same
  *  "one real query builder, callers just differ on pagination" convention
  *  mobilisation.service.js's own findVisibleMobilisations already follows. */
-async function findDeployments({ worker, client, status, sortOrder }, actor, { skip, limit } = {}) {
+async function findDeployments({ worker, client, site, status, sortBy = 'startDate', sortOrder }, actor, { skip, limit } = {}) {
   // Fixed 2026-09-15, a real QA-audit-found gap — A1: `?worker=` accepted
   // any employee id with no ownership check, unlike the single-record read
   // right below (getDeployment) — a Coordinator could pull a foreign
@@ -1096,6 +1096,7 @@ async function findDeployments({ worker, client, status, sortOrder }, actor, { s
   if (worker) filter.worker = worker;
   if (client) filter.client = client;
   if (status) filter.status = status;
+  if (site) filter.site = { $regex: site, $options: 'i' };
   // Fixed 2026-09-17, a follow-up QA-audit gap: the check above only ever
   // fired when the caller explicitly passed `?worker=`. The plain,
   // unfiltered list/export (the normal way the register page is opened)
@@ -1123,7 +1124,11 @@ async function findDeployments({ worker, client, status, sortOrder }, actor, { s
     filter.mobilisation = { $in: myMobIds };
   }
 
-  const sort = { startDate: sortOrder === 'asc' ? 1 : -1, _id: -1 };
+  // Map UI sort-field names to real Mongo field names.
+  const SORT_FIELD_MAP = { startDate: 'startDate', workerName: 'workerName', clientName: 'clientName', site: 'site', status: 'status' };
+  const sortField = SORT_FIELD_MAP[sortBy] ?? 'startDate';
+  const dir = sortOrder === 'asc' ? 1 : -1;
+  const sort = { [sortField]: dir, _id: -1 };
   let query = Deployment.find(filter).sort(sort);
   if (skip) query = query.skip(skip);
   if (limit) query = query.limit(limit);
