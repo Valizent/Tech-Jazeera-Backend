@@ -58,13 +58,16 @@ export async function getPendingHoursQueue(actor) {
     'monthlyHours.status': 'Pending',
   })
     .select('workerName clientName site workerType monthlyHours mobilisation')
-    .populate('mobilisation', 'otClientRate')
+    .populate('mobilisation')
     .lean();
 
   const rows = [];
   for (const dep of deployments) {
     for (const entry of dep.monthlyHours) {
       if (entry.status !== 'Pending') continue;
+      
+      const revExp = computeMonthlyRevenueAndExpenses(entry, dep.mobilisation, dep.monthlyHours);
+      
       rows.push({
         deploymentId: dep._id,
         entryId: entry._id,
@@ -81,6 +84,8 @@ export async function getPendingHoursQueue(actor) {
         deductionAmount: entry.deductionAmount,
         notes: entry.notes,
         enteredAt: entry.createdAt,
+        revenue: revExp ? revExp.revenue : null,
+        profit: revExp ? revExp.profit : null,
       });
     }
   }
