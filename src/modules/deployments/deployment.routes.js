@@ -107,6 +107,7 @@ router.post(
   validate({ params: clientIdParamSchema, body: recordClientPaymentSchema }),
   asyncHandler(deploymentController.recordClientPayment)
 );
+router.get('/pending-payments', canDecidePayment, asyncHandler(deploymentController.pendingPaymentsQueue));
 router.patch(
   '/client-payments/:paymentId/decide',
   canDecidePayment,

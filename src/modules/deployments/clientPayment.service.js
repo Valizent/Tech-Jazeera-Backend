@@ -100,6 +100,19 @@ export async function getClientPaymentHistory(clientId) {
     .lean();
 }
 
+/** One flat list of all Pending payments across all clients — for the manager's review queue. */
+export async function getPendingPaymentsQueue(actor) {
+  const allowed = await canAccessSection('deploymentsPaymentDecide', actor);
+  if (!allowed && actor.role !== 'Admin') {
+    throw new ApiError(403, 'You do not have permission to view the payments approval queue.');
+  }
+  return ClientPayment.find({ decisionStatus: 'Pending' })
+    .sort({ recordedAt: 1 })
+    .populate('client', 'companyName')
+    .populate('recordedBy', 'name')
+    .lean();
+}
+
 /**
  * Office Secretary (or 'deploymentsHours' write) records what the client
  * actually paid, in bulk, this time — sits Pending until the Financial

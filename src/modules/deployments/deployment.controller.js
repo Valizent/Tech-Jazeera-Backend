@@ -127,6 +127,12 @@ export async function decideClientPayment(req, res) {
   res.json(new ApiResponse('Payment decision recorded.', payment));
 }
 
+/** GET /api/deployments/pending-payments — 200 → data: payment[] */
+export async function pendingPaymentsQueue(req, res) {
+  const data = await clientPaymentService.getPendingPaymentsQueue(actor(req));
+  res.json(new ApiResponse('Pending payments queue.', data));
+}
+
 /** POST /api/deployments/:id/demobilise — 200 → data: null */
 export async function demobilise(req, res) {
   await deploymentService.demobiliseDeployment(req.params.id, req.body, actor(req));
