@@ -37,7 +37,7 @@ import mongoose from 'mongoose';
  *  default in sectionAccess.service.js) to bring a new page under
  *  admin-configurable access without touching this model again. */
 export const SECTION_KEYS = [
-  'payroll',
+
   'expenses',
   'employeeCreate',
   'companySettings',

@@ -13,7 +13,7 @@ import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 
 const SECTION_LABELS = {
-  payroll: 'Payroll',
+
   expenses: 'Expenses',
   employeeCreate: 'Employees — view & add',
   companySettings: 'Company Settings',
@@ -64,7 +64,7 @@ const SECTION_LABELS = {
  *  no longer written down at this specific spot; see each route file's own
  *  doc comment for the underlying rule). */
 const SECTION_DESCRIPTIONS = {
-  payroll: 'Grants access to run monthly payroll and view payslips. It exists to ensure workers are paid accurately based on approved hours and deductions.',
+
   expenses: 'Grants access to the company\'s internal expense ledger. It is here to track and record spending that is not billed to a client.',
   employeeCreate: 'Grants access to the employee directory. It exists so HR or management can add new workers, view profiles, and manage sensitive records.',
   companySettings: 'Grants access to edit the company\'s legal, contact, and bank details. It is here so only authorized personnel can change the details printed on official documents.',

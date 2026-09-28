@@ -17,7 +17,7 @@ import * as exitReentryService from '../exitDocuments/exitReentry.service.js';
 import * as certificateService from '../exitDocuments/certificate.service.js';
 import * as assetService from '../assets/asset.service.js';
 import * as timesheetService from '../timesheets/timesheet.service.js';
-import * as payrollService from '../payroll/payroll.service.js';
+
 
 export async function getMyProfile(employeeId) {
   const employee = await Employee.findById(employeeId)
@@ -175,10 +175,3 @@ export async function listMyTimesheets(employeeId, query) {
   return timesheetService.listOwnTimesheets(employeeId, query);
 }
 
-export async function listMyPayslips(employeeId) {
-  return payrollService.listMyPayslips(employeeId);
-}
-
-export async function resolveMyPayslipPdf(employeeId, runId) {
-  return payrollService.resolveMyPayslip(employeeId, runId);
-}

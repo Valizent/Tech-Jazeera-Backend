@@ -38,13 +38,7 @@ import {
   certificateIdParamSchema,
 } from '../exitDocuments/certificate.validation.js';
 import { submitTimesheetSchema, listMyTimesheetsSchema } from '../timesheets/timesheet.validation.js';
-import { payrollRunIdParamSchema } from '../payroll/payroll.validation.js';
-import { z } from 'zod';
 import * as meController from './me.controller.js';
-
-// payroll.validation.js's param schema uses {id}, but this route's param is
-// named :runId — a tiny local alias rather than a shared schema mismatch.
-const payslipRunIdParamSchema = z.object({ runId: payrollRunIdParamSchema.shape.id });
 
 const router = Router();
 
@@ -184,12 +178,6 @@ router.post(
   asyncHandler(meController.submitTimesheet)
 );
 
-router.get('/payslips', asyncHandler(meController.listPayslips));
-router.get(
-  '/payslips/:runId/pdf',
-  validate({ params: payslipRunIdParamSchema }),
-  asyncHandler(meController.payslipPdf)
-);
 
 /** Same orphaned-upload cleanup as document.routes.js — the leave and
  *  reimbursement POSTs above are the only routes that set req.file on

@@ -22,7 +22,7 @@
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import SalaryAdvance from '../financialRequests/advance.model.js';
-import PayrollRun from '../payroll/payrollRun.model.js';
+
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 const sum = (arr, pick) => money(arr.reduce((total, item) => total + (pick(item) ?? 0), 0));
@@ -127,33 +127,7 @@ async function salaryAdvanceLedgerMismatches() {
   return findings;
 }
 
-/** A finalized PayrollRun's run-level totals (totalGross/totalDeductions/
- *  totalNet) should equal the sum of its own lines — same "cached aggregate
- *  vs. its declared components" check as the SalaryAdvance one above. Only
- *  Finalized runs are checked: a Draft run is still being edited, so a
- *  momentary mismatch there is normal, not a finding. */
-async function payrollRunMismatches() {
-  const runs = await PayrollRun.find({ status: 'Finalized' })
-    .select('periodYear periodMonth totalGross totalDeductions totalNet lines')
-    .lean();
-  const findings = [];
-  for (const run of runs) {
-    const realGross = sum(run.lines, (l) => l.grossPay);
-    const realDeductions = sum(run.lines, (l) => l.totalDeductions);
-    const realNet = sum(run.lines, (l) => l.netPay);
-    if (realGross !== money(run.totalGross) || realDeductions !== money(run.totalDeductions) || realNet !== money(run.totalNet)) {
-      findings.push({
-        category: 'payrollRunMismatch',
-        severity: 'high',
-        summary: `Payroll ${run.periodYear}-${String(run.periodMonth).padStart(2, '0')}: stored totals (gross ${run.totalGross}, deductions ${run.totalDeductions}, net ${run.totalNet}) don't match the sum of its own ${run.lines.length} line(s) (gross ${realGross}, deductions ${realDeductions}, net ${realNet}).`,
-        targetType: 'PayrollRun',
-        targetId: run._id,
-        url: `/payroll/${run._id}`,
-      });
-    }
-  }
-  return findings;
-}
+
 
 /** Runs every check in parallel and returns one flat, severity-sorted list.
  *  Nothing here writes to the database — every finding is a link to the
@@ -163,7 +137,6 @@ export async function runReconciliation() {
     orphanedMobilisations(),
     doubleBookedWorkers(),
     salaryAdvanceLedgerMismatches(),
-    payrollRunMismatches(),
   ]);
   const findings = results.flat();
   const severityRank = { high: 0, medium: 1, low: 2 };

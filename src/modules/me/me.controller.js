@@ -10,7 +10,7 @@ import ApiError from '../../utils/ApiError.js';
 import ApiResponse from '../../utils/ApiResponse.js';
 import { contentDisposition } from '../../utils/contentDisposition.js';
 import { sendCertificatePdf } from '../exitDocuments/certificate.controller.js';
-import { sendPayslipPdf } from '../payroll/payroll.controller.js';
+
 import * as meService from './me.service.js';
 
 const actor = (req) => ({ userId: req.user.id, employee: req.user.employee, ip: req.ip });
@@ -218,14 +218,3 @@ export async function listTimesheets(req, res) {
   res.json(new ApiResponse('Your timesheets.', data));
 }
 
-/** GET /api/me/payslips — 200 → data: payslip summary[] (Finalized runs only) */
-export async function listPayslips(req, res) {
-  const data = await meService.listMyPayslips(myEmployeeId(req));
-  res.json(new ApiResponse('Your payslips.', data));
-}
-
-/** GET /api/me/payslips/:runId/pdf — own payslip PDF only. */
-export async function payslipPdf(req, res) {
-  const resolved = await meService.resolveMyPayslipPdf(myEmployeeId(req), req.params.runId);
-  await sendPayslipPdf(resolved, res);
-}
