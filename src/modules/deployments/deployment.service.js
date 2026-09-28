@@ -1611,10 +1611,10 @@ export async function getActualPerformanceSummary() {
       const result = computeMonthlyRevenueAndExpenses(entry, dep.mobilisation, dep.monthlyHours);
       if (!result) continue;
       const received = entry.invoiceSentAt ? allocatedByEntryId.get(entry._id.toString()) ?? 0 : 0;
-      if (entry.month === lastMonthKey) addTo(buckets.lastMonth, result.expenses, received);
-      if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, result.expenses, received);
-      if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, result.expenses, received);
-      if (sameMonthsLastYear.includes(entry.month)) addTo(buckets.sameMonthsLastYear, result.expenses, received);
+      if (entry.month === lastMonthKey) addTo(buckets.lastMonth, 0, received);
+      if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, 0, received);
+      if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, 0, received);
+      if (sameMonthsLastYear.includes(entry.month)) addTo(buckets.sameMonthsLastYear, 0, received);
     }
   }
 
