@@ -101,14 +101,6 @@ const deductionAmount = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(
 // before the daily grid existed (see docs/MOBILISATION-notes.md's
 // 2026-09-12 follow-up: `otHours = max(0, clientTimesheetHours -
 // requiredTimesheetHours)`, unchanged here, just renamed `actualHours` to
-// match the field this app already had). `daysWorked` is new — a second
-// headline number a real client timesheet always carries alongside total
-// hours; purely informational/cross-check, not part of the OT formula.
-// Bounded loosely (a month has at most 31 real days) — the tighter, real
-// bound (can't exceed the deployment's actual placement days that month)
-// needs the deployment/month context this file doesn't have, so it's
-// checked in deployment.service.js instead, same reasoning the old
-// day-count check already used for exactly this file/service split.
 // Supplier timesheet hours (2026-09-19, the user's own ask) — only
 // meaningful for a SupplierEmployee deployment (see deployment.model.js's
 // own doc comment on the field); optional HERE since this schema has no
@@ -121,7 +113,6 @@ export const addMonthlyHoursSchema = z.object({
   month: monthStr,
   actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
   supplierHours,
-  daysWorked: z.coerce.number({ error: 'Enter the number of days worked.' }).int('Whole days only.').min(0).max(31),
   deductionAmount,
   notes: optionalStr(500),
 });
@@ -131,7 +122,6 @@ export const addMonthlyHoursSchema = z.object({
 export const updateMonthlyHoursSchema = z.object({
   actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
   supplierHours,
-  daysWorked: z.coerce.number({ error: 'Enter the number of days worked.' }).int('Whole days only.').min(0).max(31),
   deductionAmount,
   notes: optionalStr(500),
 });

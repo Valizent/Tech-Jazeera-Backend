@@ -40,6 +40,55 @@ function currentMonthStr() {
  *  actual decide endpoint re-checks authority itself via canAccessSection,
  *  so a notification going to someone whose grant changed a moment later is
  *  a harmless staleness, not a security gap. */
+
+/**
+ * All Pending monthly-hours entries across every deployment the caller can
+ * see — the manager's approval queue. Gated by 'deploymentsHoursDecide'
+ * write access (same as decideMonthlyHours); returns enriched rows ready
+ * for the front-end review table (workerName, clientName, site, month, hours
+ * summary, deployment id, entry id so the decider can Approve/Reject in one
+ * click without opening the full detail page first).
+ */
+export async function getPendingHoursQueue(actor) {
+  const allowed = await canAccessSection('deploymentsHoursDecide', actor);
+  if (!allowed && actor.role !== 'Admin') {
+    throw new ApiError(403, 'You do not have permission to view the hours approval queue.');
+  }
+  const deployments = await Deployment.find({
+    'monthlyHours.status': 'Pending',
+  })
+    .select('workerName clientName site workerType monthlyHours mobilisation')
+    .populate('mobilisation', 'otClientRate')
+    .lean();
+
+  const rows = [];
+  for (const dep of deployments) {
+    for (const entry of dep.monthlyHours) {
+      if (entry.status !== 'Pending') continue;
+      rows.push({
+        deploymentId: dep._id,
+        entryId: entry._id,
+        workerName: dep.workerName,
+        clientName: dep.clientName,
+        site: dep.site,
+        workerType: dep.workerType,
+        month: entry.month,
+        contractHours: entry.contractHours,
+        actualHours: entry.actualHours,
+        supplierHours: entry.supplierHours,
+        otHours: entry.otHours,
+        otAmount: entry.otAmount,
+        deductionAmount: entry.deductionAmount,
+        notes: entry.notes,
+        enteredAt: entry.createdAt,
+      });
+    }
+  }
+  // Newest entry first
+  rows.sort((a, b) => new Date(b.enteredAt) - new Date(a.enteredAt));
+  return rows;
+}
+
 async function decidersOfDeploymentsHours() {
   const settings = await getSectionAccess('deploymentsHoursDecide');
   return membersOfRoles(settings.writeApprovalRoles);
@@ -105,25 +154,6 @@ function realPlacementDaysInMonth(deployment, month) {
   const lastDay =
     deployment.endDate && month === monthStrOf(deployment.endDate) ? new Date(deployment.endDate).getDate() : total;
   return lastDay - firstDay + 1;
-}
-
-/** `daysWorked` can never exceed how many real days the deployment actually
- *  covered that month — reverted 2026-09-16 (the user's own ask) from a
- *  full day-by-day breakdown (originally added 2026-09-15 as F6's fix, see
- *  git history for `assertWorkedDaysWithinPlacement`) back to two typed
- *  totals, the shape this app originally used before the daily grid
- *  existed (see docs/MOBILISATION-notes.md's 2026-09-12 follow-up). This
- *  is the lighter replacement for the same class of mistake the old,
- *  per-day check caught (claiming hours for a day the worker genuinely
- *  wasn't there) — without needing the day-by-day detail itself. */
-function assertDaysWorkedWithinPlacement(deployment, month, daysWorked) {
-  const maxDays = realPlacementDaysInMonth(deployment, month);
-  if (daysWorked > maxDays) {
-    throw new ApiError(
-      400,
-      `${month} only had ${maxDays} real placement day(s) for this deployment — days worked can't exceed that.`
-    );
-  }
 }
 
 /**
@@ -278,7 +308,6 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   if (data.month < monthStrOf(deployment.startDate)) {
     throw new ApiError(400, 'This deployment had not started yet in that month.');
   }
-  assertDaysWorkedWithinPlacement(deployment, data.month, data.daysWorked);
   // Supplier timesheet hours are required for a SupplierEmployee deployment
   // (the new OT formula needs them) and simply not applicable otherwise —
   // see computeOtHours/deployment.model.js's own doc comment.
@@ -296,7 +325,6 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     contractHours,
     actualHours,
     supplierHours,
-    daysWorked: data.daysWorked,
     otHours,
     otAmount,
     deductionAmount: data.deductionAmount ?? 0,
@@ -325,7 +353,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     action: 'deployment.monthlyHours.add',
     targetType: 'Deployment',
     targetId: updated._id,
-    meta: { month: data.month, actualHours, daysWorked: data.daysWorked, otHours, otAmount },
+    meta: { month: data.month, actualHours, otHours, otAmount },
     ip: actor.ip,
   });
 
@@ -384,7 +412,6 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   if (entry.status === 'Approved' && !isDecider) {
     throw new ApiError(400, 'This month is already approved and can no longer be edited.');
   }
-  assertDaysWorkedWithinPlacement(deployment, entry.month, data.daysWorked);
   if (deployment.workerType === 'SupplierEmployee' && data.supplierHours == null) {
     throw new ApiError(400, 'Enter the supplier timesheet hours.');
   }
@@ -393,7 +420,6 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   const before = {
     actualHours: entry.actualHours,
     supplierHours: entry.supplierHours,
-    daysWorked: entry.daysWorked,
     otAmount: entry.otAmount,
     deductionAmount: entry.deductionAmount,
     notes: entry.notes,
@@ -411,7 +437,6 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   entry.dailyHours = [];
   entry.actualHours = actualHours;
   entry.supplierHours = supplierHours;
-  entry.daysWorked = data.daysWorked;
   entry.otHours = computeOtHours(deployment.workerType, actualHours, supplierHours, entry.contractHours);
   entry.otAmount = await computeOtAmount(deployment.mobilisation, entry.otHours);
   entry.deductionAmount = data.deductionAmount ?? 0;
@@ -440,7 +465,6 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
       after: {
         actualHours: entry.actualHours,
         supplierHours: entry.supplierHours,
-        daysWorked: entry.daysWorked,
         otAmount: entry.otAmount,
         deductionAmount: entry.deductionAmount,
         notes: entry.notes,

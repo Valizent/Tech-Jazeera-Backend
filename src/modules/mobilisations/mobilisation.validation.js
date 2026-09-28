@@ -213,7 +213,7 @@ export const listMobilisationsSchema = z.object({
   // mobilisationTarget.service.js's own sumProgress already uses).
   coordinator: z.preprocess(emptyToUndef, id('coordinator').optional()),
   search: optionalStr(100),
-  sortBy: z.enum(['mobilisationDate', 'createdAt']).default('createdAt'),
+  sortBy: z.enum(['mobilisationDate', 'createdAt', 'workerName', 'clientName', 'status']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
@@ -230,7 +230,7 @@ export const exportMobilisationsSchema = z.object({
   worker: z.preprocess(emptyToUndef, id('worker').optional()),
   coordinator: z.preprocess(emptyToUndef, id('coordinator').optional()),
   search: optionalStr(100),
-  sortBy: z.enum(['mobilisationDate', 'createdAt']).default('createdAt'),
+  sortBy: z.enum(['mobilisationDate', 'createdAt', 'workerName', 'clientName', 'status']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 

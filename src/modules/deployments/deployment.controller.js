@@ -52,6 +52,12 @@ export async function clientPaymentDetail(req, res) {
   res.json(new ApiResponse('Client payment detail.', data));
 }
 
+/** GET /api/deployments/pending-hours — 200 → data: [{...}] manager review queue */
+export async function pendingHoursQueue(req, res) {
+  const data = await deploymentService.getPendingHoursQueue(actor(req));
+  res.json(new ApiResponse('Pending hours queue.', data));
+}
+
 /** GET /api/deployments/ready-to-invoice — 200 → data: [{...}] */
 export async function readyToInvoice(req, res) {
   const data = await deploymentService.getReadyToInvoice(actor(req));

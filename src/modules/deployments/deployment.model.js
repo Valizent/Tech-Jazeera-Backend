@@ -140,12 +140,6 @@ const monthlyHoursSchema = new mongoose.Schema(
     // and unused for Employee/Freelancer, which keep the original
     // contractHours-based OT formula below.
     supplierHours: { type: Number, min: 0, default: null },
-    // How many real days the client's timesheet shows as worked that month
-    // — added 2026-09-16, a second headline number a real timesheet always
-    // carries alongside total hours. Informational/cross-check only, not
-    // part of the otHours formula below. `0` on a pre-2026-09-16 record
-    // that predates this field (never invented after the fact).
-    daysWorked: { type: Number, default: 0, min: 0, max: 31 },
     // server-computed (deployment.service.js's computeOtHours) — SupplierEmployee:
     // max(0, actualHours - supplierHours); Employee/Freelancer, unchanged:
     // max(0, actualHours - contractHours).
