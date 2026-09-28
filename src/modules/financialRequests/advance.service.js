@@ -190,7 +190,8 @@ export async function addRepayment(id, data, actor) {
   }
 
   // Atomic update, not read-then-save (fixed 2026-09-14, a real QA-audit-
-  // found race — F1, same class as invoice.service.js's recordPayment): two
+  // found race — F1, same class of bug the old Invoice module's own
+  // recordPayment had before that module was removed): two
   // concurrent repayments could both pass the plain-JS check above against
   // the same stale read, then both save, over-repaying the advance. `$expr`
   // re-sums the CURRENT `repayments` array live in the filter, so it's
@@ -201,8 +202,8 @@ export async function addRepayment(id, data, actor) {
   // math), so an exact `$lte` against the unrounded sum could reject a
   // legitimate final repayment that pays the balance down to exactly zero.
   // `$literal` around the appended repayment (fixed 2026-09-15, a real
-  // QA-audit-found injection — S1, same class as invoice.service.js's
-  // recordPayment): this is a PIPELINE update, so every value in it is
+  // QA-audit-found injection — S1, same class the old Invoice module's own
+  // recordPayment had): this is a PIPELINE update, so every value in it is
   // otherwise evaluated as an aggregation expression — a validated-as-a-
   // string `note` like "$reason" was silently resolved against the CURRENT
   // document instead of stored as the literal text the user typed.

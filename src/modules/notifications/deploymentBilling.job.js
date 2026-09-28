@@ -11,9 +11,14 @@
  *    chase it). Fixed "notify once, ever" dedupeKey — a single nudge is
  *    enough here.
  *  - Payment due escalation (2026-09-27 follow-up, the user's own ask): a
- *    monthlyHours entry that's been invoiced (`invoiceSentAt` set) but not
- *    yet fully resolved (`paymentDecisionStatus !== 'Approved'`) — notifies
- *    with INCREASING frequency as its `invoiceDueAt` (50 days out — see
+ *    monthlyHours entry that's been invoiced (`invoiceSentAt` set) but
+ *    still has a real outstanding balance — since the same-day bulk-payment
+ *    redesign (see clientPayment.service.js), that's no longer a per-entry
+ *    `paymentDecisionStatus`; it's this entry's own live FIFO allocation
+ *    against its client's real payment history
+ *    (deployment.service.js's getClientAllocation), walked once per
+ *    distinct client here rather than once per entry. Notifies with
+ *    INCREASING frequency as its `invoiceDueAt` (50 days out — see
  *    deployment.service.js's sendInvoice) approaches: at 10/5/3/2/1/0 days
  *    remaining, then EVERY SINGLE DAY once overdue (a real mounting
  *    drumbeat, not a one-time notice) — each stage gets its own dedupeKey,
@@ -31,6 +36,7 @@
  */
 import Deployment from '../deployments/deployment.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
+import { getClientAllocation } from '../deployments/deployment.service.js';
 import { getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
 import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { notifyUser } from './notification.service.js';
@@ -115,9 +121,9 @@ function escalationStage(daysRemaining) {
 async function checkPaymentDueEscalation() {
   const deployments = await Deployment.find({
     archived: { $ne: true },
-    monthlyHours: { $elemMatch: { invoiceSentAt: { $ne: null }, paymentDecisionStatus: { $ne: 'Approved' } } },
+    monthlyHours: { $elemMatch: { invoiceSentAt: { $ne: null } } },
   })
-    .select('workerName clientName mobilisation monthlyHours')
+    .select('client workerName clientName mobilisation monthlyHours')
     .lean();
   if (deployments.length === 0) return { found: 0, sent: 0 };
 
@@ -125,13 +131,24 @@ async function checkPaymentDueEscalation() {
   const mmRecipients = (await membersOfRoles(mmSettings.writeApprovalRoles)).map((id) => id.toString());
   const coordinatorsCache = new Map(); // mobilisationId -> [coordinatorIdString]
 
+  // One ledger walk per distinct client, not per entry — a client's real
+  // outstanding balance depends on their FULL invoice history.
+  const clientIds = [...new Set(deployments.map((d) => d.client.toString()))];
+  const allocationByEntryId = new Map();
+  for (const clientId of clientIds) {
+    const { perEntry } = await getClientAllocation(clientId);
+    for (const e of perEntry) allocationByEntryId.set(e.entryId.toString(), e);
+  }
+
   const now = Date.now();
   let found = 0;
   let sent = 0;
   for (const d of deployments) {
     if (!d.mobilisation) continue;
     for (const entry of d.monthlyHours) {
-      if (!entry.invoiceSentAt || entry.paymentDecisionStatus === 'Approved' || !entry.invoiceDueAt) continue;
+      if (!entry.invoiceSentAt || !entry.invoiceDueAt) continue;
+      const alloc = allocationByEntryId.get(entry._id.toString());
+      if (!alloc || alloc.balanceDue <= 0) continue;
       const daysRemaining = Math.ceil((new Date(entry.invoiceDueAt).getTime() - now) / 86_400_000);
       const stage = escalationStage(daysRemaining);
       if (!stage) continue;
@@ -159,7 +176,7 @@ async function checkPaymentDueEscalation() {
           type: 'RequestStatus',
           title,
           body,
-          url: `/deployments/payments-due`,
+          url: `/financial/payments-due`,
           dedupeKey: `deployment-payment-due:${d._id}:${entry.month}:${stage}:${userId}`,
         });
         if (result.wasNew) sent += 1;

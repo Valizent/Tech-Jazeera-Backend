@@ -10,15 +10,21 @@
  * estimate-based version, the user's own explicit ask: a target should
  * reflect money that actually arrived, not a figure computed the moment a
  * mobilisation was approved). `achieved` is now the SUM, across every
- * Deployment.monthlyHours entry for the target month with
- * `paymentDecisionStatus === 'Approved'` (a Financial-Manager sign-off — see
- * deployment.service.js's decidePayment), of that entry's `amountReceived`
- * split by the coordinator's `effectiveSharePercent` on the Deployment's
- * source Mobilisation (mobilisation.service.js — full credit if the
- * coordinator is alone, an even or admin-set split if joint). Computed LIVE
- * on every read (realRevenueByCoordinator, below) — never cached/pushed to a
- * separate ledger — the same "never trust a stored financial figure,
- * recompute" discipline Payroll/Invoice totals already follow.
+ * Deployment.monthlyHours entry for the target month, of however much of
+ * that entry's invoice has actually been paid — split by the coordinator's
+ * `effectiveSharePercent` on the Deployment's source Mobilisation
+ * (mobilisation.service.js — full credit if the coordinator is alone, an
+ * even or admin-set split if joint).
+ *
+ * Same-day follow-up (2026-09-27, the user's own correction): a client
+ * pays in BULK for everyone placed there, not per worker — see
+ * clientPayment.service.js's own doc comment. "How much of this entry was
+ * paid" is no longer a per-entry `paymentDecisionStatus`/`amountReceived`
+ * a person typed in; it's this entry's own live FIFO allocation against
+ * its client's real payment history (deployment.service.js's
+ * getClientAllocation), computed fresh here too — never cached/pushed to a
+ * separate ledger, the same "never trust a stored financial figure,
+ * recompute" discipline Payroll totals already follow.
  *
  * Own-Employee exclusion (2026-09-27, real user correction): a Deployment of
  * the company's OWN staff (`workerType: 'Employee'`) never contributes to
@@ -34,7 +40,7 @@ import Mobilisation from '../mobilisations/mobilisation.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import User from '../auth/user.model.js';
 import { effectiveSharePercent } from '../mobilisations/mobilisation.service.js';
-import { computeMonthlyRevenueAndExpenses } from '../deployments/deployment.service.js';
+import { computeMonthlyRevenueAndExpenses, getClientAllocation } from '../deployments/deployment.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
@@ -61,37 +67,47 @@ const round2 = (n) => Math.round(n * 100) / 100;
 
 /**
  * Every coordinator's REAL revenue credit for one calendar month, company-
- * wide, in a single query — the one shared definition sumProgress/
- * sumProgressBatch (below) and dashboard.service.js's Coordinator
- * Leaderboard/Drill-down all read from, so the three can never quietly
- * disagree (the same reasoning monthBounds is already shared for). Excludes
- * Own-Employee Deployments (workerType) and any archived Deployment.
- * Returns Map<coordinatorIdString, totalAmount>.
+ * wide — the one shared definition sumProgress/sumProgressBatch (below) and
+ * dashboard.service.js's Coordinator Leaderboard/Drill-down all read from,
+ * so the three can never quietly disagree (the same reasoning monthBounds
+ * is already shared for). Excludes Own-Employee Deployments (workerType)
+ * and any archived Deployment. Returns Map<coordinatorIdString,
+ * totalAmount>.
+ *
+ * One client-payment ledger walk per distinct CLIENT represented this
+ * month (not per entry) — a client's FIFO allocation depends on their
+ * FULL invoice history, not just this month's slice of it, so
+ * getClientAllocation is the one place that math is allowed to happen;
+ * this function only sums the result.
  */
 export async function realRevenueByCoordinator(month) {
-  const rows = await Deployment.aggregate([
-    { $match: { workerType: { $ne: 'Employee' }, archived: { $ne: true } } },
-    { $unwind: '$monthlyHours' },
-    { $match: { 'monthlyHours.month': month, 'monthlyHours.paymentDecisionStatus': 'Approved' } },
-    {
-      $lookup: {
-        from: 'mobilisations',
-        localField: 'mobilisation',
-        foreignField: '_id',
-        as: 'mob',
-      },
-    },
-    { $unwind: '$mob' },
-    { $project: { amountReceived: '$monthlyHours.amountReceived', coordinators: '$mob.coordinators' } },
-  ]);
+  const deployments = await Deployment.find({
+    workerType: { $ne: 'Employee' },
+    archived: { $ne: true },
+    monthlyHours: { $elemMatch: { month, invoiceSentAt: { $ne: null } } },
+  })
+    .select('client monthlyHours mobilisation')
+    .populate('mobilisation', 'coordinators')
+    .lean();
+
+  const clientIds = [...new Set(deployments.map((d) => d.client.toString()))];
+  const allocationByEntryId = new Map();
+  for (const clientId of clientIds) {
+    const { perEntry } = await getClientAllocation(clientId);
+    for (const e of perEntry) allocationByEntryId.set(e.entryId.toString(), e.amountAllocated);
+  }
 
   const totals = new Map();
-  for (const row of rows) {
-    const mobStub = { coordinators: row.coordinators ?? [] };
-    for (const c of mobStub.coordinators) {
+  for (const d of deployments) {
+    if (!d.mobilisation) continue;
+    const entry = d.monthlyHours.find((m) => m.month === month && m.invoiceSentAt);
+    if (!entry) continue;
+    const amountAllocated = allocationByEntryId.get(entry._id.toString()) ?? 0;
+    if (!amountAllocated) continue;
+    for (const c of d.mobilisation.coordinators ?? []) {
       const uid = c.user.toString();
-      const share = effectiveSharePercent(mobStub, uid);
-      const credited = round2((row.amountReceived || 0) * (share / 100));
+      const share = effectiveSharePercent(d.mobilisation, uid);
+      const credited = round2(amountAllocated * (share / 100));
       totals.set(uid, round2((totals.get(uid) ?? 0) + credited));
     }
   }
@@ -105,20 +121,20 @@ export async function realRevenueByCoordinator(month) {
  * revenue. Reuses deployment.service.js's own computeMonthlyRevenueAndExpenses
  * (the exact formula Deployment's own per-entry `profit` column already
  * shows) rather than re-deriving it — one definition, not two. Since
- * `achieved` is based on `amountReceived`, never the full computed
- * `revenue` (a payment can be partial), the credited profit is scaled by
- * the same received/revenue ratio before being split by coordinator share
- * — a partially-paid month contributes only its paid-for share of profit
- * too. Returns { revenueTotals, profitTotals }, both
- * Map<coordinatorIdString, amount>.
+ * `achieved` is based on the entry's live allocation, never the full
+ * computed `revenue` (a payment can be partial), the credited profit is
+ * scaled by the same allocated/revenue ratio before being split by
+ * coordinator share — a partially-paid month contributes only its
+ * paid-for share of profit too. Returns { revenueTotals, profitTotals },
+ * both Map<coordinatorIdString, amount>.
  */
 async function realRevenueAndProfitByCoordinator(month) {
   const deployments = await Deployment.find({
     workerType: { $ne: 'Employee' },
     archived: { $ne: true },
-    monthlyHours: { $elemMatch: { month, paymentDecisionStatus: 'Approved' } },
+    monthlyHours: { $elemMatch: { month, invoiceSentAt: { $ne: null } } },
   })
-    .select('monthlyHours mobilisation')
+    .select('client monthlyHours mobilisation')
     .populate({
       path: 'mobilisation',
       select:
@@ -126,19 +142,28 @@ async function realRevenueAndProfitByCoordinator(month) {
     })
     .lean();
 
+  const clientIds = [...new Set(deployments.map((d) => d.client.toString()))];
+  const allocationByEntryId = new Map();
+  for (const clientId of clientIds) {
+    const { perEntry } = await getClientAllocation(clientId);
+    for (const e of perEntry) allocationByEntryId.set(e.entryId.toString(), e.amountAllocated);
+  }
+
   const revenueTotals = new Map();
   const profitTotals = new Map();
   for (const d of deployments) {
     if (!d.mobilisation) continue;
-    const entry = d.monthlyHours.find((m) => m.month === month && m.paymentDecisionStatus === 'Approved');
+    const entry = d.monthlyHours.find((m) => m.month === month && m.invoiceSentAt);
     if (!entry) continue;
     const { revenue, profit } = computeMonthlyRevenueAndExpenses(entry, d.mobilisation, d.monthlyHours) ?? {};
     if (!revenue) continue;
+    const amountAllocated = allocationByEntryId.get(entry._id.toString()) ?? 0;
+    if (!amountAllocated) continue;
     // Capped at 1 — a real-world payment can exceed the computed estimate
     // (e.g. a negotiated adjustment); never credit MORE profit than the
     // entry's own computed profit.
-    const receivedRatio = Math.min(1, (entry.amountReceived || 0) / revenue);
-    const receivedRevenue = round2(entry.amountReceived || 0);
+    const receivedRatio = Math.min(1, amountAllocated / revenue);
+    const receivedRevenue = round2(amountAllocated);
     const receivedProfit = round2(profit * receivedRatio);
 
     for (const c of d.mobilisation.coordinators ?? []) {

@@ -1686,3 +1686,68 @@ when requested):**
   exercising the new Ready to Invoice page during this same verification
   window. See `docs/INVOICE-QUOTATION-REMOVAL-notes.md` for the full
   finding-by-finding breakdown.
+- **Payment tracking redesigned from per-worker to bulk-per-client, with a
+  live FIFO allocation ledger (27 September 2026, same-day follow-up)** —
+  the user corrected a fundamental assumption in the per-worker payment
+  model built earlier that same day: a client with 50 workers placed there
+  sends ONE bulk payment covering everyone, never 50 separate transfers.
+  Confirmed the exact design directly first (`AskUserQuestion`, 6 questions
+  across 3 rounds, every answer took the recommended option): the Client
+  (never the Subcontractor) always pays in bulk; invoicing stays per-worker
+  unchanged, only payment became bulk; an underpayment stays owed against
+  its specific invoices until a later payment clears them, oldest first
+  (FIFO); the same Office-Secretary-records/Financial-Manager-approves
+  split is kept; and — since a direct DB check found NO real entry had ever
+  reached a decided per-entry payment state — no migration was needed, the
+  old fields were simply removed. New `ClientPayment` model (client/amount/
+  recordedBy/decisionStatus/decidedBy/note) is the entire ledger — how much
+  applies to which invoice is **never stored anywhere**, only recomputed
+  live by a new `allocateClientPayments` (oldest-invoice-first against a
+  client's Approved payments), the same "never cache a financial figure"
+  rule revenue/profit already follow; any leftover once every current
+  invoice is covered is an implicit credit balance that auto-applies the
+  moment a newer invoice exists, with no field of its own needed for it.
+  Deliberately split across two files with a strict one-directional
+  dependency to avoid a circular service import: `clientPayment.service.js`
+  holds the pure ledger math and knows nothing about Deployment/
+  Mobilisation; `deployment.service.js` gathers the priced invoiced items
+  (reusing its own existing `computeMonthlyRevenueAndExpenses`) and calls
+  into the ledger, never the reverse. `Deployment.monthlyHours` lost
+  `amountReceived`/`paymentReceivedAt`/`paymentDecisionStatus`/
+  `paymentDecidedBy`/`paymentDecidedAt`/`paymentDecisionNote` entirely;
+  `getPaymentsDue`/`recordPayment`/`decidePayment` replaced by
+  `getClientsPaymentSummary`/`getClientPaymentDetail`, both reused by
+  `getDeployment` (per-entry `amountAllocated`/`balanceDue`/`fullyPaid`,
+  same non-commercial-gated visibility `amountReceived` always had),
+  `getActualPerformanceSummary` (the dashboard's real-profit widget), the
+  coordinator-target crediting engine (`mobilisationTarget.service.js`,
+  barely changed — the share-splitting math already took "however much was
+  received" as an input), and the escalating payment-due reminder job — all
+  one ledger walk per distinct CLIENT, not per entry. New routes reuse the
+  exact same `deploymentsHours`/`deploymentsPaymentDecide` Section Access
+  keys, just re-scoped to a client. Client-side: `PaymentsDuePage.jsx`
+  rewritten as one row per client (a "filter by supplier" display filter,
+  a drill-down showing every invoice's own allocation plus real payment
+  history with Approve/Reject, and the Record Payment modal moved here);
+  `DeploymentDetailPage.jsx`'s "Profit" column became "Profit / Due" — a
+  not-yet-invoiced entry shows **Expected profit**, an invoiced-unpaid
+  entry shows **Amount Due** as the primary figure (the user's own direct
+  ask), a fully-paid entry shows **Actual profit** (the exact same number
+  Expected profit always was — FIFO guarantees full allocation equals
+  revenue exactly once `fullyPaid` — only the label changes). Verified: a
+  30-assertion disposable-fixture script (a 60/40 joint mobilisation, 3
+  invoiced months, 3 payments exercising partial-fill/exact-fill/
+  overpayment-with-credit-carryover/rejection) covering the allocation
+  algorithm, both list/detail endpoints, both mutations, and the
+  coordinator-target crediting engine — all 30 passed; full server suite
+  green (34/34); `eslint` clean on both full repos; a real server boot with
+  no circular-import failure; a clean client build; full en/ar i18n parity
+  with every dead per-entry-payment key removed, not orphaned; and a live
+  browser click-through against real dev data (Sharuk Khan's and Babu
+  Ram's real invoices correctly grouped under their real clients, the real
+  "MERMAID" subcontractor appearing in the filter, the drill-down and
+  Record Payment modal rendering correctly in Arabic/RTL — not submitted,
+  to avoid mutating real financial data without being asked — and the
+  Deployment detail page's Amount-Due/Expected-profit figures matching the
+  Payments Due page's own numbers exactly). See
+  `docs/CLIENT-PAYMENTS-notes.md` for the full design write-up.

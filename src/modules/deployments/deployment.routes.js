@@ -60,8 +60,10 @@ import {
   updateMonthlyHoursSchema,
   decideMonthlyHoursSchema,
   sendInvoiceSchema,
-  recordPaymentSchema,
-  decidePaymentSchema,
+  clientIdParamSchema,
+  clientPaymentIdParamSchema,
+  recordClientPaymentSchema,
+  decideClientPaymentSchema,
   demobiliseDeploymentSchema,
 } from './deployment.validation.js';
 import * as deploymentController from './deployment.controller.js';
@@ -91,6 +93,26 @@ router.get('/standby', canReadDeployments, asyncHandler(deploymentController.sta
 // for a Coordinator, or 'mobilisationsViewer' for MM/Admin), computed in the
 // service, same as Requirements/Daily Updates' "own work needs no grant".
 router.get('/payments-due', asyncHandler(deploymentController.paymentsDue));
+// Before /:id, or a real clientId is read as a deployment id.
+router.get(
+  '/payments-due/:clientId',
+  validate({ params: clientIdParamSchema }),
+  asyncHandler(deploymentController.clientPaymentDetail)
+);
+// Recording is the same broad circle as entering hours (Office Secretary or
+// 'deploymentsHours' write) — checked inside the service, same reasoning
+// the old per-entry route never gated this one at the router level either.
+router.post(
+  '/payments-due/:clientId/payments',
+  validate({ params: clientIdParamSchema, body: recordClientPaymentSchema }),
+  asyncHandler(deploymentController.recordClientPayment)
+);
+router.patch(
+  '/client-payments/:paymentId/decide',
+  canDecidePayment,
+  validate({ params: clientPaymentIdParamSchema, body: decideClientPaymentSchema }),
+  asyncHandler(deploymentController.decideClientPayment)
+);
 // Same reasoning — visibility (deploymentsInvoicing/mobilisationsViewer read)
 // is computed in the service, not this route-level gate.
 router.get('/ready-to-invoice', asyncHandler(deploymentController.readyToInvoice));
@@ -139,17 +161,6 @@ router.get(
   '/:id/monthly-hours/:entryId/invoice-file',
   validate({ params: monthlyHoursEntryParamSchema }),
   asyncHandler(deploymentController.invoiceFile)
-);
-router.patch(
-  '/:id/monthly-hours/:entryId/payment',
-  validate({ params: monthlyHoursEntryParamSchema, body: recordPaymentSchema }),
-  asyncHandler(deploymentController.recordPayment)
-);
-router.patch(
-  '/:id/monthly-hours/:entryId/payment/decide',
-  canDecidePayment,
-  validate({ params: monthlyHoursEntryParamSchema, body: decidePaymentSchema }),
-  asyncHandler(deploymentController.decidePayment)
 );
 router.post(
   '/:id/demobilise',

@@ -220,27 +220,19 @@ const monthlyHoursSchema = new mongoose.Schema(
     // date. Read by the overdue background job (deploymentPayment.job.js).
     invoiceDueAt: { type: Date, default: null },
 
-    // What the client has actually PAID for this month, cumulative — the
-    // figure a coordinator's REAL target credit is based on (never the
-    // full computed `revenue` above, since payment can be partial or
-    // delayed by months — see mobilisationTarget.service.js). Entered by
-    // whoever holds 'deploymentsHours' write (e.g. Office Secretary), same
-    // as the hours themselves.
-    amountReceived: { type: Number, default: 0, min: 0 },
-    paymentReceivedAt: { type: Date, default: null },
-    // Financial-Manager sign-off (2026-09-27) before amountReceived counts
-    // toward any coordinator's target — separate from the hours-approval
-    // status above (a different real person/role signs off on money vs.
-    // hours), same single-level embedded-entry decide pattern as `status`
-    // itself (deployment.service.js's decidePayment mirrors decideMonthlyHours).
-    // null until a payment is actually recorded (never implies "awaiting
-    // approval" before any money has even arrived); editing amountReceived
-    // after a decision resets this back to 'Pending', same "editing resets
-    // to Pending" rule the hours entry itself already follows.
-    paymentDecisionStatus: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: null },
-    paymentDecidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    paymentDecidedAt: { type: Date, default: null },
-    paymentDecisionNote: { type: String, trim: true, maxlength: 500, default: null },
+    // 2026-09-27 follow-up, the user's own correction: a client doesn't pay
+    // per worker — they send ONE bulk payment a month covering everyone
+    // placed there. Per-entry `amountReceived`/`paymentDecisionStatus`
+    // (recording one person's payment in isolation) never matched that
+    // reality, so it's gone. How much of THIS invoice has actually been
+    // paid is now a CLIENT-level, live-computed question — see
+    // clientPayment.service.js's computeClientAllocation, which walks every
+    // outstanding invoice for a client (oldest first) against that client's
+    // approved ClientPayment records. Nothing is stored here for it, same
+    // "never cache a financial figure" rule `revenue`/`profit` above
+    // already follow — there is nothing left to migrate: no real entry in
+    // this app ever reached a decided per-entry payment state before this
+    // change (confirmed against real data before removing these fields).
   },
   { timestamps: true }
 );

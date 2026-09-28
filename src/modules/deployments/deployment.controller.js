@@ -9,6 +9,7 @@ import ApiError from '../../utils/ApiError.js';
 import ApiResponse from '../../utils/ApiResponse.js';
 import { contentDisposition } from '../../utils/contentDisposition.js';
 import * as deploymentService from './deployment.service.js';
+import * as clientPaymentService from './clientPayment.service.js';
 import { buildDeploymentsListXlsx } from './deployment.export.js';
 
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
@@ -39,10 +40,16 @@ export async function standby(req, res) {
   res.json(new ApiResponse('Standby workforce.', data));
 }
 
-/** GET /api/deployments/payments-due — 200 → data: [{...}] */
+/** GET /api/deployments/payments-due — 200 → data: [{...}], one row per client */
 export async function paymentsDue(req, res) {
-  const data = await deploymentService.getPaymentsDue(actor(req));
+  const data = await deploymentService.getClientsPaymentSummary(actor(req));
   res.json(new ApiResponse('Payments due.', data));
+}
+
+/** GET /api/deployments/payments-due/:clientId — 200 → data: {...} drill-down */
+export async function clientPaymentDetail(req, res) {
+  const data = await deploymentService.getClientPaymentDetail(req.params.clientId, actor(req));
+  res.json(new ApiResponse('Client payment detail.', data));
 }
 
 /** GET /api/deployments/ready-to-invoice — 200 → data: [{...}] */
@@ -100,16 +107,18 @@ export async function invoiceFile(req, res) {
   await pipeline(Readable.fromWeb(upstream.body), res);
 }
 
-/** PATCH /api/deployments/:id/monthly-hours/:entryId/payment — 200 → data: deployment */
-export async function recordPayment(req, res) {
-  const deployment = await deploymentService.recordPayment(req.params.id, req.params.entryId, req.body, actor(req));
-  res.json(new ApiResponse('Payment recorded.', deployment));
+/** POST /api/deployments/payments-due/:clientId/payments — 201 → data: payment
+ *  (2026-09-27 bulk-payment redesign — one payment per CLIENT, not per
+ *  worker/entry; see clientPayment.service.js). */
+export async function recordClientPayment(req, res) {
+  const payment = await clientPaymentService.recordClientPayment(req.params.clientId, req.body, actor(req));
+  res.status(201).json(new ApiResponse('Payment recorded.', payment));
 }
 
-/** PATCH /api/deployments/:id/monthly-hours/:entryId/payment/decide — 200 → data: deployment */
-export async function decidePayment(req, res) {
-  const deployment = await deploymentService.decidePayment(req.params.id, req.params.entryId, req.body, actor(req));
-  res.json(new ApiResponse('Payment decision recorded.', deployment));
+/** PATCH /api/deployments/client-payments/:paymentId/decide — 200 → data: payment */
+export async function decideClientPayment(req, res) {
+  const payment = await clientPaymentService.decideClientPayment(req.params.paymentId, req.body, actor(req));
+  res.json(new ApiResponse('Payment decision recorded.', payment));
 }
 
 /** POST /api/deployments/:id/demobilise — 200 → data: null */

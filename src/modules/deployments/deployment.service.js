@@ -18,6 +18,7 @@ import mongoose from 'mongoose';
 import Deployment, { DEMOBILISATION_OUTCOME, EMPLOYEE_ONLY_DEMOBILISATION_REASONS } from './deployment.model.js';
 import Employee from '../employees/employee.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
+import Client from '../clients/client.model.js';
 import Expense from '../expenses/expense.model.js';
 import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
@@ -27,6 +28,7 @@ import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { notifyUser } from '../notifications/notification.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 import { signedDownloadUrl } from '../../middleware/upload.js';
+import { allocateClientPayments, getClientPaymentHistory } from './clientPayment.service.js';
 
 function currentMonthStr() {
   const d = new Date();
@@ -544,13 +546,6 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
 
 const INVOICE_DUE_DAYS = 50;
 
-/** Every user who can decide a payment right now — mirrors
- *  decidersOfDeploymentsHours above, just against 'deploymentsPaymentDecide'. */
-async function decidersOfDeploymentsPayment() {
-  const settings = await getSectionAccess('deploymentsPaymentDecide');
-  return membersOfRoles(settings.writeApprovalRoles);
-}
-
 /** Same shape, against 'deploymentsInvoicing' — the "Clerk" circle. */
 async function decidersOfDeploymentsInvoicing() {
   const settings = await getSectionAccess('deploymentsInvoicing');
@@ -656,62 +651,155 @@ export async function getInvoiceFile(deploymentId, entryId, actor) {
 }
 
 /**
- * Every invoiced-but-not-yet-fully-paid month, across every deployment —
- * the "Payments Due" tracker (2026-09-27, the user's own ask). Visibility:
- * a Coordinator sees only mobilisations they're on; anyone with
- * 'mobilisationsViewer' (this company's real MM already holds it, plus
- * Admin) sees everything — same audience as paymentTrackingAudience's own
- * notifications, just a pull view instead of a push one. Sorted soonest-due
- * first so the most urgent ones lead.
+ * Every invoiced monthly-hours entry for one client, across every
+ * Deployment they have, priced (via computeMonthlyRevenueAndExpenses) but
+ * NOT yet matched against payments — the raw material
+ * clientPayment.service.js's allocateClientPayments needs. Kept private:
+ * every real caller below wants the ALLOCATED result, not this raw list on
+ * its own.
  */
-export async function getPaymentsDue(actor) {
-  const canViewAll = await canAccessSection('mobilisationsViewer', actor);
-  const deployments = await Deployment.find({
-    archived: { $ne: true },
-    monthlyHours: { $elemMatch: { invoiceSentAt: { $ne: null }, paymentDecisionStatus: { $ne: 'Approved' } } },
-  })
-    .select('workerName clientName mobilisation monthlyHours')
-    .populate('mobilisation', 'coordinators serialNumber')
+async function gatherClientInvoicedItems(clientId) {
+  const deployments = await Deployment.find({ client: clientId, archived: { $ne: true } })
+    .select('workerName subcontractorName monthlyHours mobilisation')
+    .populate('mobilisation', PROFIT_RATE_FIELDS)
     .lean();
 
-  const now = Date.now();
-  const rows = [];
+  const items = [];
   for (const dep of deployments) {
     if (!dep.mobilisation) continue;
-    const isMyMobilisation = dep.mobilisation.coordinators?.some((c) => c.user.toString() === actor.userId.toString());
-    if (!canViewAll && !isMyMobilisation) continue;
-
     for (const entry of dep.monthlyHours) {
-      if (!entry.invoiceSentAt || entry.paymentDecisionStatus === 'Approved') continue;
-      rows.push({
+      if (!entry.invoiceSentAt) continue;
+      const result = computeMonthlyRevenueAndExpenses(entry, dep.mobilisation, dep.monthlyHours);
+      if (!result) continue;
+      items.push({
         deploymentId: dep._id,
         entryId: entry._id,
-        mobilisationSerial: dep.mobilisation.serialNumber,
         workerName: dep.workerName,
-        clientName: dep.clientName,
+        subcontractorName: dep.subcontractorName,
         month: entry.month,
         invoiceNumber: entry.invoiceNumber,
         invoiceDate: entry.invoiceDate,
+        invoiceSentAt: entry.invoiceSentAt,
         invoiceDueAt: entry.invoiceDueAt,
-        amountReceived: entry.amountReceived,
-        paymentDecisionStatus: entry.paymentDecisionStatus,
-        daysRemaining: entry.invoiceDueAt ? Math.ceil((new Date(entry.invoiceDueAt).getTime() - now) / 86_400_000) : null,
+        revenue: result.revenue,
       });
     }
+  }
+  return items;
+}
+
+/** Gather + allocate in one call — every real caller below wants both.
+ *  Exported for mobilisationTarget.service.js's own real-revenue crediting
+ *  (an existing one-directional dependency, unchanged direction — that
+ *  module already imports computeMonthlyRevenueAndExpenses from here). */
+export async function getClientAllocation(clientId) {
+  const items = await gatherClientInvoicedItems(clientId);
+  return allocateClientPayments(clientId, items);
+}
+
+/**
+ * The "Payments Due" list, one row per CLIENT with at least one outstanding
+ * invoice (2026-09-27 redesign, the user's own correction: a client pays in
+ * bulk for everyone placed there, never per worker — see
+ * clientPayment.service.js's own doc comment for the full reasoning).
+ * Visibility: a Coordinator sees only clients where they coordinate at
+ * least one of the deployments behind an outstanding invoice; anyone with
+ * 'mobilisationsViewer' read (this company's real MM already holds it,
+ * plus Admin) sees every client. `subcontractorNames` is a display filter
+ * only (the client-side "filter by supplier" ask) — the bulk payment
+ * itself is always client-scoped, confirmed with the user directly; it is
+ * NOT a second aggregation level. Sorted soonest-due first.
+ */
+export async function getClientsPaymentSummary(actor) {
+  const canViewAll = await canAccessSection('mobilisationsViewer', actor, 'read');
+
+  const deployments = await Deployment.find({
+    archived: { $ne: true },
+    monthlyHours: { $elemMatch: { invoiceSentAt: { $ne: null } } },
+  })
+    .select('client clientName subcontractorName mobilisation')
+    .populate('mobilisation', 'coordinators')
+    .lean();
+
+  const byClient = new Map();
+  for (const dep of deployments) {
+    if (!dep.mobilisation) continue;
+    const isMine = dep.mobilisation.coordinators?.some((c) => c.user.toString() === actor.userId.toString());
+    if (!canViewAll && !isMine) continue;
+    const key = dep.client.toString();
+    if (!byClient.has(key)) byClient.set(key, { clientId: dep.client, clientName: dep.clientName, subcontractorNames: new Set() });
+    if (dep.subcontractorName) byClient.get(key).subcontractorNames.add(dep.subcontractorName);
+  }
+
+  const rows = [];
+  for (const [, info] of byClient) {
+    const { perEntry } = await getClientAllocation(info.clientId);
+    const outstanding = perEntry.filter((e) => e.balanceDue > 0);
+    if (outstanding.length === 0) continue;
+    const oldestDueAt = outstanding.reduce(
+      (min, e) => (!min || new Date(e.invoiceDueAt) < new Date(min) ? e.invoiceDueAt : min),
+      null
+    );
+    rows.push({
+      clientId: info.clientId,
+      clientName: info.clientName,
+      subcontractorNames: [...info.subcontractorNames],
+      totalOutstanding: money(outstanding.reduce((sum, e) => sum + e.balanceDue, 0)),
+      outstandingCount: outstanding.length,
+      oldestDueAt,
+      daysRemaining: oldestDueAt ? Math.ceil((new Date(oldestDueAt).getTime() - Date.now()) / 86_400_000) : null,
+    });
   }
   return rows.sort((a, b) => (a.daysRemaining ?? Infinity) - (b.daysRemaining ?? Infinity));
 }
 
 /**
- * The dashboard's "Payments due soon" row (same visibility as getPaymentsDue
- * above, reused rather than duplicated) — "soon" mirrors
- * deploymentBilling.job.js's own PRE_DUE_MILESTONES window (escalation
- * reminders start at 10 days remaining), so this count only ever moves in
- * step with when a coordinator/MM actually starts getting nagged about it.
+ * The dashboard's "Payments due soon" row (same visibility as
+ * getClientsPaymentSummary above, reused rather than duplicated) — "soon"
+ * mirrors deploymentBilling.job.js's own PRE_DUE_MILESTONES window
+ * (escalation reminders start at 10 days remaining), so this count only
+ * ever moves in step with when a coordinator/MM actually starts getting
+ * nagged about it.
  */
 export async function countPaymentsDueSoon(actor) {
-  const rows = await getPaymentsDue(actor);
+  const rows = await getClientsPaymentSummary(actor);
   return rows.filter((r) => r.daysRemaining != null && r.daysRemaining <= 10).length;
+}
+
+/**
+ * One client's full billing picture for the Payments Due page's drill-down
+ * — every outstanding (and already-settled) invoice with its real
+ * allocation, plus the client's real payment history
+ * (Pending/Approved/Rejected). Same visibility rule as
+ * getClientsPaymentSummary, enforced per-client here since this is reached
+ * directly by id, not just filtered out of a list.
+ */
+export async function getClientPaymentDetail(clientId, actor) {
+  const canViewAll = await canAccessSection('mobilisationsViewer', actor, 'read');
+  if (!canViewAll) {
+    const deployments = await Deployment.find({ client: clientId, archived: { $ne: true } })
+      .select('mobilisation')
+      .populate('mobilisation', 'coordinators')
+      .lean();
+    const isMine = deployments.some((dep) => dep.mobilisation?.coordinators?.some((c) => c.user.toString() === actor.userId.toString()));
+    if (!isMine) throw new ApiError(403, 'You do not have permission to view this client’s payments.');
+  }
+
+  const client = await Client.findById(clientId).select('companyName').lean();
+  if (!client) throw new ApiError(404, 'Client not found.');
+
+  const [{ perEntry, creditBalance }, payments] = await Promise.all([
+    getClientAllocation(clientId),
+    getClientPaymentHistory(clientId),
+  ]);
+
+  return {
+    clientId,
+    clientName: client.companyName,
+    creditBalance,
+    invoices: perEntry.sort((a, b) => new Date(b.invoiceSentAt) - new Date(a.invoiceSentAt)),
+    payments,
+  };
 }
 
 /**
@@ -719,9 +807,10 @@ export async function countPaymentsDueSoon(actor) {
  * Deployment — the Clerk's own "Ready to Invoice" queue (2026-09-27, moved
  * out of hunting through individual Deployment detail pages into its own
  * home under Financial, the user's own ask). Visibility is deliberately
- * different from getPaymentsDue's own coordinator-own/mobilisationsViewer
- * split: a coordinator never invoices their own placements, so they get no
- * view here at all — only whoever holds `deploymentsInvoicing` read (the
+ * different from getClientsPaymentSummary's own coordinator-own/
+ * mobilisationsViewer split: a coordinator never invoices their own
+ * placements, so they get no view here at all — only whoever holds
+ * `deploymentsInvoicing` read (the
  * Clerk) or `mobilisationsViewer` read (MM/Admin oversight), the people who
  * actually act on this queue. Sorted oldest-approved-first, so the month
  * that's been waiting longest leads.
@@ -757,108 +846,6 @@ export async function getReadyToInvoice(actor) {
     }
   }
   return rows.sort((a, b) => new Date(a.hoursApprovedAt) - new Date(b.hoursApprovedAt));
-}
-
-/**
- * Record (or correct) how much the client has actually paid for one already-
- * invoiced month. Cumulative, not a ledger of individual receipts — the
- * process the user described is one client payment per month's invoice, not
- * routine partial installments; a real multi-installment need can extend
- * this later without a breaking change (same "don't build for a hypothetical"
- * reasoning CLAUDE.md's own hard rules already call for). Re-recording after
- * a decision resets `paymentDecisionStatus` back to 'Pending' — same
- * implicit-resubmit rule updateMonthlyHours already applies to a Rejected
- * hours entry.
- */
-export async function recordPayment(deploymentId, entryId, data, actor) {
-  const isOfficeSecretary = actor.role === 'Office Secretary';
-  const allowed = isOfficeSecretary || (await canAccessSection('deploymentsHours', actor));
-  if (!allowed) throw new ApiError(403, 'You do not have permission to record a received payment.');
-
-  const deployment = await Deployment.findById(deploymentId);
-  if (!deployment) throw new ApiError(404, 'Deployment not found.');
-  await assertEmployeeVisibleToActor(deployment.worker, actor);
-  const entry = deployment.monthlyHours.id(entryId);
-  if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
-  if (!entry.invoiceSentAt) {
-    throw new ApiError(400, 'This month has not been invoiced yet.');
-  }
-
-  entry.amountReceived = data.amountReceived;
-  entry.paymentReceivedAt = new Date();
-  entry.paymentDecisionStatus = 'Pending';
-  entry.paymentDecidedBy = null;
-  entry.paymentDecidedAt = null;
-  entry.paymentDecisionNote = null;
-  await deployment.save();
-
-  await logAudit({
-    user: actor.userId,
-    action: 'deployment.monthlyHours.paymentRecorded',
-    targetType: 'Deployment',
-    targetId: deployment._id,
-    meta: { month: entry.month, amountReceived: data.amountReceived },
-    ip: actor.ip,
-  });
-
-  const deciders = await decidersOfDeploymentsPayment();
-  for (const userId of deciders) {
-    await notifyUser(userId, {
-      type: 'RequestStatus',
-      title: `A payment for ${deployment.workerName} (${entry.month}) needs your approval`,
-      body: `SAR ${data.amountReceived} recorded as received.`,
-      url: `/deployments/${deployment._id}`,
-    });
-  }
-  return deployment.toObject();
-}
-
-/**
- * Financial-Manager sign-off on a recorded payment. Approving does NOT
- * itself write anything to a coordinator's target — mobilisationTarget.
- * service.js computes `achieved` LIVE by aggregating every Approved
- * payment across Deployment.monthlyHours each time a target is read, the
- * same "never trust a cached figure" discipline this whole app already
- * follows — so there is no separate ledger to keep in sync here.
- */
-export async function decidePayment(deploymentId, entryId, data, actor) {
-  const allowed = await canAccessSection('deploymentsPaymentDecide', actor);
-  if (!allowed) throw new ApiError(403, 'You do not have permission to approve a received payment.');
-
-  const deployment = await Deployment.findById(deploymentId);
-  if (!deployment) throw new ApiError(404, 'Deployment not found.');
-  await assertEmployeeVisibleToActor(deployment.worker, actor);
-  const entry = deployment.monthlyHours.id(entryId);
-  if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
-  if (entry.paymentDecisionStatus !== 'Pending') {
-    throw new ApiError(400, 'Only a pending payment can be decided.');
-  }
-
-  entry.paymentDecisionStatus = data.decision;
-  entry.paymentDecidedBy = actor.userId;
-  entry.paymentDecidedAt = new Date();
-  entry.paymentDecisionNote = data.note || null;
-  await deployment.save();
-
-  await logAudit({
-    user: actor.userId,
-    action: 'deployment.monthlyHours.paymentDecide',
-    targetType: 'Deployment',
-    targetId: deployment._id,
-    meta: { month: entry.month, decision: data.decision, amountReceived: entry.amountReceived },
-    ip: actor.ip,
-  });
-
-  await notifyUser(entry.enteredBy.toString(), {
-    type: 'RequestStatus',
-    title:
-      data.decision === 'Approved'
-        ? `Payment for ${deployment.workerName} (${entry.month}) approved`
-        : `Payment for ${deployment.workerName} (${entry.month}) rejected`,
-    body: data.note || undefined,
-    url: `/deployments/${deployment._id}`,
-  });
-  return deployment.toObject();
 }
 
 /**
@@ -1336,7 +1323,7 @@ function stripCommercialMonthlyHours(deployment, canSeeCommercial) {
   return deployment;
 }
 
-const PROFIT_RATE_FIELDS =
+export const PROFIT_RATE_FIELDS =
   'serialNumber workerType clientRate clientCommission subcontractorRate subcontractorCommission ' +
   'otClientRate otEmployeeRate fta allowance mobilisationCost';
 
@@ -1370,15 +1357,31 @@ export async function getDeployment(id, actor) {
   // commercial.
   // 'read' — see the sibling comment in updateMonthlyHours above.
   const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor, 'read') : false;
+  // How much of THIS entry's invoice has actually been paid (2026-09-27
+  // bulk-payment redesign) — same visibility tier `amountReceived` had
+  // before this redesign (never commercial-gated: whoever can see billing
+  // at all, e.g. Office Secretary/Clerk, needs to know a balance without
+  // needing deploymentsHoursDecide). Computed once per read, only when
+  // there's actually an invoiced entry to allocate against.
+  const hasInvoiced = deployment.monthlyHours.some((e) => e.invoiceSentAt);
+  const allocationByEntryId = new Map();
+  if (hasInvoiced) {
+    const { perEntry } = await getClientAllocation(deployment.client);
+    for (const e of perEntry) allocationByEntryId.set(e.entryId.toString(), e);
+  }
   deployment.monthlyHours = deployment.monthlyHours.map((entry) => {
+    const alloc = entry.invoiceSentAt ? allocationByEntryId.get(entry._id.toString()) : null;
+    const withBilling = alloc
+      ? { ...entry, amountAllocated: alloc.amountAllocated, balanceDue: alloc.balanceDue, fullyPaid: alloc.fullyPaid }
+      : entry;
     if (canSeeCommercial) {
       // .revenue/.expenses added 2026-09-24 alongside .profit (unchanged) — for
       // the new per-Deployment Expenses section's own Revenue/Expenses/Profit
       // summary (see DeploymentDetailPage.jsx's own doc comment).
       const revExp = computeMonthlyRevenueAndExpenses(entry, deployment.mobilisation, deployment.monthlyHours);
-      return { ...entry, profit: revExp ? revExp.profit : null, revenue: revExp ? revExp.revenue : null, expenses: revExp ? revExp.expenses : null };
+      return { ...withBilling, profit: revExp ? revExp.profit : null, revenue: revExp ? revExp.revenue : null, expenses: revExp ? revExp.expenses : null };
     }
-    const { otAmount, ...rest } = entry;
+    const { otAmount, ...rest } = withBilling;
     return rest;
   });
   if (canSeeCommercial) {
@@ -1495,7 +1498,7 @@ export async function getActualPerformanceSummary() {
 
   const [deployments, lastMonthExp, monthBeforeLastExp, thisYearExp, sameMonthsLastYearExp] = await Promise.all([
     Deployment.find({ monthlyHours: { $elemMatch: { status: 'Approved', month: { $in: [...relevantMonthKeys] } } } })
-      .select('monthlyHours mobilisation')
+      .select('client monthlyHours mobilisation')
       .populate('mobilisation', PROFIT_RATE_FIELDS)
       .lean(),
     sumDeploymentExpenses(monthDateBounds(lastMonth.year, lastMonth.month)),
@@ -1511,25 +1514,14 @@ export async function getActualPerformanceSummary() {
   // 2026-09-27, the user's own redesign: Expenses is a real cost the company
   // incurred (unchanged basis — every Approved entry regardless of payment
   // status, same as before), shown as its own standalone figure rather than
-  // netted against a computed-revenue estimate. `amountReceived` is real
-  // money the client has actually paid AND a Financial-Manager/Accounts
-  // has verified (`paymentDecisionStatus === 'Approved'` — see
-  // deployment.service.js's decidePayment) — the same verified-payment
-  // basis mobilisationTarget.service.js's realRevenueByCoordinator already
-  // uses for coordinator targets, just company-wide here instead of
-  // per-coordinator. `netProfit` = amountReceived − expenses (a real
-  // cash-in-minus-cost-out figure).
-  //
-  // A `profitPerHour` tile (net profit ÷ actualHours) lived here too until
-  // the same day (the user's own follow-up ask, from a screenshot of the
-  // widget) — removed as confusing rather than fixed: dividing a REAL,
-  // payment-timing-dependent net profit by real worked hours produces a
-  // number with no stable interpretation (it swings from a large negative to
-  // a large positive purely based on WHEN a payment happens to get verified,
-  // not on whether the underlying placement is profitable) — unlike
-  // Mobilisation's own `profitPerHour`/`otProfitPerHour`, a stable rate-card
-  // figure. Removed end to end, not just hidden: no other caller ever read
-  // it, so nothing was left half-computed.
+  // netted against a computed-revenue estimate. "Received" is real money a
+  // client has actually paid AND a Financial Manager has verified — since
+  // the same-day bulk-payment redesign, that's no longer a per-entry typed
+  // amount; it's this entry's own live-computed FIFO allocation (see
+  // getClientAllocation above / clientPayment.service.js), summed one
+  // client at a time so a client's payment history is only ever walked
+  // once per client, not once per one of their entries. `netProfit` =
+  // amountReceived − expenses (a real cash-in-minus-cost-out figure).
   const zeroBucket = () => ({ expenses: 0, amountReceived: 0 });
   const buckets = { lastMonth: zeroBucket(), monthBeforeLast: zeroBucket(), thisYear: zeroBucket(), sameMonthsLastYear: zeroBucket() };
   const addTo = (bucket, expenses, received) => {
@@ -1537,13 +1529,22 @@ export async function getActualPerformanceSummary() {
     bucket.amountReceived += received;
   };
 
+  const clientIds = [...new Set(deployments.filter((d) => d.mobilisation).map((d) => d.client.toString()))];
+  const allocationByClient = new Map(
+    await Promise.all(clientIds.map(async (id) => [id, await getClientAllocation(id)]))
+  );
+  const allocatedByEntryId = new Map();
+  for (const { perEntry } of allocationByClient.values()) {
+    for (const e of perEntry) allocatedByEntryId.set(e.entryId.toString(), e.amountAllocated);
+  }
+
   for (const dep of deployments) {
     if (!dep.mobilisation) continue;
     for (const entry of dep.monthlyHours) {
       if (entry.status !== 'Approved' || !relevantMonthKeys.has(entry.month)) continue;
       const result = computeMonthlyRevenueAndExpenses(entry, dep.mobilisation, dep.monthlyHours);
       if (!result) continue;
-      const received = entry.paymentDecisionStatus === 'Approved' ? entry.amountReceived || 0 : 0;
+      const received = entry.invoiceSentAt ? allocatedByEntryId.get(entry._id.toString()) ?? 0 : 0;
       if (entry.month === lastMonthKey) addTo(buckets.lastMonth, result.expenses, received);
       if (entry.month === monthBeforeLastKey) addTo(buckets.monthBeforeLast, result.expenses, received);
       if (thisYearMonths.includes(entry.month)) addTo(buckets.thisYear, result.expenses, received);

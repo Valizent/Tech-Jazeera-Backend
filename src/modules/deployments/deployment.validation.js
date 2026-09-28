@@ -145,14 +145,22 @@ export const sendInvoiceSchema = z.object({
   invoiceDate: z.coerce.date({ error: 'Enter a valid invoice date.' }),
 });
 
-/** Record (or correct) the amount the client has actually paid for one
- *  already-invoiced month. */
-export const recordPaymentSchema = z.object({
-  amountReceived: z.coerce.number({ error: 'Enter the amount received.' }).min(0, 'Cannot be negative.').max(10_000_000, 'That looks too high — check the figure.'),
+/** :clientId route param — the "Payments Due" drill-down and the record-
+ *  payment POST both key off a real Client id, not a Deployment one. */
+export const clientIdParamSchema = z.object({ clientId: id });
+
+/** :paymentId route param — deciding one bulk ClientPayment record. */
+export const clientPaymentIdParamSchema = z.object({ paymentId: id });
+
+/** Record one bulk payment a client made (2026-09-27 redesign — a client
+ *  pays in bulk for everyone placed there, never per worker; see
+ *  clientPayment.service.js). */
+export const recordClientPaymentSchema = z.object({
+  amount: z.coerce.number({ error: 'Enter the amount received.' }).positive('Must be greater than zero.').max(10_000_000, 'That looks too high — check the figure.'),
 });
 
-/** Approve/Reject a Pending recorded payment. */
-export const decidePaymentSchema = z.object({
+/** Approve/Reject a Pending recorded client payment. */
+export const decideClientPaymentSchema = z.object({
   decision: z.enum(DECISIONS, { error: 'Choose Approved or Rejected.' }),
   note: optionalStr(500),
 });
