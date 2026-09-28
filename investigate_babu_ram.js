@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+dotenv.config();
 import Deployment from './src/modules/deployments/deployment.model.js';
 import Mobilisation from './src/modules/mobilisations/mobilisation.model.js';
 

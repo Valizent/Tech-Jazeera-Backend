@@ -118,6 +118,8 @@ export async function recordClientPayment(clientId, data, actor) {
   const payment = await ClientPayment.create({
     client: clientId,
     amount: data.amount,
+    paymentReference: data.paymentReference || null,
+    ...(data.paymentDate && { paymentDate: data.paymentDate }),
     recordedBy: actor.userId,
   });
 

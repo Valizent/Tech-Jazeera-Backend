@@ -415,8 +415,9 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   await assertEmployeeVisibleToActor(deployment.worker, actor);
   const entry = deployment.monthlyHours.id(entryId);
   if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
-  if (entry.status === 'Approved' && !isDecider) {
-    throw new ApiError(400, 'This month is already approved and can no longer be edited.');
+  const isAdmin = actor.role === 'Admin';
+  if (entry.status === 'Approved' && !isAdmin) {
+    throw new ApiError(400, 'This month is already approved and can no longer be edited by non-administrators.');
   }
   if (deployment.workerType === 'SupplierEmployee' && data.supplierHours == null) {
     throw new ApiError(400, 'Enter the supplier timesheet hours.');

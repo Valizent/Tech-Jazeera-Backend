@@ -23,6 +23,8 @@ const clientPaymentSchema = new mongoose.Schema(
   {
     client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', required: true },
     amount: { type: Number, required: true, min: 0.01 },
+    paymentReference: { type: String, trim: true, default: null, maxlength: 100 }, // e.g. invoice number, cheque number
+    paymentDate: { type: Date, default: Date.now },
     recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     recordedAt: { type: Date, default: Date.now },
     decisionStatus: { type: String, enum: CLIENT_PAYMENT_DECISION_STATUSES, default: 'Pending' },

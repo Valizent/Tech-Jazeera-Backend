@@ -151,6 +151,8 @@ export const clientPaymentIdParamSchema = z.object({ paymentId: id });
  *  clientPayment.service.js). */
 export const recordClientPaymentSchema = z.object({
   amount: z.coerce.number({ error: 'Enter the amount received.' }).positive('Must be greater than zero.').max(10_000_000, 'That looks too high — check the figure.'),
+  paymentReference: optionalStr(100),
+  paymentDate: z.coerce.date({ error: 'Enter a valid payment date.' }).optional(),
 });
 
 /** Approve/Reject a Pending recorded client payment. */
