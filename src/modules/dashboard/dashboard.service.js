@@ -310,7 +310,6 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
   const canReadEmployees = canRead('employeeCreate');
   const canReadDeployments = canRead('deploymentsRelease');
   const canReadClients = canRead('clientsManage');
-  const canReadPayroll = canRead('payroll');
   const canSeeProfit = canRead('dashboardProfit');
   const canReadAuditLog = canRead('auditLog');
   const canReadAttendance = canRead('attendanceRecords');
@@ -348,7 +347,7 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
   // "Active Workers"/"Workforce by status" mean the supplied workforce —
   // both Outsourced (our own, supplied to clients) and Subcontracted (sourced
   // from an outside subcontractor) count here; only Own-type internal staff
-  // are excluded. Payroll's own aggregate below stays Outsourced-only.
+  // are excluded.
   const employeeStatusFilter = { type: { $in: WORKFORCE_TYPES }, ...(teamIds ? { _id: { $in: teamIds } } : {}) };
 
   const markedTodayFilter = { date: toUtcDay(new Date()) };
@@ -357,7 +356,6 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
   const [
     deployedActive,
     empStatusAgg,
-    payrollAgg,
     activeClients,
     expiringEmployees,
     expiringDocs,
@@ -378,15 +376,6 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
     canReadDeployments ? Deployment.countDocuments(deploymentFilter) : Promise.resolve(0),
     canReadEmployees
       ? Employee.aggregate([{ $match: employeeStatusFilter }, { $group: { _id: '$status', count: { $sum: 1 } } }])
-      : Promise.resolve([]),
-    // type: 'Outsourced' — this figure is the supplied workforce's pay, not
-    // internal staff salaries (an Own-type employee's salary, if ever set,
-    // must never silently flow into this).
-    canReadPayroll
-      ? Employee.aggregate([
-          { $match: { status: { $ne: 'Exited' }, type: 'Outsourced' } },
-          { $group: { _id: null, total: { $sum: '$salary' } } },
-        ])
       : Promise.resolve([]),
     // FIX (2026-09-22, real user report): this used to narrow a Coordinator
     // to only the distinct clients THEIR OWN team currently has an active
@@ -526,7 +515,6 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
       markedToday: canReadAttendance ? markedToday : null,
     },
     finance: {
-      monthlyPayroll: canReadPayroll ? (payrollAgg[0]?.total ?? 0) : null,
       // Revenue from mobilisations active this month — a Coordinator's own, or the
       // company total once granted mobilisationsViewer read (see canAccessSection batch
       // above and computeActiveMobilisationRevenue). Already null from that gated query
@@ -583,9 +571,16 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
 }
 
 /**
- * Standby workforce, with an idle-cost estimate layered on top — gated on the same
- * `payroll` read grant `getDashboard`'s own `monthlyPayroll` figure uses (2026-09-22
- * fix — this used to hardcode Admin/Manager/HR directly).
+ * Standby workforce, with an idle-cost estimate layered on top — gated on
+ * `dashboardProfit` (2026-09-29: this used to share a dedicated `payroll`
+ * read grant with `getDashboard`'s own `monthlyPayroll` figure, but that key
+ * was deleted along with the real Payroll module on 2026-09-28, silently
+ * leaving this check permanently false for everyone; `dashboardProfit`
+ * already covers the same sensitivity class — an idle salary cost is the
+ * same kind of figure as the true profit number it already gates, both
+ * meant for the same executive-level circle without raw payslip/expense
+ * access. Before that, 2026-09-22 fix — this used to hardcode Admin/Manager/HR
+ * directly).
  *
  * FIX (2026-09-22, real user report — a screenshot of this widget showing "No workers
  * on standby" right next to the real Standby List page showing two real workers free):
@@ -610,7 +605,7 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
  * app follows everywhere else (GOSI, commission formulas, etc.).
  */
 export async function getStandbyAnalysis(actor) {
-  if (!(await canAccessSection('payroll', actor, 'read'))) return [];
+  if (!(await canAccessSection('dashboardProfit', actor, 'read'))) return [];
 
   const { ownEmployees, subcontractedWorkers } = await getStandbyWorkforce();
   if (ownEmployees.length === 0 && subcontractedWorkers.length === 0) return [];

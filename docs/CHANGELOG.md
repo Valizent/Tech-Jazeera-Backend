@@ -1751,3 +1751,169 @@ when requested):**
   Deployment detail page's Amount-Due/Expected-profit figures matching the
   Payments Due page's own numbers exactly). See
   `docs/CLIENT-PAYMENTS-notes.md` for the full design write-up.
+- **28-29 September 2026: a day of solo work outside this session, caught up
+  and reconciled** — the user built a full day's worth of features and fixes
+  directly (both repos), which a 29 September documentation-catch-up session
+  spot-checked, fixed two real regressions in, and is writing up here in full
+  for the first time. Headline items, in the order they're easiest to read
+  rather than strict commit order:
+  - **Per-deployment Expenses section** — `DeploymentDetailPage` gained its
+    own Expenses card (`DeploymentExpensesSection.jsx`, 24 September, with a
+    same-week 28 September follow-up), reusing the existing company-level
+    Expense module filtered to this one deployment, with the deployment
+    pre-locked on the add-expense form. Gated on the existing `expenses`
+    Section Access (read to view, write to add/edit) — no new grant. The
+    28 September follow-up removed a duplicate Expenses card/EmptyState that
+    had briefly existed alongside it, added a Receipt download button to
+    each expense row, and stripped an initial stats-bar summary down to a
+    plain list.
+  - **Client payments gain a reference and date, plus an Office Secretary
+    bypass** — `ClientPayment` gained `paymentReference` (free-typed, e.g. a
+    cheque or invoice number) and `paymentDate` (defaults to now), wired
+    through validation, `recordClientPayment`, and the Record Payment
+    modal's history row on `PaymentsDuePage.jsx`. Also added an Office
+    Secretary bypass on who may record a payment (`canRecordPayment = role
+    === 'Office Secretary' || deploymentsHours write`), matching the same
+    bypass `addMonthlyHours` itself already uses for hours entry.
+  - **Profit calculation fixed to bill/cost actual worked hours, not the
+    fixed contract number** — `computeMonthlyRevenueAndExpenses` previously
+    billed the client for `contractHours` (a fixed monthly figure) plus OT
+    hours separately, regardless of what the client's own timesheet
+    (`actualHours`) said — silently wrong for any month where actual hours
+    diverged from the contract number, which is the entire reason
+    `actualHours` is tracked at all. Now bills `regularClientHours =
+    max(0, actualHours - otHours)` at the regular rate plus the OT portion
+    at the OT rate (mirrored on the subcontractor-invoice side for
+    SupplierEmployee, using `supplierHours` in place of `actualHours`). The
+    function now also returns a `breakdown` object (client invoice amount,
+    subcontractor invoice amount, OT cost, client commission, FTA,
+    allowance, client deduction, mobilisation cost) alongside the existing
+    revenue/expenses/profit totals — surfaced client-side as a
+    click-to-expand "Profit Breakdown" modal on the new Hours Approval
+    Queue's Net Profit tile (see below). The queue itself also gained the
+    invoice amount and net profit as visible tiles, so a decider sees the
+    commercial impact of a Pending entry before deciding it.
+  - **"Actual Performance" dashboard expenses narrowed to FTA + Allowance
+    only** — this dashboard widget's expenses bucket previously summed the
+    full cost breakdown above (client commission + subcontractor invoice +
+    OT pay + client deduction + mobilisation cost) for each month; now only
+    FTA and Allowance count. The other cost components already reduce the
+    profit figure the same widget (and the per-deployment Profit/Due
+    column) shows elsewhere — counting them again here as "expenses" would
+    double-count against a figure that already nets them out. FTA/Allowance
+    are the one direct, extra cash outlay per worker per month that isn't
+    otherwise netted into any other dashboard figure, so they're the only
+    ones left.
+  - **Dedicated Hours & Payments Approval Queues, replacing the old
+    in-place decide UI** — a manager reviewing pending timesheet hours or
+    client payments previously had to open each deployment/client one at a
+    time; two new pages now list everything awaiting a decision in one
+    place: `HoursReviewPage` (`/deployments/hours-review`, gated on
+    `deploymentsHoursDecide` write — the same key `decideMonthlyHours`
+    itself already checks) and `PaymentsReviewPage`
+    (`/financial/payments-review`, `deploymentsPaymentDecide`), each with
+    Approve/Reject plus the profit-breakdown modal above for hours. New
+    endpoints `GET /deployments/pending-hours` / `GET
+    /deployments/pending-payments` back them; `DeploymentDetailPage`/
+    `PaymentsDuePage` each link to their respective queue via a "Review
+    Pending" button. The two dedicated pages briefly coexisted with the OLD
+    inline Approve/Reject controls already on `DeploymentDetailPage.jsx`/
+    `PaymentsDuePage.jsx` — two paths to decide the same thing. Cleaned up
+    29 September (this documentation-catch-up session's own review): the
+    inline Approve/Reject buttons and their modals are removed from both
+    detail pages entirely — Approve/Reject now lives ONLY on the dedicated
+    queues; the detail pages keep their read-only status badge, an Edit
+    action for whoever can still correct the entry, and (for payments) the
+    "Review Pending Payments" link. Along the way, also reverted an
+    accidental tightening found in the same review: correcting an
+    already-Approved monthly-hours entry had been narrowed to Admin-only on
+    28 September, tighter than the documented 2026-09-13 rule ("whoever can
+    decide this section may also correct an already-Approved entry
+    directly") — restored to the original `deploymentsHoursDecide`-based
+    check, so the real Marketing Manager grant (not just Admin) can correct
+    an approved entry again, same as before. Verified: `eslint`/build clean
+    on the client, a live browser click-through (real dev data) confirming
+    an Admin sees "Edit" — never Approve/Reject — on both a Pending and an
+    Approved monthly-hours entry on the deployment detail page, both queues
+    correctly listing every real pending item with working Approve/Reject
+    (not submitted, to avoid mutating real financial/workflow data without
+    being asked), and 14 now-orphaned i18n keys (`approvedToast`/
+    `rejectedToast`/`approveModalTitle`/`rejectModalTitle`/
+    `decideModalMessage`/`decisionNote*Label`/`paymentApprovedToast`/
+    `paymentRejectedToast` under the `staffDeployments.detail`/
+    `staffDeployments.paymentsDue` namespaces) removed from both `en.json`
+    and `ar.json`.
+  - **SupplierEmployee monthly hours: the `daysWorked` field removed** — the
+    informational "days worked" cross-check added 2026-09-16 alongside the
+    typed-totals revert is gone (model, validation, both add/update service
+    paths, audit log meta) — redundant now that `supplierHours` (added
+    2026-09-19) gave SupplierEmployee its own real, worker-type-specific OT
+    formula (`otHours = max(0, actualHours - supplierHours)`) that catches
+    the same class of mistake (overclaiming hours for a day the worker
+    wasn't there) without needing a separate day-count. The now-orphaned
+    `realPlacementDaysInMonth`/`daysInMonth` helpers this field's validation
+    had depended on were left behind as dead code — caught by `eslint`
+    during the 29 September cleanup pass and removed.
+  - **Deployments register: site filter, sortable columns, recorded
+    expenses in the export** — `findDeployments` (the shared list+export
+    query builder) gained a `site` filter (case-insensitive partial match)
+    and a `sortBy` option (`startDate`/`workerName`/`clientName`/`site`/
+    `status`, previously fixed to `startDate` only). The Excel export and
+    Overview modal also gained a "Recorded expenses" column (a per-
+    deployment sum from the Expense collection, one aggregate query for the
+    whole page rather than N+1).
+  - **Payroll module removed entirely — the ERPNext boundary extended to
+    cover payroll too** — following the same reasoning as the 27 September
+    Invoice/Quotation/CreditNote removal ("all financial stuff is ERPNext's
+    job, this app is HR/manpower only"), the real Payroll/payslip-generation
+    feature (`PayrollRun` model, monthly payroll runs, GOSI entry, payslip
+    PDFs, `/api/payroll/*`, the ESS "My Payslips" tab) is gone too — 13
+    files / ~900 lines server-side, 7 files / ~550 lines client-side. No
+    dangling imports were left behind (verified: no remaining
+    `require`/`import` of any deleted file anywhere in either repo — only
+    stale doc-comments in Deployment/Leave/Employee's own money-adjacent
+    code that still name `payroll.service.js` by name, left as historical
+    context since they still accurately describe those OTHER features' own
+    reasoning). **Found and fixed a real regression from this removal**
+    during the 29 September catch-up: the dashboard's `monthlyPayroll`
+    estimate (sum of Outsourced employees' salary) and the Standby Analysis
+    widget's idle-cost figure both gated on a `payroll` Section Access key
+    that this removal deleted from `SECTION_KEYS` — `monthlyPayroll` was
+    silently hidden for literally everyone including Admin from that point
+    on (Admin's own section-access list is built by spreading
+    `SECTION_KEYS`, so a key that no longer exists there can never appear
+    in it), while Standby Analysis's idle-cost figure stayed reachable for
+    Admin only (its check hardcodes an Admin bypass before ever consulting
+    the key) but was permanently ungrantable to anyone else from then on.
+    `monthlyPayroll` was never actually rendered anywhere on the client, so
+    it's deleted outright (query, gate, and field, all removed) rather than
+    re-gated; Standby Analysis's idle-cost estimate is real and used, so
+    it's re-gated on `dashboardProfit` instead — an existing key already
+    covering the same sensitivity class ("the dashboard's true monthly
+    profit figure... without needing raw access to every payslip and
+    expense line"). Verified: both endpoints hit directly after the fix
+    (200 OK; the `finance` object no longer carries `monthlyPayroll`;
+    Standby Analysis returns real data for a real Admin), full server test
+    suite green (34/34), `eslint` clean on both repos, and a clean
+    `node --watch` restart with no crash.
+  - **Client UI redesign — a 16-phase visual pass** — a broad,
+    presentation-only redesign across the staff panel: a darker,
+    glassmorphism-influenced sidebar and Card/Modal chrome, premium
+    gradient dashboard KPI tiles with an animated circular "Actual
+    Performance" chart, denser table rows with bolder/darker headers
+    (including a true-dark-mode pass), 1600px-wide multi-column CSS Grid
+    layouts on list/detail pages, redesigned detail-page headers to stop
+    long titles wrapping badly, and a squircle-style back button (reverted
+    the same day — the squircle treatment didn't survive, the plain
+    text-link stayed). No data-shape or business-logic change in this pass
+    — purely CSS/layout/component composition. Not independently
+    re-verified page-by-page as part of this catch-up beyond a clean
+    client build; flag any visual regression you spot and it's a normal bug
+    fix from here, same as any other UI issue.
+  - **Two ad hoc debug scripts removed** — `investigate_babu_ram.js` and
+    `test_queue.js`, one-off diagnostic scripts written against real dev
+    data while chasing the profit-calculation bug above, had been committed
+    to the server repo root (never imported by the app — dead weight per
+    this file's own hard rule #1). Deleted 29 September; their diagnostic
+    purpose is superseded by the real fix above and the `profitBreakdown`
+    field it now returns.

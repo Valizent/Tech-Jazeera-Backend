@@ -142,26 +142,6 @@ function monthStrOf(date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-/** Real day count for a 'YYYY-MM' string (28-31) — day 0 of the FOLLOWING
- *  month is the last day of THIS one, the standard JS Date trick. */
-function daysInMonth(monthStr) {
-  const [y, m] = monthStr.split('-').map(Number);
-  return new Date(y, m, 0).getDate();
-}
-
-/** How many real calendar days of `month` this deployment actually
- *  covered — accounts for a deployment that started or ended mid-month
- *  (`endDate` is the inclusive last real day: the demobilisation date
- *  itself is still a placement day). Reused by the days-worked sanity
- *  check below. */
-function realPlacementDaysInMonth(deployment, month) {
-  const total = daysInMonth(month);
-  const firstDay = month === monthStrOf(deployment.startDate) ? new Date(deployment.startDate).getDate() : 1;
-  const lastDay =
-    deployment.endDate && month === monthStrOf(deployment.endDate) ? new Date(deployment.endDate).getDate() : total;
-  return lastDay - firstDay + 1;
-}
-
 /**
  * Called once by mobilisation.service.js's approveMobilisation, the moment a
  * mobilisation reaches its terminal 'Approved' state — never a route of its
