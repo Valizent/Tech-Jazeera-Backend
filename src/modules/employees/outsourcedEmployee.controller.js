@@ -1,6 +1,7 @@
 import * as service from './outsourcedEmployee.service.js';
 import ApiResponse from '../../utils/ApiResponse.js';
-import { actor } from '../../utils/actor.js';
+
+const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
 
 export async function list(req, res) {
   const data = await service.listOutsourcedEmployees({
