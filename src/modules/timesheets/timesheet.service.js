@@ -174,10 +174,30 @@ export async function listOwnTimesheets(employeeId, { page, limit }) {
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
+/** Fixed 2026-09-29 (a real audit finding): every sibling review queue
+ *  (Leave's listLeaveRequests, Attendance, Documents, Assets) scopes a
+ *  Coordinator actor to their own team — this one never did, so once an
+ *  Admin grants a Coordinator `timesheetRequests` access (already required
+ *  for a Coordinator to self-submit their own timesheet), that Coordinator
+ *  could pull every employee's timesheet company-wide. Same pattern as
+ *  leave.service.js's listLeaveRequests: the Coordinator's own
+ *  self-submitted timesheet is included too, since they have no ESS screen
+ *  of their own to see it on otherwise. */
 export async function listTimesheets({ page, limit, status, employee }, actor) {
   const filter = {};
   if (status) filter.status = status;
   if (employee) filter.employee = employee;
+
+  if (actor?.role === 'Coordinator') {
+    const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+    const visibleIds = actor.employee ? [...teamIds, actor.employee] : teamIds;
+    const visibleIdStrings = visibleIds.map((id) => id.toString());
+    if (employee && !visibleIdStrings.includes(employee)) {
+      throw new ApiError(403, 'You do not have access to this employee.');
+    }
+    filter.employee = employee ?? { $in: visibleIds };
+  }
+
   const [rawItems, total] = await Promise.all([
     Timesheet.find(filter)
       .sort({ periodStart: -1 })

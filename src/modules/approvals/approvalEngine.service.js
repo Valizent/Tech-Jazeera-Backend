@@ -105,7 +105,11 @@ export function roleIdsNeededAcross(items, pendingStatus) {
  *   roles is this actor in" question up to once per module. Computed with
  *   roleIdsNeededAcross(), below, over the UNION of every module's items.
  */
-export async function annotateCanDecide(items, actor, { pendingStatus, legacyAllowedRoles, memberRoleIds: providedMemberRoleIds } = {}) {
+export async function annotateCanDecide(
+  items,
+  actor,
+  { pendingStatus, legacyAllowedRoles, memberRoleIds: providedMemberRoleIds, isInLegacyScope } = {}
+) {
   let memberRoleIds = providedMemberRoleIds;
   if (!memberRoleIds) {
     const roleIdsNeeded = roleIdsNeededAcross(items, pendingStatus);
@@ -121,7 +125,20 @@ export async function annotateCanDecide(items, actor, { pendingStatus, legacyAll
   return items.map((item) => {
     if (item.status !== pendingStatus) return { ...item, canDecideCurrentStep: false };
     if (!item.workflow) {
-      return { ...item, canDecideCurrentStep: legacyAllowedRoles.includes(actor.role) };
+      // Fixed 2026-09-29, a real audit finding: this had no way to apply the
+      // same per-item scope check `decideApprovalStep`'s own legacy path
+      // enforces via its `assertScope` parameter (e.g. Leave's Coordinator-
+      // team check) — a role-list match alone let this flag say "you can
+      // decide this" for an item the real decide call would actually 403 on
+      // (a Coordinator's own self-submitted request, or another team's
+      // request), including inflating a "waiting on you" count with items
+      // that were never actually theirs to decide. `isInLegacyScope` is
+      // never consulted on the workflow branch below, same reasoning
+      // `assertScope` itself documents — step-role membership IS the scope
+      // there.
+      const roleOk = legacyAllowedRoles.includes(actor.role);
+      const scopeOk = isInLegacyScope ? isInLegacyScope(item) : true;
+      return { ...item, canDecideCurrentStep: roleOk && scopeOk };
     }
     const step = item.steps?.[item.currentStep];
     const stepRoleIds = (step?.roles ?? []).map((roleId) => (roleId._id ?? roleId).toString());

@@ -93,6 +93,15 @@ export async function adjustAttendance({ employee, date, status, checkInTime, ch
   }
 
   const day = toUtcDay(date);
+  // Fixed 2026-09-29, a real audit finding: nothing tied checkInTime to the
+  // record's own `date` at all — a client sending a timezone-shifted value
+  // (the exact bug just fixed in RecordsGrid.jsx's own toIsoDateTime) could
+  // silently store a check-in whose UTC day doesn't match the record it's
+  // attached to. checkOutTime is deliberately NOT checked the same way — a
+  // real overnight shift can legitimately check out on the following day.
+  if (checkInTime && toUtcDay(checkInTime).getTime() !== day.getTime()) {
+    throw new ApiError(400, 'Check-in time must fall on the same day as this attendance record.');
+  }
   const hoursWorked =
     checkInTime && checkOutTime
       ? Math.round(((new Date(checkOutTime) - new Date(checkInTime)) / 3_600_000) * 100) / 100

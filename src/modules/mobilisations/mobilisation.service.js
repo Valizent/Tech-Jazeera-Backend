@@ -31,6 +31,7 @@ import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.
 import { nextSequence } from '../shared/counter.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import { createDeploymentFromMobilisation } from '../deployments/deployment.service.js';
+import MobilisationSubmissionLock from './mobilisationSubmissionLock.model.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import logger from '../../config/logger.js';
 import { assertCanStartFromRequirement, attachMobilisation, onMobilisationApproved } from '../requirements/requirement.service.js';
@@ -386,6 +387,18 @@ async function assertNoActiveNonEmployeePlacement(iqamaNumber) {
   );
 }
 
+/** The advisory-lock key for a worker being mobilised — `employee:<id>` for
+ *  a real Employee, `iqama:<number>` for everyone else (mirrors
+ *  `assertNoActivePlacement`/`assertNoActiveNonEmployeePlacement`'s own
+ *  identity split). `null` when a SupplierEmployee/Freelancer gives no
+ *  Iqama — nothing durable to lock on, same reasoning
+ *  `assertNoActiveNonEmployeePlacement` already uses to skip its own check
+ *  in that case. */
+function mobilisationWorkerLockKey(workerType, data) {
+  if (workerType === 'Employee') return data.worker ? `employee:${data.worker}` : null;
+  return data.iqamaNumber ? `iqama:${data.iqamaNumber}` : null;
+}
+
 /** A worker's full deployment HISTORY — every period they were ever
  *  actually placed somewhere, Active or already Ended. For a real Employee,
  *  keyed by their Employee id; for a SupplierEmployee/Freelancer (no
@@ -478,60 +491,87 @@ export async function createMobilisation(data, actor) {
     throw new ApiError(403, 'You do not have permission to create a mobilisation.');
   }
 
-  const { employee, snapshot: workerSnapshot } = await resolveWorkerSnapshot(data.workerType, data);
-  if (data.workerType === 'Employee') {
-    // Closes the loop with Deployment's demobilise Exit outcome (added
-    // 2026-09-12) — without this, "no longer part of the company" would be
-    // cosmetic: nothing would stop mobilising the same person again five
-    // minutes later. Reversing a mistaken Exit needs no new UI — status is
-    // already a plain editable field on the Employee form.
-    if (employee.status === 'Exited') {
-      throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
+  // Advisory lock (2026-09-29, a real audit finding): closes the exact race
+  // Leave's own LeaveSubmissionLock was built for — two near-simultaneous
+  // creates for the same worker could both pass the checks below against
+  // the same pre-either-insert snapshot, then both create, producing two
+  // independently-approvable mobilisations for one physical worker. Held
+  // from here through the actual `Mobilisation.create()` below; everything
+  // after that point operates on a document that already exists, so a
+  // concurrent SECOND attempt's own checks correctly see it. `null` (no
+  // Iqama given for a SupplierEmployee/Freelancer) means nothing durable to
+  // lock on — same case `assertNoActiveNonEmployeePlacement` itself skips.
+  const lockKey = mobilisationWorkerLockKey(data.workerType, data);
+  if (lockKey) {
+    try {
+      await MobilisationSubmissionLock.create({ key: lockKey });
+    } catch (err) {
+      if (err?.code === 11000) {
+        throw new ApiError(409, 'Another mobilisation for this worker is already being processed — try again in a moment.');
+      }
+      throw err;
     }
-    await assertNoActivePlacement(data.worker);
-    await assertNoDateOverlap('Employee', { workerId: data.worker }, data.mobilisationDate, data.checkoutDate);
-  } else {
-    await assertNoActiveNonEmployeePlacement(workerSnapshot.iqamaNumber);
-    await assertNoDateOverlap(data.workerType, { iqamaNumber: workerSnapshot.iqamaNumber }, data.mobilisationDate, data.checkoutDate);
   }
-  const clientDoc = await Client.findById(data.client).lean();
-  if (!clientDoc) throw new ApiError(404, 'Client not found.');
-  const subcontractorSnapshot = await resolveSubcontractorSnapshot(data.workerType, data.subcontractor);
 
-  // Started from a Requirements card's candidate ("Start mobilisation")? Confirm the
-  // caller may, and that the candidate is still free, BEFORE anything is created —
-  // so a refused start leaves no orphan Draft behind.
-  if (data.requirement) await assertCanStartFromRequirement(data, actor);
-
-  // Office Secretary never coordinates a worker themselves — they're typing
-  // this in ON BEHALF OF a real Coordinator (who's "busy or something"), so
-  // that Coordinator becomes the primary instead, unconfirmed until they
-  // actually look it over — the exact same confirm-before-submit gate M2
-  // already built for a joint coordinator invite, reused here verbatim
-  // rather than inventing a second "please review this" mechanism.
+  let mobilisation;
   let primaryCoordinatorId = actor.userId;
-  let coordinatorEntry = { user: actor.userId, isPrimary: true, confirmed: true, confirmedAt: new Date() };
-  if (isOfficeSecretary) {
-    if (!data.onBehalfOf) throw new ApiError(400, 'Select which coordinator this mobilisation is for.');
-    const onBehalfUser = await User.findById(data.onBehalfOf).select('role').lean();
-    if (!onBehalfUser || onBehalfUser.role !== 'Coordinator') {
-      throw new ApiError(400, 'Select a real Coordinator login.');
+  try {
+    const { employee, snapshot: workerSnapshot } = await resolveWorkerSnapshot(data.workerType, data);
+    if (data.workerType === 'Employee') {
+      // Closes the loop with Deployment's demobilise Exit outcome (added
+      // 2026-09-12) — without this, "no longer part of the company" would be
+      // cosmetic: nothing would stop mobilising the same person again five
+      // minutes later. Reversing a mistaken Exit needs no new UI — status is
+      // already a plain editable field on the Employee form.
+      if (employee.status === 'Exited') {
+        throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
+      }
+      await assertNoActivePlacement(data.worker);
+      await assertNoDateOverlap('Employee', { workerId: data.worker }, data.mobilisationDate, data.checkoutDate);
+    } else {
+      await assertNoActiveNonEmployeePlacement(workerSnapshot.iqamaNumber);
+      await assertNoDateOverlap(data.workerType, { iqamaNumber: workerSnapshot.iqamaNumber }, data.mobilisationDate, data.checkoutDate);
     }
-    primaryCoordinatorId = data.onBehalfOf;
-    coordinatorEntry = { user: data.onBehalfOf, isPrimary: true, confirmed: false, confirmedAt: null };
-  }
+    const clientDoc = await Client.findById(data.client).lean();
+    if (!clientDoc) throw new ApiError(404, 'Client not found.');
+    const subcontractorSnapshot = await resolveSubcontractorSnapshot(data.workerType, data.subcontractor);
 
-  const mobilisation = await Mobilisation.create(
-    applyProfitFields({
-      ...data,
-      ...workerSnapshot,
-      serialNumber: await newMobilisationSerial(),
-      clientName: clientDoc.companyName,
-      ...subcontractorSnapshot,
-      coordinators: [coordinatorEntry],
-      createdBy: actor.userId,
-    })
-  );
+    // Started from a Requirements card's candidate ("Start mobilisation")? Confirm the
+    // caller may, and that the candidate is still free, BEFORE anything is created —
+    // so a refused start leaves no orphan Draft behind.
+    if (data.requirement) await assertCanStartFromRequirement(data, actor);
+
+    // Office Secretary never coordinates a worker themselves — they're typing
+    // this in ON BEHALF OF a real Coordinator (who's "busy or something"), so
+    // that Coordinator becomes the primary instead, unconfirmed until they
+    // actually look it over — the exact same confirm-before-submit gate M2
+    // already built for a joint coordinator invite, reused here verbatim
+    // rather than inventing a second "please review this" mechanism.
+    let coordinatorEntry = { user: actor.userId, isPrimary: true, confirmed: true, confirmedAt: new Date() };
+    if (isOfficeSecretary) {
+      if (!data.onBehalfOf) throw new ApiError(400, 'Select which coordinator this mobilisation is for.');
+      const onBehalfUser = await User.findById(data.onBehalfOf).select('role').lean();
+      if (!onBehalfUser || onBehalfUser.role !== 'Coordinator') {
+        throw new ApiError(400, 'Select a real Coordinator login.');
+      }
+      primaryCoordinatorId = data.onBehalfOf;
+      coordinatorEntry = { user: data.onBehalfOf, isPrimary: true, confirmed: false, confirmedAt: null };
+    }
+
+    mobilisation = await Mobilisation.create(
+      applyProfitFields({
+        ...data,
+        ...workerSnapshot,
+        serialNumber: await newMobilisationSerial(),
+        clientName: clientDoc.companyName,
+        ...subcontractorSnapshot,
+        coordinators: [coordinatorEntry],
+        createdBy: actor.userId,
+      })
+    );
+  } finally {
+    if (lockKey) await MobilisationSubmissionLock.deleteOne({ key: lockKey });
+  }
 
   // Milestone 5: a real Coordinator primary claims the worker immediately —
   // Employee.coordinator is now fully derived from Mobilisation state, not a
@@ -1539,11 +1579,22 @@ async function rejectMobilisation(id, { decisionNote, rejectionTarget }, actor) 
     throw new ApiError(400, 'Only requests pending review can be decided.');
   }
   const stepIndex = mobilisation.currentStep;
-  const isLastStep = stepIndex >= mobilisation.steps.length - 1;
+  // Fixed 2026-09-29, a real audit finding: `mobilisation.steps` is
+  // `undefined` whenever no ApprovalWorkflow is configured (see
+  // submitMobilisation's own `mobilisation.steps = undefined` for that
+  // case) — reading `.length` off it crashed this whole endpoint with a
+  // 500 instead of the clean legacy-path fallback `approveMobilisation`'s
+  // shared-engine call already has. With no real steps, there's only ever
+  // one implicit step, so it's trivially the last one; `stepRoleIds` falls
+  // through to `[]`, and `resolveStepAuthority` below already treats an
+  // empty role list as "Admin only" — the same `legacyAllowedRoles:
+  // ['Admin']` fallback approveMobilisation uses.
+  const totalSteps = mobilisation.steps?.length ?? 0;
+  const isLastStep = totalSteps === 0 || stepIndex >= totalSteps - 1;
   if (!isLastStep) {
     throw new ApiError(400, 'Only the final step can reject.');
   }
-  const stepRoleIds = mobilisation.steps[stepIndex]?.roles ?? [];
+  const stepRoleIds = mobilisation.steps?.[stepIndex]?.roles ?? [];
   const { authorized, roleId, viaAdminOverride } = await resolveStepAuthority(actor, stepRoleIds);
   if (!authorized) {
     throw new ApiError(403, 'You are not an approver for the current step of this mobilisation.');
@@ -1580,7 +1631,7 @@ async function rejectMobilisation(id, { decisionNote, rejectionTarget }, actor) 
       meta: { decisionNote, viaAdminOverride },
       ip: actor.ip,
     });
-    const memberIds = await membersOfRoles(updated.steps[0]?.roles);
+    const memberIds = await membersOfRoles(updated.steps?.[0]?.roles);
     await Promise.all(
       memberIds.map((userId) =>
         notifyUser(userId, {
@@ -1724,21 +1775,32 @@ export async function archiveWorkerData(iqamaNumber, actor) {
   if (mobilisations.length === 0) throw new ApiError(404, 'No mobilisations found for this Iqama number.');
   const mobilisationIds = mobilisations.map((m) => m._id);
 
-  const hasActiveMobilisation = mobilisations.some((m) => ['Draft', 'PendingReview', 'Approved'].includes(m.status));
-  const activeDeploymentCount = await Deployment.countDocuments({
-    mobilisation: { $in: mobilisationIds },
-    status: 'Active',
-  });
-  if (hasActiveMobilisation || activeDeploymentCount > 0) {
-    throw new ApiError(
-      409,
-      'This worker still has an active mobilisation or deployment — demobilise/complete it first.'
-    );
-  }
-
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
+      // Fixed 2026-09-29, a real audit finding: this guard used to run as a
+      // separate read BEFORE the transaction started, so a mobilisation/
+      // deployment could transition to Active in the gap between the check
+      // and the transaction (e.g. a concurrent approveMobilisation),
+      // letting an active placement's records get archived. Re-checked
+      // here, inside the same transaction/session the actual writes use, so
+      // it sees a consistent snapshot immediately before archiving.
+      const currentMobilisations = await Mobilisation.find({ _id: { $in: mobilisationIds } })
+        .select('status')
+        .session(session)
+        .lean();
+      const hasActiveMobilisation = currentMobilisations.some((m) => ['Draft', 'PendingReview', 'Approved'].includes(m.status));
+      const activeDeploymentCount = await Deployment.countDocuments({
+        mobilisation: { $in: mobilisationIds },
+        status: 'Active',
+      }).session(session);
+      if (hasActiveMobilisation || activeDeploymentCount > 0) {
+        throw new ApiError(
+          409,
+          'This worker still has an active mobilisation or deployment — demobilise/complete it first.'
+        );
+      }
+
       const stamp = { archived: true, archivedAt: new Date(), archivedBy: actor.userId };
       await Mobilisation.updateMany({ _id: { $in: mobilisationIds } }, stamp, { session });
       await Deployment.updateMany({ mobilisation: { $in: mobilisationIds } }, stamp, { session });

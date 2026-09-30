@@ -179,7 +179,10 @@ async function computeActiveMobilisationRevenueTrend(actor, isCoordinator) {
 // docs/RBAC-notes.md), so annotateCanDecide's own check is already the
 // complete, accurate signal for it.
 const PENDING_ACTION_MODULES = [
-  { label: 'Leave requests', url: '/leave', Model: LeaveRequest, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin', 'Manager', 'HR', 'Coordinator'], sectionKey: 'leaveRequests' },
+  // `scopeToCoordinatorTeam` (2026-09-29 fix): Leave is the one module whose
+  // legacyAllowedRoles includes 'Coordinator' — see the doc comment on its
+  // use below for the real bug this closes.
+  { label: 'Leave requests', url: '/leave', Model: LeaveRequest, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin', 'Manager', 'HR', 'Coordinator'], sectionKey: 'leaveRequests', scopeToCoordinatorTeam: true },
   { label: 'Timesheets', url: '/timesheets', Model: Timesheet, pendingStatus: 'Submitted', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'timesheetRequests' },
   { label: 'Salary advances', url: '/financial-requests', Model: SalaryAdvance, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'financialRequests' },
   { label: 'Reimbursements', url: '/financial-requests', Model: ReimbursementClaim, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'financialRequests' },
@@ -204,13 +207,24 @@ const PENDING_ACTION_MODULES = [
 //     annotateCanDecide so it skips its own query entirely.
 async function getMyPendingActions(actor, mySectionAccess) {
   if (!actor?.userId) return [];
+  // Fixed 2026-09-29, a real audit finding: this query had zero
+  // Coordinator-team scoping, unlike leave.service.js's own listLeaveRequests
+  // — a Coordinator's "waiting on you" Leave-requests count included every
+  // company-wide no-workflow PendingReview request, not just their team's,
+  // since annotateCanDecide's legacy-role match alone can't tell a
+  // Coordinator's own team apart from anyone else's. Computed once, reused
+  // for every module flagged `scopeToCoordinatorTeam` below.
+  const teamIdStrings =
+    actor.role === 'Coordinator'
+      ? new Set((await Employee.find({ coordinator: actor.userId }).distinct('_id')).map((id) => id.toString()))
+      : null;
   const [staleRequirements, openTasks, paymentsDueSoon, itemsByModule] = await Promise.all([
     countStaleRequirements(actor),
     countOpenTasks(actor),
     countPaymentsDueSoon(actor),
     Promise.all(
       PENDING_ACTION_MODULES.map(({ Model, pendingStatus }) =>
-        Model.find({ status: pendingStatus }).select('workflow currentStep steps status').lean()
+        Model.find({ status: pendingStatus }).select('workflow currentStep steps status employee').lean()
       )
     ),
   ]);
@@ -228,10 +242,14 @@ async function getMyPendingActions(actor, mySectionAccess) {
   }
 
   const perModule = await Promise.all(
-    PENDING_ACTION_MODULES.map(async ({ label, url, pendingStatus, legacyAllowedRoles, sectionKey }, i) => {
+    PENDING_ACTION_MODULES.map(async ({ label, url, pendingStatus, legacyAllowedRoles, sectionKey, scopeToCoordinatorTeam }, i) => {
       const items = itemsByModule[i];
       if (items.length === 0) return { label, url, count: 0 };
-      const annotated = await annotateCanDecide(items, actor, { pendingStatus, legacyAllowedRoles, memberRoleIds });
+      const isInLegacyScope =
+        scopeToCoordinatorTeam && teamIdStrings
+          ? (item) => teamIdStrings.has((item.employee?._id ?? item.employee)?.toString())
+          : undefined;
+      const annotated = await annotateCanDecide(items, actor, { pendingStatus, legacyAllowedRoles, memberRoleIds, isInLegacyScope });
       const hasSectionWrite = sectionKey ? mySectionAccess.write.includes(sectionKey) : true;
       const count = hasSectionWrite ? annotated.filter((i2) => i2.canDecideCurrentStep).length : 0;
       return { label, url, count };

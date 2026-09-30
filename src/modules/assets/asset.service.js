@@ -108,6 +108,19 @@ export async function assignAsset(assetId, data, actor) {
   }
   await assertEmployeeVisibleToActor(employee._id, actor);
 
+  // Fixed 2026-09-29, a real audit finding: `assignedAt` had no range check
+  // at all, on either layer — an asset could be assigned before it was ever
+  // purchased, or arbitrarily far in the future. The purchase-date check
+  // needs the real Asset record, so it belongs here, not in the Zod schema.
+  const assignedAt = data.assignedAt ?? new Date();
+  if (asset.purchaseDate && assignedAt < asset.purchaseDate) {
+    throw new ApiError(400, 'Assignment date cannot be before the asset was purchased.');
+  }
+  const oneDayFromNow = new Date(Date.now() + 86_400_000);
+  if (assignedAt > oneDayFromNow) {
+    throw new ApiError(400, 'Assignment date cannot be in the future.');
+  }
+
   const session = await mongoose.startSession();
   try {
     let assignment;
@@ -120,7 +133,7 @@ export async function assignAsset(assetId, data, actor) {
             assetName: asset.name,
             employee: employee._id,
             employeeName: employee.fullName,
-            assignedAt: data.assignedAt ?? new Date(),
+            assignedAt,
             notes: data.notes,
             status: 'Active',
           },

@@ -34,6 +34,38 @@ function currentMonthStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
+
+/**
+ * Deployment-aware replacement for calling `assertEmployeeVisibleToActor(
+ * deployment.worker, actor)` directly. Fixed 2026-09-29, a real audit
+ * finding: `assertEmployeeVisibleToActor` is a no-op whenever its
+ * `employeeId` argument is null, and every SupplierEmployee/Freelancer
+ * deployment has `worker: null` by design — so calling it with
+ * `deployment.worker` never restricted a Coordinator's access to a NON-
+ * Employee deployment on every single-record write/read route
+ * (`updateDeployment`, `addMonthlyHours`, `updateMonthlyHours`,
+ * `decideMonthlyHours`, `sendInvoice`, `getInvoiceFile`,
+ * `demobiliseDeployment`, `getDeployment`), even though `findDeployments`
+ * was already correctly scoping the LIST/export view by
+ * `Mobilisation.coordinators.user` since 2026-09-21. A Coordinator not on
+ * the source Mobilisation's coordinator list could reach, edit, or even
+ * Demobilise another team's non-Employee placement directly by id. Mirrors
+ * `findDeployments`' own scoping rule exactly, just applied to one
+ * deployment instead of a list. A no-op for any non-Coordinator role.
+ */
+async function assertDeploymentVisibleToActor(deployment, actor) {
+  if (actor?.role !== 'Coordinator') return;
+  // `deployment.worker`/`.mobilisation` may be a raw ObjectId or a populated
+  // document depending on the caller — handle both.
+  const workerId = deployment.worker?._id ?? deployment.worker;
+  if (workerId) {
+    await assertEmployeeVisibleToActor(workerId, actor);
+    return;
+  }
+  const mobilisationId = deployment.mobilisation?._id ?? deployment.mobilisation;
+  const owned = await Mobilisation.exists({ _id: mobilisationId, 'coordinators.user': actor.userId });
+  if (!owned) throw new ApiError(403, 'You do not have access to this deployment.');
+}
 /** Every user who can decide a monthly-hours entry right now — whoever's a
  *  member of any ApprovalRole granted write on the 'deploymentsHoursDecide'
  *  Section Access key (e.g. "Marketing Manager"). Used only to notify; the
@@ -217,7 +249,7 @@ export async function updateDeployment(deploymentId, data, actor) {
 
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
-  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  await assertDeploymentVisibleToActor(deployment, actor);
 
   const before = {
     site: deployment.site,
@@ -273,7 +305,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   // worker is actually this Coordinator's own — the same team-ownership
   // check getDeployment already enforces for a single read (a no-op for
   // any non-Coordinator role).
-  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  await assertDeploymentVisibleToActor(deployment, actor);
   // Fixed 2026-09-16 (the user's own ask): waiting for the real calendar
   // month to elapse only makes sense for a worker STILL mobilised that
   // month — an Ended deployment is already history, so every month from
@@ -392,7 +424,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
   // Fixed 2026-09-15, a real QA-audit-found gap — A1: same missing
   // team-ownership check as addMonthlyHours above.
-  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  await assertDeploymentVisibleToActor(deployment, actor);
   const entry = deployment.monthlyHours.id(entryId);
   if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
   const isAdmin = actor.role === 'Admin';
@@ -506,36 +538,55 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
   // (see their own 2026-09-15 fix comments) — this sibling was missed, so a
   // Coordinator granted 'deploymentsHoursDecide' could decide a foreign
   // team's entry. A no-op for any non-Coordinator role.
-  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  await assertDeploymentVisibleToActor(deployment, actor);
   const entry = deployment.monthlyHours.id(entryId);
   if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
   if (entry.status !== 'Pending') {
     throw new ApiError(400, 'Only a pending entry can be decided.');
   }
 
-  entry.status = data.decision;
-  entry.decidedBy = actor.userId;
-  entry.decidedAt = new Date();
-  entry.decisionNote = data.note || null;
-  await deployment.save();
+  // Atomic transition (2026-09-29, a real audit finding): the old
+  // read-then-save let two concurrent Approve/Reject calls on the same
+  // entry both pass the in-memory `status !== 'Pending'` check above, and
+  // the second `.save()` would silently overwrite the first's decision.
+  // `$elemMatch` re-checks BOTH the entry id and its status against the
+  // CURRENT document at write time — only the first of two concurrent
+  // requests can match, same pattern addMonthlyHours' own 2026-09-14 fix
+  // already uses for its duplicate-month race.
+  const updated = await Deployment.findOneAndUpdate(
+    { _id: deploymentId, monthlyHours: { $elemMatch: { _id: entryId, status: 'Pending' } } },
+    {
+      $set: {
+        'monthlyHours.$.status': data.decision,
+        'monthlyHours.$.decidedBy': actor.userId,
+        'monthlyHours.$.decidedAt': new Date(),
+        'monthlyHours.$.decisionNote': data.note || null,
+      },
+    },
+    { new: true }
+  );
+  if (!updated) {
+    throw new ApiError(400, 'Only a pending entry can be decided.');
+  }
+  const updatedEntry = updated.monthlyHours.id(entryId);
 
   await logAudit({
     user: actor.userId,
     action: 'deployment.monthlyHours.decide',
     targetType: 'Deployment',
-    targetId: deployment._id,
-    meta: { month: entry.month, decision: data.decision },
+    targetId: updated._id,
+    meta: { month: updatedEntry.month, decision: data.decision },
     ip: actor.ip,
   });
 
-  await notifyUser(entry.enteredBy.toString(), {
+  await notifyUser(updatedEntry.enteredBy.toString(), {
     type: 'RequestStatus',
     title:
       data.decision === 'Approved'
-        ? `${entry.month} hours for ${deployment.workerName} approved`
-        : `${entry.month} hours for ${deployment.workerName} rejected`,
+        ? `${updatedEntry.month} hours for ${updated.workerName} approved`
+        : `${updatedEntry.month} hours for ${updated.workerName} rejected`,
     body: data.note || undefined,
-    url: `/deployments/${deployment._id}`,
+    url: `/deployments/${updated._id}`,
   });
 
   // 2026-09-27 follow-up, the user's own ask: the Clerk shouldn't have to go
@@ -546,13 +597,13 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
     for (const userId of clerks) {
       await notifyUser(userId, {
         type: 'RequestStatus',
-        title: `${entry.month} hours ready to invoice for ${deployment.workerName}`,
-        body: `${deployment.clientName} — approved and ready for a client invoice.`,
-        url: `/deployments/${deployment._id}`,
+        title: `${updatedEntry.month} hours ready to invoice for ${updated.workerName}`,
+        body: `${updated.clientName} — approved and ready for a client invoice.`,
+        url: `/deployments/${updated._id}`,
       });
     }
   }
-  return deployment.toObject();
+  return updated.toObject();
 }
 
 const INVOICE_DUE_DAYS = 50;
@@ -606,7 +657,7 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
 
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
-  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  await assertDeploymentVisibleToActor(deployment, actor);
   const entry = deployment.monthlyHours.id(entryId);
   if (!entry) throw new ApiError(404, 'Monthly hours entry not found.');
   if (entry.status !== 'Approved') {
@@ -617,33 +668,54 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
   }
 
   const now = new Date();
-  entry.invoiceSentAt = now;
-  entry.invoiceSentBy = actor.userId;
-  entry.invoiceDueAt = new Date(now.getTime() + INVOICE_DUE_DAYS * 86_400_000);
-  entry.invoiceNumber = data.invoiceNumber;
-  entry.invoiceDate = data.invoiceDate;
-  entry.invoiceFile = invoiceFileFromUpload(file);
-  await deployment.save();
+  const invoiceDueAt = new Date(now.getTime() + INVOICE_DUE_DAYS * 86_400_000);
+  // Atomic transition (2026-09-29, a real audit finding): the old
+  // read-then-save let two concurrent "send invoice" submissions for the
+  // same entry both pass the in-memory `invoiceSentAt` check above, and the
+  // second save would overwrite the first's invoiceNumber/invoiceFile —
+  // orphaning the first uploaded PDF. `$elemMatch` re-checks the entry is
+  // STILL Approved and un-invoiced against the current document at write
+  // time; the loser's uploaded file is cleaned up by this router's own
+  // orphaned-upload error middleware (deployment.routes.js) once this
+  // throws.
+  const updated = await Deployment.findOneAndUpdate(
+    { _id: deploymentId, monthlyHours: { $elemMatch: { _id: entryId, status: 'Approved', invoiceSentAt: null } } },
+    {
+      $set: {
+        'monthlyHours.$.invoiceSentAt': now,
+        'monthlyHours.$.invoiceSentBy': actor.userId,
+        'monthlyHours.$.invoiceDueAt': invoiceDueAt,
+        'monthlyHours.$.invoiceNumber': data.invoiceNumber,
+        'monthlyHours.$.invoiceDate': data.invoiceDate,
+        'monthlyHours.$.invoiceFile': invoiceFileFromUpload(file),
+      },
+    },
+    { new: true }
+  );
+  if (!updated) {
+    throw new ApiError(400, 'This month has already been invoiced.');
+  }
+  const updatedEntry = updated.monthlyHours.id(entryId);
 
   await logAudit({
     user: actor.userId,
     action: 'deployment.monthlyHours.invoiceSent',
     targetType: 'Deployment',
-    targetId: deployment._id,
-    meta: { month: entry.month, invoiceNumber: data.invoiceNumber },
+    targetId: updated._id,
+    meta: { month: updatedEntry.month, invoiceNumber: data.invoiceNumber },
     ip: actor.ip,
   });
 
-  const audience = await paymentTrackingAudience(deployment.mobilisation);
+  const audience = await paymentTrackingAudience(updated.mobilisation);
   for (const userId of audience) {
     await notifyUser(userId, {
       type: 'RequestStatus',
-      title: `Invoice ${data.invoiceNumber} sent for ${deployment.workerName} (${entry.month})`,
-      body: `${deployment.clientName} — payment due by ${entry.invoiceDueAt.toDateString()}.`,
+      title: `Invoice ${data.invoiceNumber} sent for ${updated.workerName} (${updatedEntry.month})`,
+      body: `${updated.clientName} — payment due by ${updatedEntry.invoiceDueAt.toDateString()}.`,
       url: `/deployments/payments-due`,
     });
   }
-  return deployment.toObject();
+  return updated.toObject();
 }
 
 /** The uploaded invoice-copy file for one entry — a signed, time-limited
@@ -651,7 +723,7 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
 export async function getInvoiceFile(deploymentId, entryId, actor) {
   const deployment = await Deployment.findById(deploymentId).lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
-  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  await assertDeploymentVisibleToActor(deployment, actor);
   const entry = deployment.monthlyHours.find((m) => m._id.toString() === entryId);
   if (!entry || !entry.invoiceFile) throw new ApiError(404, 'No invoice file for this month.');
   return {
@@ -762,6 +834,52 @@ export async function getClientsPaymentSummary(actor) {
     });
   }
   return rows.sort((a, b) => (a.daysRemaining ?? Infinity) - (b.daysRemaining ?? Infinity));
+}
+
+/**
+ * Returns a flat list of all fully-paid invoices across all clients the viewer
+ * is entitled to see. Uses the same visibility rules as getClientsPaymentSummary.
+ */
+export async function getPaidInvoices(actor) {
+  const canViewAll = await canAccessSection('mobilisationsViewer', actor, 'read');
+
+  const deployments = await Deployment.find({
+    archived: { $ne: true },
+    monthlyHours: { $elemMatch: { invoiceSentAt: { $ne: null } } },
+  })
+    .select('client clientName subcontractorName mobilisation workerName')
+    .populate('mobilisation', 'coordinators')
+    .lean();
+
+  const byClient = new Map();
+  for (const dep of deployments) {
+    if (!dep.mobilisation) continue;
+    const isMine = dep.mobilisation.coordinators?.some((c) => c.user.toString() === actor.userId.toString());
+    if (!canViewAll && !isMine) continue;
+    const key = dep.client.toString();
+    if (!byClient.has(key)) byClient.set(key, { clientId: dep.client, clientName: dep.clientName, subcontractorName: dep.subcontractorName });
+  }
+
+  const paidInvoices = [];
+  for (const [, info] of byClient) {
+    const { perEntry } = await getClientAllocation(info.clientId);
+    const paid = perEntry.filter((e) => e.fullyPaid);
+    for (const p of paid) {
+      paidInvoices.push({
+        clientName: info.clientName,
+        subcontractorName: info.subcontractorName,
+        ...p,
+      });
+    }
+  }
+  
+  // Sort by invoiceDate descending, then by clientName
+  return paidInvoices.sort((a, b) => {
+    const dateA = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
+    const dateB = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
+    if (dateA !== dateB) return dateB - dateA;
+    return a.clientName.localeCompare(b.clientName);
+  });
 }
 
 /**
@@ -888,7 +1006,7 @@ export async function demobiliseDeployment(deploymentId, data, actor) {
   // Exit-outcome reason, mark Exited — an employee on a completely
   // different team, out of the box, no extra grant required. Same
   // team-ownership check as the read-side getDeployment already enforces.
-  await assertEmployeeVisibleToActor(deployment.worker, actor);
+  await assertDeploymentVisibleToActor(deployment, actor);
   if (deployment.status !== 'Active') throw new ApiError(400, 'This deployment has already ended.');
   // Fixed 2026-09-15, a real QA-audit-found gap — F6: nothing stopped a
   // demobilisation date before the deployment's own start date — physically
@@ -1391,13 +1509,12 @@ export async function getDeployment(id, actor) {
     .populate('mobilisation', PROFIT_RATE_FIELDS)
     .lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
-  // Coordinator team-scoping (2026-09-14, a real QA-audit-found gap): a
-  // SupplierEmployee/Freelancer deployment has no linked Employee `worker`
-  // at all, so there's nothing to scope — same reasoning Documents/Assets/
-  // EOSB use for a record with no Employee owner.
-  if (deployment.worker) {
-    await assertEmployeeVisibleToActor(deployment.worker._id, actor);
-  }
+  // Coordinator team-scoping (2026-09-14, a real QA-audit-found gap; widened
+  // 2026-09-29 to also scope a SupplierEmployee/Freelancer deployment via
+  // its source Mobilisation's own coordinators, instead of being silently
+  // unconditionally visible to every Coordinator just because it has no
+  // linked Employee `worker`).
+  await assertDeploymentVisibleToActor(deployment, actor);
 
   // Profit and OT amount (added 2026-09-13, see the model's doc comment) are
   // both commercial data, same sensitivity class as Mobilisation's own

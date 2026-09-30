@@ -166,17 +166,23 @@ export async function decideClientPayment(paymentId, data, actor) {
   const allowed = await canAccessSection('deploymentsPaymentDecide', actor);
   if (!allowed) throw new ApiError(403, 'You do not have permission to approve a received payment.');
 
-  const payment = await ClientPayment.findById(paymentId);
-  if (!payment) throw new ApiError(404, 'Payment not found.');
-  if (payment.decisionStatus !== 'Pending') throw new ApiError(400, 'Only a pending payment can be decided.');
+  const existing = await ClientPayment.findById(paymentId);
+  if (!existing) throw new ApiError(404, 'Payment not found.');
+  if (existing.decisionStatus !== 'Pending') throw new ApiError(400, 'Only a pending payment can be decided.');
 
-  const client = await Client.findById(payment.client).select('companyName').lean();
+  const client = await Client.findById(existing.client).select('companyName').lean();
 
-  payment.decisionStatus = data.decision;
-  payment.decidedBy = actor.userId;
-  payment.decidedAt = new Date();
-  payment.decisionNote = data.note || null;
-  await payment.save();
+  // Atomic transition (2026-09-29, a real audit finding): the old
+  // read-then-save let two concurrent deciders on the same Pending payment
+  // race — the second save would silently overwrite the first's decision.
+  // Filtering the update on `decisionStatus: 'Pending'` means only the
+  // first of two concurrent requests can match; the loser gets a clean 400.
+  const payment = await ClientPayment.findOneAndUpdate(
+    { _id: paymentId, decisionStatus: 'Pending' },
+    { decisionStatus: data.decision, decidedBy: actor.userId, decidedAt: new Date(), decisionNote: data.note || null },
+    { new: true }
+  );
+  if (!payment) throw new ApiError(400, 'Only a pending payment can be decided.');
 
   await logAudit({
     user: actor.userId,

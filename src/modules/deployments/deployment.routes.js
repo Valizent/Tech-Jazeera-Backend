@@ -93,6 +93,7 @@ router.get('/standby', canReadDeployments, asyncHandler(deploymentController.sta
 // for a Coordinator, or 'mobilisationsViewer' for MM/Admin), computed in the
 // service, same as Requirements/Daily Updates' "own work needs no grant".
 router.get('/payments-due', asyncHandler(deploymentController.paymentsDue));
+router.get('/paid-invoices', asyncHandler(deploymentController.paidInvoices));
 // Before /:id, or a real clientId is read as a deployment id.
 router.get(
   '/payments-due/:clientId',
@@ -161,6 +162,11 @@ router.post(
 );
 router.get(
   '/:id/monthly-hours/:entryId/invoice-file',
+  // Fixed 2026-09-29 (audit finding): this had NO gate at all — any staff
+  // login could download any deployment's invoice PDF regardless of grant.
+  // `canReadDeployments` is the same general "can view this section" gate
+  // every other GET route on this router already uses.
+  canReadDeployments,
   validate({ params: monthlyHoursEntryParamSchema }),
   asyncHandler(deploymentController.invoiceFile)
 );

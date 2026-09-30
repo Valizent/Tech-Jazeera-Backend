@@ -141,11 +141,12 @@ async function evaluateContractCycle(employee, leaveType, requestedDays, now) {
  * this leave year — tiers are consumed in array order (Article 117: the
  * first 30 days of a company's sick days this year are the "full pay"
  * tier, REGARDLESS of which request they came from, so a worker's 3rd
- * request this year might start mid-tier or straddle two tiers). Exported
- * for payroll.service.js, which reuses the exact same math to figure out
- * which calendar days within a request fall in which tier.
+ * request this year might start mid-tier or straddle two tiers). Used only
+ * by evaluateSick below — no longer exported (2026-09-29 cleanup): it used
+ * to also be reused by payroll.service.js's own sick-leave-deduction math,
+ * but that module was deleted 2026-09-28 along with the rest of Payroll.
  */
-export function allocateSickDays(usedDays, requestedDays, tiers) {
+function allocateSickDays(usedDays, requestedDays, tiers) {
   const totalCap = tiers.reduce((sum, t) => sum + t.days, 0);
   const remainingDays = Math.max(0, totalCap - usedDays);
   const eligible = requestedDays <= remainingDays;
@@ -453,8 +454,12 @@ export async function listLeaveRequests({ page, limit, status, employee }, actor
   if (status) filter.status = status;
   if (employee) filter.employee = employee;
 
+  // Hoisted so it can also build `isInLegacyScope` below, without a second
+  // identical query (2026-09-29 fix).
+  let teamIdStrings = null;
   if (actor.role === 'Coordinator') {
     const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+    teamIdStrings = new Set(teamIds.map((id) => id.toString()));
     const visibleIds = actor.employee ? [...teamIds, actor.employee] : teamIds;
     const visibleIdStrings = visibleIds.map((id) => id.toString());
     if (employee && !visibleIdStrings.includes(employee)) {
@@ -479,9 +484,22 @@ export async function listLeaveRequests({ page, limit, status, employee }, actor
   // Real, server-computed "can this viewer decide it" per row — see
   // approvalEngine.service.js. Convenience for the UI only; decideLeaveRequest
   // remains the actual gate.
+  //
+  // Fixed 2026-09-29, a real audit finding: LEGACY_DECIDE_ROLES includes
+  // 'Coordinator', but until now annotateCanDecide had no way to also apply
+  // the real per-employee scope decideLeaveRequest's own assertEmployeeScope
+  // enforces — a Coordinator's OWN self-submitted request (deliberately
+  // included in this same list above, via `actor.employee` added to
+  // `visibleIds`, so they have somewhere to see it) was annotated
+  // canDecideCurrentStep:true, rendering Approve/Reject buttons that would
+  // 403 the moment either was clicked. `teamIdStrings` (NOT `visibleIds` —
+  // that set includes the Coordinator's own employee id, which is exactly
+  // the case this must exclude) is the real scope: an employee whose
+  // `coordinator` field is this actor.
   const annotated = await annotateCanDecide(rawItems, actor, {
     pendingStatus: 'PendingReview',
     legacyAllowedRoles: LEGACY_DECIDE_ROLES,
+    isInLegacyScope: teamIdStrings ? (item) => teamIdStrings.has((item.employee?._id ?? item.employee)?.toString()) : undefined,
   });
   // Fixed 2026-09-15, the same class of gap the 2026-09-14 audit found and
   // fixed for financialRequests only (advance.service.js's listAdvances) —

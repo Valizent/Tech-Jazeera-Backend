@@ -1917,3 +1917,245 @@ when requested):**
     this file's own hard rule #1). Deleted 29 September; their diagnostic
     purpose is superseded by the real fix above and the `profitBreakdown`
     field it now returns.
+- **29 September 2026: a full-codebase security/correctness audit, all 15
+  findings fixed** — a five-agent parallel review (auth/authorization,
+  money-math, general backend health, frontend correctness/security,
+  general frontend health, across both repos) surfaced 15 real issues,
+  ranked by severity and fixed in full the same day.
+  - **Deployment invoice-file download had no authorization check at all**
+    — `GET /:id/monthly-hours/:entryId/invoice-file` (deployment.routes.js)
+    was the one route on that entire router missing a Section Access gate;
+    any staff login could download any deployment's client-invoice PDF with
+    zero grant. Fixed by adding the same `canReadDeployments` gate every
+    sibling GET route already uses.
+  - **Reimbursement "Mark Paid" could double-pay** — `markReimbursementPaid`
+    was a non-atomic read-then-write with no idempotency guard; two
+    near-simultaneous calls on the same Approved claim could each create
+    their own Expense row, double-counting it in the ledger and the
+    dashboard's profit figure. Fixed with an atomic `findOneAndUpdate`
+    filtered on `status: 'Approved'`, same pattern `advance.service.js`'s
+    own repayment update already uses.
+  - **Timesheet list leaked company-wide data to Coordinators** —
+    `listTimesheets` was the one sibling review-queue function (unlike
+    Leave/Attendance/Documents/Assets) with no Coordinator team-scoping; once
+    granted `timesheetRequests` access, a Coordinator could pull every
+    employee's timesheet, not just their own team's. Fixed with the same
+    `Employee.find({coordinator: actor.userId})` scoping pattern
+    `leave.service.js`'s `listLeaveRequests` already uses, including their
+    own self-submitted timesheet.
+  - **Three read-then-save races on Approve/Reject and invoice-sending** —
+    `decideMonthlyHours`, `decideClientPayment`, and `sendInvoice` each only
+    checked status in memory before saving; two concurrent decisions on the
+    same entry could silently overwrite one another (a lost decision), and
+    concurrent invoice sends could orphan the first uploaded PDF. All three
+    rewritten as atomic `findOneAndUpdate`s (`$elemMatch` for the two
+    embedded-array cases) that re-check status against the document at write
+    time — the loser of a race now gets a clean 400 instead of a silent
+    overwrite, same hardening pattern `addMonthlyHours` already had since
+    2026-09-14.
+  - **Mid-session Section Access/role changes never reached an
+    already-logged-in user** — the client's transparent 401-refresh
+    interceptor (`axios.js`) updated only the access token, discarding the
+    fresh `user` object the same `/auth/refresh` response already carries.
+    An Admin revoking or granting a permission, or changing a login's role,
+    took effect on the server immediately but stayed invisible client-side
+    (stale nav/button visibility) until the user logged out or hard-reloaded.
+    Fixed with a new `subscribeSessionRefreshed` hook AuthContext registers
+    for, re-syncing `user.role`/`sectionAccess`/`sectionAccessWrite` on every
+    transparent token rotation.
+  - **9 forms silently swallowed client-side validation errors** — Clients,
+    Employees, both Leave forms, both Financial-Request forms (advance +
+    repayment), and both Exit-Document forms called `handleSubmit` with only
+    one argument, so an invalid field failed with no toast and no console
+    log — this app's own established rule is `handleSubmit(onSubmit,
+    onInvalid)` everywhere. Fixed all 9, plus a new shared
+    `collectFormErrorMessages` helper (`lib/utils.js`) that recurses into
+    `useFieldArray` entries (ClientForm's `sites`, the Leave-type admin
+    form's `sickPayTiers`) so a nested array-field error surfaces in the
+    toast too, not just a form's own flat fields.
+  - **Client/server numeric-validation mismatches** — Deployment monthly
+    hours (`actualHours`/`supplierHours`/`deductionAmount`) and every
+    Mobilisation rate/commission/FTA/allowance field had no bounds
+    client-side while the server enforced min/max ranges; a negative or
+    wildly-too-high value passed client validation and only ever surfaced as
+    a raw server-error toast. Both schemas now mirror their server
+    counterparts' exact bounds (hours/rates capped at 1000/100,000 per unit,
+    money fields at 1,000,000) with the same messages.
+  - **The "Add Month" hours form didn't advance after a successful
+    submission** — `MonthlyHoursForm` has no `key` tied to its computed
+    default month, so react-hook-form (which only reads `defaultValues` at
+    mount) kept showing the just-submitted month/values instead of the newly
+    eligible next month when a backlog of unentered months remained. Fixed
+    by keying the form on `addDefaultValues.month`, forcing a fresh mount
+    whenever it recomputes post-add.
+  - **Two client-side leave-form gaps** — a sick-pay tier's `payPercent` had
+    no upper bound (the `max="100"` HTML attribute is inert on a form with
+    `noValidate`), and `submitLeaveFormSchema` had no cross-field check that
+    `endDate` is on or after `startDate`. Both now validated client-side with
+    the same bound/message the server already enforces.
+  - **HoursReviewPage/PaymentsReviewPage had zero i18n** — both 2026-09-28
+    review-queue pages shipped 100% hardcoded English, a real regression
+    against this app's staff-panel Arabic convention (every sibling
+    financial page, including `PaymentsDuePage.jsx` right next to them, is
+    already translated). Fully translated into `staffDeployments.hoursReview.*`/
+    `staffDeployments.paymentsReview.*` (both `en.json`/`ar.json`) — every
+    visible string, not a partial pass; also fixed a small pre-existing bug
+    along the way where the Payments decide button rendered the raw
+    `decidingRow.action` value ("Approved"/"Rejected") instead of an actual
+    action verb.
+  - **A real mid-fix incident**: partway through this pass, a `git reset`
+    (confirmed via `git reflog`: `reset: moving to HEAD~1` in both repos)
+    ran concurrently — almost certainly the parallel Codex CLI tool this
+    project's own history has already flagged working the same working
+    directory — and silently discarded every uncommitted fix made up to that
+    point in both repos, keeping only the single edit made in the instant
+    after. Caught by `git status`/`git reflog` showing a clean tree where
+    fixes should have been; every discarded fix was re-applied from scratch
+    and re-verified. See [[parallel-ai-tooling-on-this-repo]] in memory for
+    the standing pattern.
+  Verified: full server test suite green (34/34), `eslint` clean on both
+  repos, a clean client production build, and each individual fix
+  re-confirmed present on disk by direct grep after the reset incident
+  above (not just trusted from memory).
+- **29 September 2026: a second, broader full-codebase audit, all 21
+  findings fixed** — five more parallel agents covered modules the first
+  round hadn't reached (approvals engine, notifications, mobilisations/EOSB
+  in full, and every frontend page outside Deployments/Mobilisations —
+  dashboard, requirements board, assets, documents, attendance, company
+  settings, section access, approval hierarchy, NFC, users, ESS portal, and
+  i18n completeness). 21 real issues found, all fixed the same day.
+  - **A Coordinator could reach, edit, or Demobilise another team's
+    SupplierEmployee/Freelancer deployment directly by id** —
+    `assertEmployeeVisibleToActor` is a no-op whenever its `employeeId` is
+    null, and every non-Employee deployment has `worker: null` by design, so
+    calling it with `deployment.worker` never scoped a Coordinator's access
+    to that whole worker type on any single-record route (`updateDeployment`,
+    `addMonthlyHours`, `updateMonthlyHours`, `decideMonthlyHours`,
+    `sendInvoice`, `getInvoiceFile`, `demobiliseDeployment`, `getDeployment`)
+    — only the LIST/export view had been fixed for this, back on 2026-09-21.
+    Fixed with a new `assertDeploymentVisibleToActor` mirroring
+    `findDeployments`' own `Mobilisation.coordinators.user` scoping rule,
+    applied to one deployment instead of a list, wired into all 8 routes.
+  - **Mobilisation had no lock against double-booking a worker** —
+    `assertNoActivePlacement`/`assertNoActiveNonEmployeePlacement` were
+    plain read-then-act checks with no serialization point, unlike Leave's
+    own dedicated `LeaveSubmissionLock` built for exactly this race class.
+    Two near-simultaneous creates for the same worker/Iqama could both pass
+    the check before either inserted, producing two independently-approvable
+    mobilisations — and, once both reached Approved, two overlapping Active
+    Deployments — for one physical person. Fixed with a new
+    `MobilisationSubmissionLock` (keyed `employee:<id>` or `iqama:<number>`,
+    same acquire-via-unique-index/release-in-finally pattern as Leave's own),
+    held around the whole check-then-create sequence in `createMobilisation`.
+  - **Rejecting a mobilisation with no configured approval workflow crashed
+    with a 500** — `rejectMobilisation` read `mobilisation.steps.length`
+    with no guard for the no-workflow case (`submitMobilisation` explicitly
+    sets `steps = undefined` then), unlike `approveMobilisation`'s own
+    shared-engine call, which already falls back cleanly. Fixed by treating
+    zero real steps as trivially "the last (only) step," falling through to
+    the same `resolveStepAuthority`-driven Admin-only legacy authorization
+    `approveMobilisation` already uses; a second, same-class crash in the
+    'OfficeSecretary' soft-reject branch (`updated.steps[0]?.roles` reading
+    off `undefined`) fixed the same way.
+  - **A Coordinator's "waiting on you" Leave count was company-wide, and
+    their own self-submitted leave request rendered Approve/Reject buttons
+    that would 403** — `annotateCanDecide`'s legacy-role branch (used
+    whenever no ApprovalWorkflow governs a request) had no way to apply the
+    same per-employee scope check `decideApprovalStep`'s own `assertScope`
+    parameter enforces on the real decide call (Leave is the one module
+    whose `LEGACY_DECIDE_ROLES` includes `'Coordinator'`, paired with
+    `assertEmployeeScope` on the actual decide). A role-list match alone
+    said "you can decide this" for company-wide requests outside a
+    Coordinator's team, and for their own request (included in their own
+    list on purpose, so they have somewhere to see it) — both cases the real
+    decide call correctly refuses. Fixed with a new optional
+    `isInLegacyScope` predicate on `annotateCanDecide` (never consulted on
+    the workflow branch, same reasoning `assertScope` itself documents),
+    wired into both `leave.service.js`'s `listLeaveRequests` and
+    `dashboard.service.js`'s `getMyPendingActions` (a new
+    `scopeToCoordinatorTeam` flag on its `PENDING_ACTION_MODULES` entry) —
+    both now correctly exclude the Coordinator's own team boundary and their
+    own record from what counts as "yours to decide."
+  - **An attendance time correction could silently land on the wrong UTC
+    day** — `RecordsGrid.jsx`'s `toIsoDateTime`/`toTimeInput` read/wrote the
+    viewer's browser-LOCAL time while every other date computation in that
+    module (and the server) is explicitly UTC-anchored. On a Riyadh (UTC+3)
+    browser, correcting a punch between 00:00-02:59 for a given date
+    produced a `checkInTime` whose UTC day was the PREVIOUS day, silently
+    disagreeing with the record's own `date` key. Fixed by making both
+    functions UTC-consistent (exact inverses of each other); also added a
+    matching server-side check (`adjustAttendance`) that `checkInTime`'s UTC
+    day must match the record's own `date` — `checkOutTime` deliberately
+    exempt, since a real overnight shift can legitimately check out the
+    following day.
+  - **Section Access saves could race and double-submit, and a failed batch
+    save named only the first failure** — a single shared `savingKey`
+    string (plus one shared `useMutation`) meant clicking Save on card A
+    then card B before A resolved cleared A's own "in flight" flag, and a
+    third click could re-fire the same PATCH concurrently; nothing stopped
+    clicking a card's Save immediately followed by "Save all changes" (which
+    still counted it as dirty) either. Fixed with a shared `Set` of
+    in-flight section keys used by both the per-card save and the batch
+    save, so either path skips a key the other is already saving. The same
+    pass fixed the batch failure message to name every failed section by
+    label instead of only the first rejected promise's error.
+  - **Reset password and Deactivate had no confirmation dialog** — unlike
+    Delete on the same row and every other destructive action in the app. A
+    misclick immediately invalidated a real login's password or revoked
+    their access. Fixed with the same `ConfirmDialog` pattern Delete already
+    used.
+  - **6 Worker (ESS) forms silently swallowed validation errors** — the
+    same `onInvalid`-toast house rule fixed for 9 staff-panel forms on
+    2026-09-29 earlier this same day had never been applied to the ESS
+    portal: My Profile, My Leave, Exit Re-Entry, Certificate Request, Salary
+    Advance, and Reimbursement. Fixed all 6, reusing the same shared
+    `collectFormErrorMessages` helper.
+  - **Three places where an approval trail's "current step" never
+    highlighted** — `ApprovalTrailView` defaults `pendingStatus` to Leave's
+    own literal (`'PendingReview'`); `AdvanceReviewPanel`/
+    `ReimbursementReviewPanel` never passed the real one (`'Pending'`), and
+    `ApprovalLogPage` — which mixes six request types with three different
+    real pending literals — never passed one at all. Fixed by passing the
+    right literal explicitly (a new `PENDING_STATUS_BY_TYPE` map for the
+    log's mixed-type case).
+  - **A dashboard drill-down always showed the current month, ignoring the
+    one actually selected** — `CoordinatorDrillDownModal` was rendered with
+    no `month` prop, silently defaulting to now regardless of which past
+    month the viewer had picked via the page's own month selector. Fixed by
+    passing the selected month through.
+  - **Expense client/deployment consistency only checked when `deployment`
+    itself was in the request** — sending just a new `client` left a
+    pre-existing `deployment` link (possibly belonging to a different
+    client) completely unvalidated against it. Fixed by re-checking the
+    FINAL state after both possible edits, not just inside the `deployment`
+    branch.
+  - **Asset assignment date had no range validation on either layer** — an
+    asset could be assigned before it was ever purchased, or arbitrarily far
+    in the future. Fixed server-side (checked against the real
+    `purchaseDate`, plus a future cap) and client-side (the future cap only
+    — the purchase-date check needs the specific asset record, which
+    doesn't fit the static client schema; the server is the real
+    gatekeeper here, per this schema file's own header comment).
+  - **Company IBAN had no format validation** — printed verbatim on every
+    outstanding invoice's Payment Instructions section, so a typo saved and
+    printed silently. Fixed on both layers with real ISO 13616 structural +
+    MOD-97 (ISO 7064) checksum validation.
+  - **A narrow TOCTOU window in worker-data archiving** — the "no active
+    mobilisation/deployment" guard ran as a separate read BEFORE the
+    transaction, so a concurrent approval could slip a worker into Active
+    between the check and the archive. Fixed by moving the guard inside the
+    same transaction/session the actual writes use.
+  - **Six smaller findings**: a company-logo removal with no confirm
+    dialog (added, matching every other destructive action); a hardcoded
+    `mr-2` on My Documents that doesn't flip under Arabic RTL (`me-2`); two
+    hardcoded English labels in the Actual Performance chart (now reusing
+    the same keys their sibling Tiles already use); a dead `StatCard.jsx`
+    component with a stale "removed as requested" comment and zero
+    references (deleted); and a Requirements-board drag-race where two
+    quick drags could show a card reverting to the wrong column for a
+    moment (rolls back only the dragged card's own previous stage now,
+    never the whole board wholesale, so an unrelated concurrent drag's
+    optimistic state is never touched).
+  Verified: full server test suite green (34/34), `eslint` clean on both
+  repos once shell tooling recovered from a transient outage mid-session,
+  and every fix re-confirmed present on disk.

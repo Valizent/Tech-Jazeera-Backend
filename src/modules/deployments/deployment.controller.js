@@ -46,6 +46,12 @@ export async function paymentsDue(req, res) {
   res.json(new ApiResponse('Payments due.', data));
 }
 
+/** GET /api/deployments/paid-invoices — 200 → data: [{...}], flat list of paid invoices */
+export async function paidInvoices(req, res) {
+  const data = await deploymentService.getPaidInvoices(actor(req));
+  res.json(new ApiResponse('Paid invoices.', data));
+}
+
 /** GET /api/deployments/payments-due/:clientId — 200 → data: {...} drill-down */
 export async function clientPaymentDetail(req, res) {
   const data = await deploymentService.getClientPaymentDetail(req.params.clientId, actor(req));

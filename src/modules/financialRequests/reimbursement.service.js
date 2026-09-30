@@ -187,14 +187,24 @@ export async function decideReimbursement(id, { status, decisionNote }, actor) {
 }
 
 export async function markReimbursementPaid(id, actor) {
-  const claim = await ReimbursementClaim.findById(id);
-  if (!claim) throw new ApiError(404, 'Reimbursement claim not found.');
-  if (claim.status !== 'Approved') throw new ApiError(400, 'Only an approved claim can be marked paid.');
-
-  claim.status = 'Paid';
-  claim.paidAt = new Date();
-  claim.paidBy = actor.userId;
-  await claim.save();
+  // Atomic transition (2026-09-29, a real audit finding): the old
+  // read-then-save let two near-simultaneous "Mark Paid" calls both pass
+  // the in-memory `status !== 'Approved'` check and each create their own
+  // Expense row below — double-counting the same claim. Filtering the
+  // update itself on `status: 'Approved'` means only ONE concurrent call
+  // can ever match and flip it; the loser gets a clean 400, same pattern
+  // advance.service.js's own atomic repayment update already uses.
+  const paidAt = new Date();
+  const claim = await ReimbursementClaim.findOneAndUpdate(
+    { _id: id, status: 'Approved' },
+    { status: 'Paid', paidAt, paidBy: actor.userId },
+    { new: true }
+  );
+  if (!claim) {
+    const exists = await ReimbursementClaim.exists({ _id: id });
+    if (!exists) throw new ApiError(404, 'Reimbursement claim not found.');
+    throw new ApiError(400, 'Only an approved claim can be marked paid.');
+  }
 
   // Real cash leaving the company — must land in the Expenses ledger, the
   // one place the dashboard's profit figure actually reads from. Before
