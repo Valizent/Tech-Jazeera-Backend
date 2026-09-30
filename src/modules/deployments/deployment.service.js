@@ -837,8 +837,14 @@ export async function getClientsPaymentSummary(actor) {
 }
 
 /**
- * Returns a flat list of all fully-paid invoices across all clients the viewer
- * is entitled to see. Uses the same visibility rules as getClientsPaymentSummary.
+ * Returns a flat list of every invoice that has received at least one
+ * payment — fully paid or still partial — across all clients the viewer is
+ * entitled to see, each carrying its real `revenue` (invoice amount),
+ * `amountAllocated` (paid so far) and `balanceDue`, so a client paying in
+ * installments shows real progress here instead of only appearing once
+ * settled in full. An invoice with zero allocation yet stays out of this
+ * list — that's Payments Due's job. Uses the same visibility rules as
+ * getClientsPaymentSummary.
  */
 export async function getPaidInvoices(actor) {
   const canViewAll = await canAccessSection('mobilisationsViewer', actor, 'read');
@@ -863,7 +869,7 @@ export async function getPaidInvoices(actor) {
   const paidInvoices = [];
   for (const [, info] of byClient) {
     const { perEntry } = await getClientAllocation(info.clientId);
-    const paid = perEntry.filter((e) => e.fullyPaid);
+    const paid = perEntry.filter((e) => e.amountAllocated > 0);
     for (const p of paid) {
       paidInvoices.push({
         clientName: info.clientName,
