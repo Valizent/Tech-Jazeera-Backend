@@ -42,6 +42,8 @@ const canManageStages = requireSectionAccess('requirementStages', 'write');
 
 router.get('/board', validate({ query: boardQuerySchema }), asyncHandler(controller.board));
 router.get('/export', validate({ query: boardQuerySchema }), asyncHandler(controller.exportAll));
+router.get('/lost', validate({ query: boardQuerySchema }), asyncHandler(controller.lost));
+router.get('/lost/export', validate({ query: boardQuerySchema }), asyncHandler(controller.exportLost));
 router.get('/coordinators', asyncHandler(controller.coordinators));
 
 router.post('/stages/defaults', canManageStages, asyncHandler(controller.createSuggestedStages));

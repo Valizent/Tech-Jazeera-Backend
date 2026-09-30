@@ -2,7 +2,9 @@ import { Router } from 'express';
 import * as controller from './outsourcedEmployee.controller.js';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
+import { validate } from '../../middleware/validate.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
+import { createOutsourcedEmployeeSchema, updateOutsourcedEmployeeSchema } from './outsourcedEmployee.validation.js';
 
 const router = Router();
 
@@ -15,9 +17,9 @@ router.use(requireAuth);
 // page on 'employeeCreate', the real key the rest of the Employees module
 // uses. Aligned to match.
 router.get('/', asyncHandler(controller.list));
-router.post('/', requireSectionAccess('employeeCreate', 'write'), asyncHandler(controller.create));
+router.post('/', requireSectionAccess('employeeCreate', 'write'), validate({ body: createOutsourcedEmployeeSchema }), asyncHandler(controller.create));
 router.get('/:id', asyncHandler(controller.get));
-router.patch('/:id', requireSectionAccess('employeeCreate', 'write'), asyncHandler(controller.update));
+router.patch('/:id', requireSectionAccess('employeeCreate', 'write'), validate({ body: updateOutsourcedEmployeeSchema }), asyncHandler(controller.update));
 router.delete('/:id', requireSectionAccess('employeeCreate', 'write'), asyncHandler(controller.remove));
 
 export default router;

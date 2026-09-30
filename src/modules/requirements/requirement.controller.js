@@ -25,6 +25,21 @@ export async function exportAll(req, res) {
   res.send(buffer);
 }
 
+/** GET /api/requirements/lost — 200 → data: { requirements } — every card closed
+ *  without converting (a terminal, non-mobilised stage), no age cutoff. */
+export async function lost(req, res) {
+  res.json(new ApiResponse('Lost requirements.', await requirementService.getLostRequirements(req.query, actor(req))));
+}
+
+/** GET /api/requirements/lost/export?... — same data as `lost` above, as a .xlsx. */
+export async function exportLost(req, res) {
+  const { requirements } = await requirementService.getLostRequirements(req.query, actor(req), { withCandidates: true });
+  const buffer = await buildRequirementsXlsx(requirements);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="lost-requirements_${new Date().toISOString().slice(0, 10)}.xlsx"`);
+  res.send(buffer);
+}
+
 /** GET /api/requirements/coordinators — 200 → data: [{ _id, name }] · 403 without team-read */
 export async function coordinators(req, res) {
   res.json(new ApiResponse('Coordinators.', await requirementService.listCoordinators(actor(req))));

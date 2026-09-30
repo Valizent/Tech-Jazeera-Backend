@@ -305,6 +305,55 @@ export async function exportRequirements(query, actor) {
 }
 
 /**
+ * Every requirement sitting in a stage that's terminal but NOT the mobilised
+ * one — closed without converting (the suggested set's own "Lost" stage, or
+ * whatever an admin names one like it; never hardcoded to a literal stage
+ * name, same "the company decides its own stages" rule the board itself
+ * follows — see requirementStage.model.js). Unlike the board (buildScope's
+ * own CLOSED_VISIBLE_DAYS grace period), this has NO age cutoff at all — it's
+ * the permanent record kept so a Manager/MM can review lost business, not a
+ * working pipeline view (2026-09-30, the user's own ask: once something is
+ * marked Lost it should stop cluttering the active board, but the data is
+ * "relevant" enough to show management, not delete). Same own/team access
+ * rule as the board itself — a plain coordinator sees their own lost cards,
+ * team-read sees everyone's.
+ */
+export async function getLostRequirements(query, actor, { withCandidates = false } = {}) {
+  const access = await resolveAccess(actor);
+  if (!access.ownRead && !access.teamRead) throw new ApiError(403, FORBIDDEN);
+
+  const lostStages = await RequirementStage.find({ isTerminal: true, isMobilisedStage: false }).select('name').lean();
+  if (lostStages.length === 0) return { requirements: [] };
+  const stageIds = lostStages.map((s) => s._id);
+  const stageById = new Map(lostStages.map((s) => [idOf(s), s]));
+
+  const filter = { stage: { $in: stageIds } };
+  if (access.teamRead) {
+    if (query.coordinator) filter.coordinators = query.coordinator;
+  } else {
+    filter.coordinators = actor.userId;
+  }
+  if (query.client) filter.clientName = { $regex: `^${escapeRegex(query.client)}$`, $options: 'i' };
+
+  const requirements = await Requirement.find(filter)
+    .sort({ stageEnteredAt: -1, _id: -1 })
+    .limit(EXPORT_LIMIT)
+    .populate(POPULATE)
+    .lean();
+  // The on-screen list never needs each card's candidates (same reasoning
+  // getBoard's own narrowed projection gives); the .xlsx export does, for its
+  // own Candidates sheet — same withCandidates split exportRequirements uses.
+  const activity = withCandidates ? new Map() : await activityFor(requirements.map((r) => r._id));
+
+  return {
+    requirements: requirements.map((r) => ({
+      ...present(r, stageById, activity, actor, access, { withCandidates }),
+      stageName: stageById.get(idOf(r.stage))?.name ?? '',
+    })),
+  };
+}
+
+/**
  * How many cards, among those this viewer can see, have sat in their stage past its
  * "stale after" limit — the figure the dashboard's "Waiting on you" shows. It is the
  * same rule as `present`'s `stale` flag written as one query: "days in stage >= N"

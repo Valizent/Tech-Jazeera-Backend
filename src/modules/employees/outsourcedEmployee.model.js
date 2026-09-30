@@ -13,6 +13,12 @@ const outsourcedEmployeeSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     workerType: { type: String, enum: ['Freelancer', 'SupplierEmployee'], required: true },
     subcontractor: { type: mongoose.Schema.Types.ObjectId, ref: 'Subcontractor', default: null },
+    // Same durable identity Mobilisation uses for these two worker types (see
+    // mobilisation.service.js's lookupWorkerByIqama) — lets this record be
+    // looked up/autofilled by Iqama the same way, and be recognized as the
+    // same real person across both modules.
+    iqamaNumber: { type: String, trim: true, default: null },
+    nationality: { type: String, trim: true, default: null },
     phone: { type: String, trim: true, default: null },
     email: { type: String, trim: true, default: null },
     agreedRate: { type: Number, default: null, min: 0 },
