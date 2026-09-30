@@ -64,3 +64,18 @@ export const updateOutsourcedEmployeeSchema = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Subcontractor is required.', path: ['subcontractor'] });
     }
   });
+
+// ---- documents (added 2026-09-30, see outsourcedEmployee.model.js's own doc
+// comment on the redesigned sub-schema) ----
+
+export const outsourcedEmployeeIdParamSchema = z.object({ id: id('outsourced employee') });
+
+export const outsourcedEmployeeDocumentBodySchema = z.object({
+  title: z.string().trim().min(2, 'Title is required.').max(150),
+  expiryDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
+});
+
+export const outsourcedEmployeeDocumentParamSchema = z.object({
+  id: id('outsourced employee'),
+  fileId: id('document'),
+});

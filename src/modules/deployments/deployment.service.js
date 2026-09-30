@@ -174,6 +174,47 @@ function monthStrOf(date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+const HOURS_CAP_PER_DAY = 18; // physically the most anyone could work in a day
+
+/**
+ * How many of a calendar month's days actually fall within this deployment's
+ * real placement window — the full month for one it was active throughout,
+ * fewer for the month it started or (once Ended) the month it ended in.
+ * Feeds the "impossible hours" guard below: 18h/day × these days is the
+ * absolute ceiling for actualHours/supplierHours in that month, tighter than
+ * a flat month-agnostic cap for a placement that only covered part of the
+ * month (2026-09-30, the user's own ask, with their own worked example — a
+ * worker demobilised 15 August can't have claimed a full month's worth of
+ * hours for August). Mirrored client-side in deployments.schema.js for
+ * immediate feedback; this is the real, authoritative check.
+ */
+function realPlacementDaysInMonth(deployment, monthStr) {
+  const [year, month] = monthStr.split('-').map(Number);
+  const monthStart = new Date(Date.UTC(year, month - 1, 1));
+  const monthEnd = new Date(Date.UTC(year, month, 0)); // last real day of that month
+  const placementStart = new Date(deployment.startDate);
+  const placementEnd = deployment.endDate ? new Date(deployment.endDate) : monthEnd;
+  const effectiveStart = placementStart > monthStart ? placementStart : monthStart;
+  const effectiveEnd = placementEnd < monthEnd ? placementEnd : monthEnd;
+  const days = Math.floor((effectiveEnd - effectiveStart) / 86_400_000) + 1;
+  return Math.max(0, days);
+}
+
+/** Throws if `hours` exceeds what's physically possible for the real days
+ *  this deployment was actually placed in that month — see
+ *  realPlacementDaysInMonth's own doc comment. `label` names which figure
+ *  failed (client timesheet vs. supplier timesheet) in the error. */
+function assertPossibleHours(deployment, monthStr, hours, label) {
+  const days = realPlacementDaysInMonth(deployment, monthStr);
+  const max = HOURS_CAP_PER_DAY * days;
+  if (hours > max) {
+    throw new ApiError(
+      400,
+      `${label} (${hours}h) exceeds what's physically possible for this deployment's ${days} real placement day(s) in ${monthStr} (max ${max}h at ${HOURS_CAP_PER_DAY}h/day).`
+    );
+  }
+}
+
 /**
  * Called once by mobilisation.service.js's approveMobilisation, the moment a
  * mobilisation reaches its terminal 'Approved' state — never a route of its
@@ -332,6 +373,10 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   if (deployment.workerType === 'SupplierEmployee' && data.supplierHours == null) {
     throw new ApiError(400, 'Enter the supplier timesheet hours.');
   }
+  assertPossibleHours(deployment, data.month, data.actualHours, 'Client timesheet hours');
+  if (deployment.workerType === 'SupplierEmployee' && data.supplierHours != null) {
+    assertPossibleHours(deployment, data.month, data.supplierHours, 'Supplier timesheet hours');
+  }
 
   const contractHours = deployment.requiredTimesheetHours ?? 0;
   const actualHours = data.actualHours;
@@ -433,6 +478,10 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   }
   if (deployment.workerType === 'SupplierEmployee' && data.supplierHours == null) {
     throw new ApiError(400, 'Enter the supplier timesheet hours.');
+  }
+  assertPossibleHours(deployment, entry.month, data.actualHours, 'Client timesheet hours');
+  if (deployment.workerType === 'SupplierEmployee' && data.supplierHours != null) {
+    assertPossibleHours(deployment, entry.month, data.supplierHours, 'Supplier timesheet hours');
   }
   const wasRejected = entry.status === 'Rejected';
   const wasApproved = entry.status === 'Approved';
@@ -743,8 +792,8 @@ export async function getInvoiceFile(deploymentId, entryId, actor) {
  */
 async function gatherClientInvoicedItems(clientId) {
   const deployments = await Deployment.find({ client: clientId, archived: { $ne: true } })
-    .select('workerName subcontractorName monthlyHours mobilisation')
-    .populate('mobilisation', PROFIT_RATE_FIELDS)
+    .select('workerName subcontractorName monthlyHours mobilisation workerType')
+    .populate('mobilisation', 'coordinators clientRate clientCommission subcontractorRate subcontractorCommission fta allowance mobilisationCost otClientRate otEmployeeRate workerType')
     .lean();
 
   const items = [];
@@ -758,6 +807,7 @@ async function gatherClientInvoicedItems(clientId) {
         deploymentId: dep._id,
         entryId: entry._id,
         workerName: dep.workerName,
+        workerType: dep.workerType,
         subcontractorName: dep.subcontractorName,
         month: entry.month,
         invoiceNumber: entry.invoiceNumber,
@@ -765,11 +815,26 @@ async function gatherClientInvoicedItems(clientId) {
         invoiceSentAt: entry.invoiceSentAt,
         invoiceDueAt: entry.invoiceDueAt,
         revenue: result.revenue,
+        expenses: result.expenses,
+        profit: result.profit,
+        breakdown: result.breakdown,
+        // Rate fields from mobilisation (for display on Paid Invoices)
+        clientRate: dep.mobilisation.clientRate ?? null,
+        clientCommission: dep.mobilisation.clientCommission ?? null,
+        subcontractorRate: dep.mobilisation.subcontractorRate ?? null,
+        subcontractorCommission: dep.mobilisation.subcontractorCommission ?? null,
+        fta: dep.mobilisation.fta ?? null,
+        allowance: dep.mobilisation.allowance ?? null,
+        mobilisationCost: dep.mobilisation.mobilisationCost ?? null,
+        actualHours: entry.actualHours,
+        otHours: entry.otHours,
+        deductionAmount: entry.deductionAmount ?? 0,
       });
     }
   }
   return items;
 }
+
 
 /** Gather + allocate in one call — every real caller below wants both.
  *  Exported for mobilisationTarget.service.js's own real-revenue crediting
@@ -960,23 +1025,41 @@ export async function getReadyToInvoice(actor) {
     archived: { $ne: true },
     monthlyHours: { $elemMatch: { status: 'Approved', invoiceSentAt: null } },
   })
-    .select('workerName clientName mobilisation monthlyHours')
-    .populate('mobilisation', 'serialNumber')
+    .select('workerName clientName mobilisation monthlyHours workerType')
+    .populate('mobilisation', 'serialNumber clientRate clientCommission subcontractorRate subcontractorCommission fta allowance mobilisationCost otClientRate otEmployeeRate workerType')
     .lean();
 
   const rows = [];
   for (const dep of deployments) {
     for (const entry of dep.monthlyHours) {
       if (entry.status !== 'Approved' || entry.invoiceSentAt) continue;
+      
+      const revExp = computeMonthlyRevenueAndExpenses(entry, dep.mobilisation, dep.monthlyHours);
+      
       rows.push({
         deploymentId: dep._id,
         entryId: entry._id,
         mobilisationSerial: dep.mobilisation?.serialNumber,
         workerName: dep.workerName,
+        workerType: dep.workerType,
         clientName: dep.clientName,
         month: entry.month,
         actualHours: entry.actualHours,
+        otHours: entry.otHours,
         hoursApprovedAt: entry.decidedAt,
+        revenue: revExp ? revExp.revenue : null,
+        expenses: revExp ? revExp.expenses : null,
+        profit: revExp ? revExp.profit : null,
+        breakdown: revExp ? revExp.breakdown : null,
+        // Rate fields
+        clientRate: dep.mobilisation?.clientRate ?? null,
+        clientCommission: dep.mobilisation?.clientCommission ?? null,
+        subcontractorRate: dep.mobilisation?.subcontractorRate ?? null,
+        subcontractorCommission: dep.mobilisation?.subcontractorCommission ?? null,
+        fta: dep.mobilisation?.fta ?? null,
+        allowance: dep.mobilisation?.allowance ?? null,
+        mobilisationCost: dep.mobilisation?.mobilisationCost ?? null,
+        deductionAmount: entry.deductionAmount ?? 0,
       });
     }
   }
@@ -1372,7 +1455,10 @@ function firstApprovedEntryId(entries) {
  *   expenses = clientCommission × contractHours
  *            + (SupplierEmployee only) (subcontractorRate + subcontractorCommission) × contractHours
  *            + fta + allowance
- *            + otEmployeeRate × otHours
+ *            + (SupplierEmployee/Freelancer only) otEmployeeRate × otHours — a
+ *              real Employee has no separate OT pay through this mechanism
+ *              (2026-09-30, the user's own ask), so the full otClientRate ×
+ *              otHours above is pure profit for them
  *            + entry.deductionAmount
  *            + (this deployment's chronologically-first-Approved entry only) mobilisationCost
  *   profit   = revenue − expenses, always.
@@ -1380,6 +1466,7 @@ function firstApprovedEntryId(entries) {
 export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries) {
   if (!mobilisation) return null;
   const isSupplier = mobilisation.workerType === 'SupplierEmployee';
+  const isEmployee = mobilisation.workerType === 'Employee';
 
   // The regular hours billed to the client is the total actual hours minus any OT hours.
   const regularClientHours = Math.max(0, entry.actualHours - entry.otHours);
@@ -1390,9 +1477,10 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
 
   const revenue = clientInvoiceAmount;
 
-  // The regular hours billed by the subcontractor is their timesheet minus the worker's OT hours
-  // (Since OT is handled separately at otEmployeeRate).
-  const regularSupplierHours = isSupplier ? Math.max(0, (entry.supplierHours ?? 0) - entry.otHours) : 0;
+  // The regular hours billed by the subcontractor is simply their timesheet.
+  // For SupplierEmployee, OT is the difference between client timesheet and supplier timesheet,
+  // so the supplier timesheet hours themselves are entirely regular hours.
+  const regularSupplierHours = isSupplier ? (entry.supplierHours ?? 0) : 0;
   const subSide = isSupplier ? (mobilisation.subcontractorRate ?? 0) + (mobilisation.subcontractorCommission ?? 0) : 0;
   
   const subContractorInvoiceAmount = isSupplier ? money(subSide * regularSupplierHours) : 0;
@@ -1404,7 +1492,16 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
   const expenseClientCommission = money((mobilisation.clientCommission ?? 0) * regularClientHours);
   const expenseFta = money(mobilisation.fta ?? 0);
   const expenseAllowance = money(mobilisation.allowance ?? 0);
-  const otCalculations = money((mobilisation.otEmployeeRate ?? 0) * entry.otHours);
+  // 2026-09-30, the user's own ask: a real Employee doesn't get separate OT
+  // pay through this per-deployment mechanism — their pay is fixed by their
+  // employment contract (any real overtime salary obligation is Payroll's
+  // own, separate Article 107 calculation off real Attendance — P3-E — not
+  // this figure). `otEmployeeRate` stays meaningful for SupplierEmployee/
+  // Freelancer, where it's literally what this company pays that worker for
+  // the OT hour. So the full otClientRate × otHours billed above flows
+  // straight to profit for an Employee deployment, never netted against a
+  // cost here.
+  const otCalculations = isEmployee ? 0 : money((mobilisation.otEmployeeRate ?? 0) * entry.otHours);
   const expenseDeduction = money(entry.deductionAmount ?? 0);
   
   const expenses = money(
