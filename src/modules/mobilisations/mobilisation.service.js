@@ -11,6 +11,7 @@
 import mongoose from 'mongoose';
 import Mobilisation from './mobilisation.model.js';
 import Employee from '../employees/employee.model.js';
+import OutsourcedEmployee from '../employees/outsourcedEmployee.model.js';
 import Client from '../clients/client.model.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ApprovalRole from '../approvals/approvalRole.model.js';
@@ -600,6 +601,30 @@ export async function createMobilisation(data, actor) {
     },
     ip: actor.ip,
   });
+
+  // Auto-upsert into OutsourcedEmployees if applicable
+  if (data.workerType !== 'Employee') {
+    try {
+      await OutsourcedEmployee.findOneAndUpdate(
+        { 
+          name: { $regex: new RegExp(`^${escapeRegex(mobilisation.workerName)}$`, 'i') }, 
+          workerType: mobilisation.workerType 
+        },
+        { 
+          $setOnInsert: { 
+            name: mobilisation.workerName, 
+            workerType: mobilisation.workerType,
+            phone: mobilisation.phone || null,
+            subcontractor: mobilisation.subcontractor || null,
+            createdBy: actor.userId
+          } 
+        },
+        { upsert: true, new: true }
+      );
+    } catch (err) {
+      logger.warn(`[mobilisations] auto-creating OutsourcedEmployee failed: ${err.message}`);
+    }
+  }
 
   // Point the candidate at its new mobilisation. Best-effort: the mobilisation
   // already exists and carries its own link (which is what final approval keys
