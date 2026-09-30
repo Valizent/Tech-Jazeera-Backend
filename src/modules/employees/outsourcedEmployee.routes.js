@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import * as controller from './outsourcedEmployee.controller.js';
-import { asyncHandler } from '../../middlewares/asyncHandler.js';
-import { requireAuth } from '../auth/auth.middleware.js';
+import asyncHandler from '../../utils/asyncHandler.js';
+import { requireAuth } from '../../middleware/auth.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 
 const router = Router();
