@@ -391,6 +391,8 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     otHours,
     otAmount,
     deductionAmount: data.deductionAmount ?? 0,
+    supplierDeductionAmount: data.supplierDeductionAmount ?? 0,
+    supplierDeductionNote: data.supplierDeductionNote || null,
     notes: data.notes,
     enteredBy: actor.userId,
   };
@@ -490,6 +492,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
     supplierHours: entry.supplierHours,
     otAmount: entry.otAmount,
     deductionAmount: entry.deductionAmount,
+    supplierDeductionAmount: entry.supplierDeductionAmount,
     notes: entry.notes,
   };
   const previousEnteredBy = entry.enteredBy.toString();
@@ -508,6 +511,8 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   entry.otHours = computeOtHours(deployment.workerType, actualHours, supplierHours, entry.contractHours);
   entry.otAmount = await computeOtAmount(deployment.mobilisation, entry.otHours);
   entry.deductionAmount = data.deductionAmount ?? 0;
+  entry.supplierDeductionAmount = data.supplierDeductionAmount ?? 0;
+  entry.supplierDeductionNote = data.supplierDeductionNote || null;
   entry.notes = data.notes;
   entry.enteredBy = actor.userId;
   entry.enteredAt = new Date();
@@ -535,6 +540,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
         supplierHours: entry.supplierHours,
         otAmount: entry.otAmount,
         deductionAmount: entry.deductionAmount,
+        supplierDeductionAmount: entry.supplierDeductionAmount,
         notes: entry.notes,
       },
       otHours: entry.otHours,
@@ -829,6 +835,7 @@ async function gatherClientInvoicedItems(clientId) {
         actualHours: entry.actualHours,
         otHours: entry.otHours,
         deductionAmount: entry.deductionAmount ?? 0,
+        supplierDeductionNote: entry.supplierDeductionNote ?? null,
       });
     }
   }
@@ -1060,6 +1067,7 @@ export async function getReadyToInvoice(actor) {
         allowance: dep.mobilisation?.allowance ?? null,
         mobilisationCost: dep.mobilisation?.mobilisationCost ?? null,
         deductionAmount: entry.deductionAmount ?? 0,
+        supplierDeductionNote: entry.supplierDeductionNote ?? null,
       });
     }
   }
@@ -1453,13 +1461,23 @@ function firstApprovedEntryId(entries) {
  *   revenue  = clientRate × contractHours + otClientRate × otHours — the pure
  *              amount billed to the client, never netted against any cost.
  *   expenses = clientCommission × contractHours
- *            + (SupplierEmployee only) (subcontractorRate + subcontractorCommission) × contractHours
+ *            + (SupplierEmployee only) subcontractorRate × supplierHours,
+ *              net of this month's supplierDeductionAmount ("Sub Invoice" —
+ *              what this company actually owes the subcontractor; can go
+ *              negative if the deduction exceeds the raw rate×hours amount,
+ *              same posture as a real over-deduction would have)
+ *            + (SupplierEmployee only) subcontractorCommission × supplierHours
+ *              — split out from Sub Invoice above 2026-09-30 (the user's own
+ *              ask, so the rate and the commission are each their own line
+ *              rather than one combined figure)
  *            + fta + allowance
  *            + (SupplierEmployee/Freelancer only) otEmployeeRate × otHours — a
  *              real Employee has no separate OT pay through this mechanism
  *              (2026-09-30, the user's own ask), so the full otClientRate ×
  *              otHours above is pure profit for them
- *            + entry.deductionAmount
+ *            + entry.deductionAmount (the CLIENT-side deduction — see that
+ *              field's own doc comment; entry.supplierDeductionAmount is
+ *              already netted into Sub Invoice above, never added again here)
  *            + (this deployment's chronologically-first-Approved entry only) mobilisationCost
  *   profit   = revenue − expenses, always.
  */
@@ -1481,9 +1499,18 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
   // For SupplierEmployee, OT is the difference between client timesheet and supplier timesheet,
   // so the supplier timesheet hours themselves are entirely regular hours.
   const regularSupplierHours = isSupplier ? (entry.supplierHours ?? 0) : 0;
-  const subSide = isSupplier ? (mobilisation.subcontractorRate ?? 0) + (mobilisation.subcontractorCommission ?? 0) : 0;
-  
-  const subContractorInvoiceAmount = isSupplier ? money(subSide * regularSupplierHours) : 0;
+  // Sub Invoice = the rate-only portion of what we owe the subcontractor,
+  // net of this month's own adjustment/deduction against it (2026-09-30,
+  // the user's own ask: "supplier invoice is the amount we give them ...
+  // deducted from supplier invoice") — commission is its own separate line,
+  // expenseSubCommission below, no longer folded into this figure.
+  const supplierDeductionAmount = isSupplier ? money(entry.supplierDeductionAmount ?? 0) : 0;
+  const subContractorInvoiceAmount = isSupplier
+    ? money((mobilisation.subcontractorRate ?? 0) * regularSupplierHours - supplierDeductionAmount)
+    : 0;
+  const expenseSubCommission = isSupplier
+    ? money((mobilisation.subcontractorCommission ?? 0) * regularSupplierHours)
+    : 0;
 
   const isFirstApprovedEntry =
     Array.isArray(allEntries) && entry.status === 'Approved' && entry._id?.toString() === firstApprovedEntryId(allEntries);
@@ -1507,6 +1534,7 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
   const expenses = money(
     expenseClientCommission +
       subContractorInvoiceAmount +
+      expenseSubCommission +
       expenseFta +
       expenseAllowance +
       otCalculations +
@@ -1517,6 +1545,8 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
   const breakdown = {
     clientInvoiceAmount,
     subContractorInvoiceAmount,
+    expenseSubCommission,
+    supplierDeductionAmount,
     otCalculations,
     expenseClientCommission,
     expenseFta,

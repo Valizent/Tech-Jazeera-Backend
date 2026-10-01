@@ -94,6 +94,12 @@ export const monthlyHoursEntryParamSchema = z.object({ id, entryId: id });
 // subtracted through — capped at the same order of magnitude every other
 // money field in this app tops out at (e.g. quotation unitPrice).
 const deductionAmount = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(1_000_000).optional());
+// The supplier-side counterpart (see deployment.model.js's own doc comment
+// on `supplierDeductionAmount`) — same bounds, only meaningful for a
+// SupplierEmployee deployment but accepted here regardless (the client form
+// simply never sends it for any other worker type).
+const supplierDeductionAmount = z.preprocess(emptyToUndef, z.coerce.number().min(0).max(1_000_000).optional());
+const supplierDeductionNote = optionalStr(500);
 
 // Reverted 2026-09-16 (the user's own ask) from the day-by-day grid back to
 // two typed totals, transcribed straight off the client's own paper/PDF
@@ -114,6 +120,8 @@ export const addMonthlyHoursSchema = z.object({
   actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
   supplierHours,
   deductionAmount,
+  supplierDeductionAmount,
+  supplierDeductionNote,
   notes: optionalStr(500),
 });
 
@@ -123,6 +131,8 @@ export const updateMonthlyHoursSchema = z.object({
   actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
   supplierHours,
   deductionAmount,
+  supplierDeductionAmount,
+  supplierDeductionNote,
   notes: optionalStr(500),
 });
 

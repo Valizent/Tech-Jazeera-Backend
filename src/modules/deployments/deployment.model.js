@@ -165,6 +165,19 @@ const monthlyHoursSchema = new mongoose.Schema(
     // unapproved (possibly disputed) figure must never silently reduce a
     // real paycheck.
     deductionAmount: { type: Number, default: 0, min: 0 },
+    // The SUPPLIER-side counterpart to `deductionAmount` above (2026-09-30,
+    // the user's own ask) — an adjustment subtracted from what this company
+    // owes the subcontractor for this month (a dispute, a correction, a
+    // penalty this company applies going the other direction), not from
+    // what the client owes us. Only meaningful for a SupplierEmployee
+    // deployment (there's no subcontractor invoice otherwise); manually
+    // entered by whoever enters hours, same "she already knows the number"
+    // posture as `deductionAmount`, so not commercial-gated either — see
+    // computeMonthlyRevenueAndExpenses's own doc comment for exactly how
+    // this nets into the Sub Invoice figure (it can legitimately push that
+    // figure negative, which is why the UI colors it dynamically).
+    supplierDeductionAmount: { type: Number, default: 0, min: 0 },
+    supplierDeductionNote: { type: String, trim: true, maxlength: 500, default: null },
     notes: { type: String, trim: true, maxlength: 500 },
     enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     enteredAt: { type: Date, default: Date.now },
