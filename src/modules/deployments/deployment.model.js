@@ -134,15 +134,28 @@ const monthlyHoursSchema = new mongoose.Schema(
     // The SUBCONTRACTOR's own timesheet hours for this same month — added
     // 2026-09-19, the user's own ask: a real subcontractor keeps their own
     // record, which can legitimately differ from what the client's
-    // timesheet shows (`actualHours` above). Only meaningful (and required —
-    // see deployment.service.js's addMonthlyHours) for a SupplierEmployee
-    // deployment, since only that type has a real subcontractor; stays null
-    // and unused for Employee/Freelancer, which keep the original
-    // contractHours-based OT formula below.
+    // timesheet shows (`actualHours` above). Only meaningful for a
+    // SupplierEmployee deployment, since only that type has a real
+    // subcontractor; stays null and unused for Employee/Freelancer.
+    // OPTIONAL as of 2026-10-01 (the user's own ask) — a real two-step
+    // workflow: the client's own timesheet is entered and submitted first,
+    // and the subcontractor's own timesheet is a separate, later follow-up
+    // (see DeploymentDetailPage.jsx's "Enter subcontractor hours" action)
+    // once it's actually known, rather than a blocking requirement at
+    // creation. `null` is a real, expected interim state, not an error —
+    // every subcontractor-derived figure (Sub Invoice, Sub Commission, the
+    // subcontractor's own OT) is simply 0 until this is filled in; the
+    // client side (revenue, client-billed OT) is entirely unaffected either
+    // way — see computeMonthlyRevenueAndExpenses's own doc comment.
     supplierHours: { type: Number, min: 0, default: null },
-    // server-computed (deployment.service.js's computeOtHours) — SupplierEmployee:
-    // max(0, actualHours - supplierHours); Employee/Freelancer, unchanged:
-    // max(0, actualHours - contractHours).
+    // server-computed (deployment.service.js's computeOtHours) — ALWAYS
+    // max(0, actualHours - contractHours), for every worker type alike
+    // (2026-10-01, the user's own correction — previously SupplierEmployee
+    // measured this against supplierHours instead, which broke the moment
+    // that became an optional, separately-entered follow-up: client-billed
+    // OT can never depend on a number that might not exist yet). The
+    // subcontractor's OWN overtime is a separate, independent concept now —
+    // see computeMonthlyRevenueAndExpenses's own doc comment.
     otHours: { type: Number, required: true, min: 0 },
     otAmount: { type: Number, default: 0, min: 0 }, // server-computed = otHours × Mobilisation.otClientRate — see module doc comment
     // A deduction the CLIENT applied on their own timesheet (their most

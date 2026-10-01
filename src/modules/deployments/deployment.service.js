@@ -154,19 +154,34 @@ async function computeOtAmount(mobilisationId, otHours) {
   return money(otHours * (mobilisation?.otClientRate ?? 0));
 }
 
-/** OT hours — the real formula depends on worker type (2026-09-19, the
- *  user's own ask): a SupplierEmployee deployment has a real subcontractor
- *  keeping their OWN timesheet, which can legitimately differ from the
- *  client's (`actualHours`), so OT there is Client hours minus Supplier
- *  hours, floored at 0 (same safety net the original formula already had —
- *  never a negative OT figure). Employee/Freelancer have no such second
- *  timesheet at all, so they keep the original formula against the
- *  deployment's own contracted hours, unchanged. */
-function computeOtHours(workerType, actualHours, supplierHours, contractHours) {
-  if (workerType === 'SupplierEmployee') {
-    return Math.max(0, actualHours - (supplierHours ?? 0));
-  }
+/** OT hours billed to the CLIENT — always Client hours minus this
+ *  deployment's own contracted hours, floored at 0, for every worker type
+ *  alike (2026-10-01, the user's own correction, superseding the
+ *  2026-09-19 SupplierEmployee-specific formula below). The earlier formula
+ *  measured a SupplierEmployee's OT against the SUBCONTRACTOR's own
+ *  timesheet — which broke the moment subcontractor hours became an
+ *  optional, separately-entered follow-up step (see addMonthlyHours):
+ *  client OT can no longer depend on a number that might not exist yet.
+ *  What this company bills the client was always really about the client's
+ *  own timesheet vs. the client's own agreed hours anyway; the
+ *  subcontractor's real OT (what this company owes THEM extra) is now its
+ *  own, independent figure — see computeSupplierOtHours below. */
+function computeOtHours(actualHours, contractHours) {
   return Math.max(0, actualHours - contractHours);
+}
+
+/** OT hours this company owes the SUBCONTRACTOR extra for — independent of
+ *  the client-billed OT above (2026-10-01, the user's own ask: "we would do
+ *  time adjustment from client timesheet hours, so it won't be same for
+ *  sub contractor"). Measured against the same deployment contract-hours
+ *  baseline the client side uses (the user's own choice, put to them
+ *  directly, over inventing a second, separate subcontractor-contract-hours
+ *  field). `null` while the subcontractor's own timesheet hasn't been
+ *  entered yet (a real, expected interim state — see addMonthlyHours's own
+ *  doc comment on the two-step entry flow), never a guess. */
+function computeSupplierOtHours(supplierHours, contractHours) {
+  if (supplierHours == null) return null;
+  return Math.max(0, supplierHours - contractHours);
 }
 
 function monthStrOf(date) {
@@ -367,12 +382,13 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   if (data.month < monthStrOf(deployment.startDate)) {
     throw new ApiError(400, 'This deployment had not started yet in that month.');
   }
-  // Supplier timesheet hours are required for a SupplierEmployee deployment
-  // (the new OT formula needs them) and simply not applicable otherwise —
-  // see computeOtHours/deployment.model.js's own doc comment.
-  if (deployment.workerType === 'SupplierEmployee' && data.supplierHours == null) {
-    throw new ApiError(400, 'Enter the supplier timesheet hours.');
-  }
+  // Supplier timesheet hours are now a real, optional follow-up step for a
+  // SupplierEmployee deployment (2026-10-01, the user's own ask) — entered
+  // once the coordinator submits the client's own timesheet and only later
+  // finds out (or confirms) what the subcontractor's own timesheet says, via
+  // a dedicated "Enter subcontractor hours" action (see
+  // DeploymentDetailPage.jsx). No longer required at creation; simply not
+  // applicable at all for Employee/Freelancer.
   assertPossibleHours(deployment, data.month, data.actualHours, 'Client timesheet hours');
   if (deployment.workerType === 'SupplierEmployee' && data.supplierHours != null) {
     assertPossibleHours(deployment, data.month, data.supplierHours, 'Supplier timesheet hours');
@@ -380,8 +396,8 @@ export async function addMonthlyHours(deploymentId, data, actor) {
 
   const contractHours = deployment.requiredTimesheetHours ?? 0;
   const actualHours = data.actualHours;
-  const supplierHours = deployment.workerType === 'SupplierEmployee' ? data.supplierHours : null;
-  const otHours = computeOtHours(deployment.workerType, actualHours, supplierHours, contractHours);
+  const supplierHours = deployment.workerType === 'SupplierEmployee' ? (data.supplierHours ?? null) : null;
+  const otHours = computeOtHours(actualHours, contractHours);
   const otAmount = await computeOtAmount(deployment.mobilisation, otHours);
   const newEntry = {
     month: data.month,
@@ -478,9 +494,9 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   if (entry.status === 'Approved' && !isAdmin) {
     throw new ApiError(400, 'This month is already approved and can no longer be edited by non-administrators.');
   }
-  if (deployment.workerType === 'SupplierEmployee' && data.supplierHours == null) {
-    throw new ApiError(400, 'Enter the supplier timesheet hours.');
-  }
+  // No longer required — see addMonthlyHours's own doc comment on the
+  // two-step entry flow; an edit may leave the subcontractor's hours
+  // unset just as freely as the original add could.
   assertPossibleHours(deployment, entry.month, data.actualHours, 'Client timesheet hours');
   if (deployment.workerType === 'SupplierEmployee' && data.supplierHours != null) {
     assertPossibleHours(deployment, entry.month, data.supplierHours, 'Supplier timesheet hours');
@@ -498,7 +514,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   const previousEnteredBy = entry.enteredBy.toString();
 
   const actualHours = data.actualHours;
-  const supplierHours = deployment.workerType === 'SupplierEmployee' ? data.supplierHours : null;
+  const supplierHours = deployment.workerType === 'SupplierEmployee' ? (data.supplierHours ?? null) : null;
   // A legacy entry's own real dailyHours breakdown (see deployment.model.js)
   // stays visible exactly as originally entered UNTIL it's actually
   // corrected — the moment someone edits it, the new totals-only shape
@@ -508,7 +524,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   entry.dailyHours = [];
   entry.actualHours = actualHours;
   entry.supplierHours = supplierHours;
-  entry.otHours = computeOtHours(deployment.workerType, actualHours, supplierHours, entry.contractHours);
+  entry.otHours = computeOtHours(actualHours, entry.contractHours);
   entry.otAmount = await computeOtAmount(deployment.mobilisation, entry.otHours);
   entry.deductionAmount = data.deductionAmount ?? 0;
   entry.supplierDeductionAmount = data.supplierDeductionAmount ?? 0;
@@ -833,6 +849,7 @@ async function gatherClientInvoicedItems(clientId) {
         allowance: dep.mobilisation.allowance ?? null,
         mobilisationCost: dep.mobilisation.mobilisationCost ?? null,
         actualHours: entry.actualHours,
+        supplierHours: entry.supplierHours,
         otHours: entry.otHours,
         deductionAmount: entry.deductionAmount ?? 0,
         supplierDeductionNote: entry.supplierDeductionNote ?? null,
@@ -1052,6 +1069,7 @@ export async function getReadyToInvoice(actor) {
         clientName: dep.clientName,
         month: entry.month,
         actualHours: entry.actualHours,
+        supplierHours: entry.supplierHours,
         otHours: entry.otHours,
         hoursApprovedAt: entry.decidedAt,
         revenue: revExp ? revExp.revenue : null,
@@ -1460,26 +1478,44 @@ function firstApprovedEntryId(entries) {
  *
  *   revenue  = clientRate × contractHours + otClientRate × otHours — the pure
  *              amount billed to the client, never netted against any cost.
- *   expenses = clientCommission × contractHours
- *            + (SupplierEmployee only) subcontractorRate × supplierHours,
- *              net of this month's supplierDeductionAmount ("Sub Invoice" —
- *              what this company actually owes the subcontractor; can go
- *              negative if the deduction exceeds the raw rate×hours amount,
- *              same posture as a real over-deduction would have)
- *            + (SupplierEmployee only) subcontractorCommission × supplierHours
- *              — split out from Sub Invoice above 2026-09-30 (the user's own
- *              ask, so the rate and the commission are each their own line
- *              rather than one combined figure)
+ *              `otHours` (2026-10-01, the user's own correction) is ALWAYS
+ *              Client hours − this deployment's own contract hours, for
+ *              every worker type alike — no longer measured against the
+ *              subcontractor's timesheet for SupplierEmployee, since that
+ *              timesheet is now a separate, optional follow-up entry that
+ *              might not exist yet (see addMonthlyHours's two-step flow).
+ *   expenses = clientCommission × actualHours (the full client timesheet,
+ *              OT included — 2026-10-01, the user's own correction; was
+ *              previously only the non-OT portion)
+ *            + (SupplierEmployee only) subcontractorRate × the subcontractor's
+ *              own FULL timesheet hours (no regular/OT split on this side —
+ *              2026-10-01, the user's own choice), net of this month's
+ *              supplierDeductionAmount ("Sub Invoice" — what this company
+ *              actually owes the subcontractor; can go negative if the
+ *              deduction exceeds the raw rate×hours amount)
+ *            + (SupplierEmployee only) subcontractorCommission × the same
+ *              full subcontractor hours — split out from Sub Invoice above
+ *              2026-09-30 (the user's own ask, so the rate and the
+ *              commission are each their own line)
  *            + fta + allowance
- *            + (SupplierEmployee/Freelancer only) otEmployeeRate × otHours — a
- *              real Employee has no separate OT pay through this mechanism
- *              (2026-09-30, the user's own ask), so the full otClientRate ×
- *              otHours above is pure profit for them
+ *            + (SupplierEmployee only) otEmployeeRate × supplierOtHours — the
+ *              subcontractor's OWN overtime (their timesheet hours minus this
+ *              deployment's contract hours, 2026-10-01), decoupled from the
+ *              client-billed otHours above; 0 while the subcontractor's
+ *              timesheet hasn't been entered yet
+ *            + (Freelancer only) otEmployeeRate × otHours — no second
+ *              timesheet exists for a Freelancer, so this stays the single,
+ *              client-derived figure
  *            + entry.deductionAmount (the CLIENT-side deduction — see that
  *              field's own doc comment; entry.supplierDeductionAmount is
  *              already netted into Sub Invoice above, never added again here)
  *            + (this deployment's chronologically-first-Approved entry only) mobilisationCost
  *   profit   = revenue − expenses, always.
+ *
+ * A real Employee has no separate OT pay through this per-deployment
+ * mechanism at all (2026-09-30, the user's own ask) — their pay is fixed by
+ * their employment contract, so the full otClientRate × otHours billed above
+ * flows straight to profit for them, never netted against any cost here.
  */
 export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries) {
   if (!mobilisation) return null;
@@ -1495,10 +1531,15 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
 
   const revenue = clientInvoiceAmount;
 
-  // The regular hours billed by the subcontractor is simply their timesheet.
-  // For SupplierEmployee, OT is the difference between client timesheet and supplier timesheet,
-  // so the supplier timesheet hours themselves are entirely regular hours.
-  const regularSupplierHours = isSupplier ? (entry.supplierHours ?? 0) : 0;
+  // Sub Invoice/Sub Commission apply to the subcontractor's FULL own
+  // timesheet (2026-10-01, the user's own choice — no regular/OT split on
+  // this side; the subcontractor's OT premium is its own separate line,
+  // otCalculations below, via supplierOtHours). `null` while the
+  // subcontractor's own timesheet hasn't been entered yet (a real, expected
+  // interim state now that it's a separate follow-up step — see
+  // addMonthlyHours) — treated as 0 here, never a guess.
+  const supplierHoursTotal = isSupplier ? (entry.supplierHours ?? 0) : 0;
+  const supplierOtHours = isSupplier ? computeSupplierOtHours(entry.supplierHours, entry.contractHours) : null;
   // Sub Invoice = the rate-only portion of what we owe the subcontractor,
   // net of this month's own adjustment/deduction against it (2026-09-30,
   // the user's own ask: "supplier invoice is the amount we give them ...
@@ -1506,17 +1547,21 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
   // expenseSubCommission below, no longer folded into this figure.
   const supplierDeductionAmount = isSupplier ? money(entry.supplierDeductionAmount ?? 0) : 0;
   const subContractorInvoiceAmount = isSupplier
-    ? money((mobilisation.subcontractorRate ?? 0) * regularSupplierHours - supplierDeductionAmount)
+    ? money((mobilisation.subcontractorRate ?? 0) * supplierHoursTotal - supplierDeductionAmount)
     : 0;
   const expenseSubCommission = isSupplier
-    ? money((mobilisation.subcontractorCommission ?? 0) * regularSupplierHours)
+    ? money((mobilisation.subcontractorCommission ?? 0) * supplierHoursTotal)
     : 0;
 
   const isFirstApprovedEntry =
     Array.isArray(allEntries) && entry.status === 'Approved' && entry._id?.toString() === firstApprovedEntryId(allEntries);
   const mobilisationCostDeduction = isFirstApprovedEntry ? mobilisation.mobilisationCost ?? 0 : 0;
 
-  const expenseClientCommission = money((mobilisation.clientCommission ?? 0) * regularClientHours);
+  // 2026-10-01, the user's own correction: this is actualHours (the full
+  // client timesheet, OT included), not regularClientHours (actualHours
+  // minus OT) — unlike clientInvoiceAmount's revenue split above, the
+  // commission expense isn't itself divided into a separate OT rate.
+  const expenseClientCommission = money((mobilisation.clientCommission ?? 0) * entry.actualHours);
   const expenseFta = money(mobilisation.fta ?? 0);
   const expenseAllowance = money(mobilisation.allowance ?? 0);
   // 2026-09-30, the user's own ask: a real Employee doesn't get separate OT
@@ -1528,7 +1573,18 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
   // the OT hour. So the full otClientRate × otHours billed above flows
   // straight to profit for an Employee deployment, never netted against a
   // cost here.
-  const otCalculations = isEmployee ? 0 : money((mobilisation.otEmployeeRate ?? 0) * entry.otHours);
+  //
+  // 2026-10-01: for a SupplierEmployee, this is now based on the
+  // subcontractor's OWN OT hours (supplierOtHours), never the client-billed
+  // otHours above — the two are independent figures since the client and
+  // subcontractor timesheets can legitimately differ (and the subcontractor's
+  // may not even be entered yet). Freelancer has no second timesheet, so it
+  // keeps using the single, client-derived otHours, unchanged.
+  const otCalculations = isEmployee
+    ? 0
+    : isSupplier
+      ? money((mobilisation.otEmployeeRate ?? 0) * (supplierOtHours ?? 0))
+      : money((mobilisation.otEmployeeRate ?? 0) * entry.otHours);
   const expenseDeduction = money(entry.deductionAmount ?? 0);
   
   const expenses = money(
@@ -1547,6 +1603,7 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
     subContractorInvoiceAmount,
     expenseSubCommission,
     supplierDeductionAmount,
+    supplierOtHours,
     otCalculations,
     expenseClientCommission,
     expenseFta,
@@ -1687,7 +1744,19 @@ export async function getDeployment(id, actor) {
       // the new per-Deployment Expenses section's own Revenue/Expenses/Profit
       // summary (see DeploymentDetailPage.jsx's own doc comment).
       const revExp = computeMonthlyRevenueAndExpenses(entry, deployment.mobilisation, deployment.monthlyHours);
-      return { ...withBilling, profit: revExp ? revExp.profit : null, revenue: revExp ? revExp.revenue : null, expenses: revExp ? revExp.expenses : null };
+      return {
+        ...withBilling,
+        profit: revExp ? revExp.profit : null,
+        revenue: revExp ? revExp.revenue : null,
+        expenses: revExp ? revExp.expenses : null,
+        // Added 2026-10-01 for the Expenses module's read-only "Deployment
+        // Costs" view (the user's own choice — live-computed, never
+        // persisted, so nothing here can double-count against the real
+        // Expense ledger) — same itemized object every other breakdown
+        // consumer already reads, just not previously exposed on this
+        // single-record endpoint.
+        breakdown: revExp ? revExp.breakdown : null,
+      };
     }
     const { otAmount, ...rest } = withBilling;
     return rest;
