@@ -848,6 +848,7 @@ async function gatherClientInvoicedItems(clientId) {
         fta: dep.mobilisation.fta ?? null,
         allowance: dep.mobilisation.allowance ?? null,
         mobilisationCost: dep.mobilisation.mobilisationCost ?? null,
+        contractHours: entry.contractHours,
         actualHours: entry.actualHours,
         supplierHours: entry.supplierHours,
         otHours: entry.otHours,
@@ -926,13 +927,20 @@ export async function getClientsPaymentSummary(actor) {
 }
 
 /**
- * Returns a flat list of every invoice that has received at least one
- * payment — fully paid or still partial — across all clients the viewer is
- * entitled to see, each carrying its real `revenue` (invoice amount),
- * `amountAllocated` (paid so far) and `balanceDue`, so a client paying in
- * installments shows real progress here instead of only appearing once
- * settled in full. An invoice with zero allocation yet stays out of this
- * list — that's Payments Due's job. Uses the same visibility rules as
+ * Returns a flat list of every PAYMENT that has landed against an invoice —
+ * fully paid or still partial — across all clients the viewer is entitled
+ * to see. An invoice paid in two installments (2026-10-01, the user's own
+ * ask, over showing one lumped total: "if they pay 3000 then 2000, show
+ * these as two payments not a single one") appears here as TWO rows, not
+ * one — each carrying that one payment's own `amountAllocated` and the
+ * invoice's real running `balanceDue` immediately after it, so the history
+ * reads as an actual ledger. `revenue`/`breakdown`/every rate field stay the
+ * invoice's own real figures, identical and repeated on every row for that
+ * invoice — only `amountAllocated`/`balanceDue`/`fullyPaid` are PER-PAYMENT
+ * here (deliberately unlike every other consumer of allocateClientPayments,
+ * which all still want the invoice's cumulative totals, untouched by this).
+ * An invoice with zero allocation yet stays out of this list entirely —
+ * that's Payments Due's job. Uses the same visibility rules as
  * getClientsPaymentSummary.
  */
 export async function getPaidInvoices(actor) {
@@ -960,18 +968,31 @@ export async function getPaidInvoices(actor) {
     const { perEntry } = await getClientAllocation(info.clientId);
     const paid = perEntry.filter((e) => e.amountAllocated > 0);
     for (const p of paid) {
-      paidInvoices.push({
-        clientName: info.clientName,
-        subcontractorName: info.subcontractorName,
-        ...p,
-      });
+      const { payments, ...invoiceFields } = p;
+      // One row per actual payment (oldest first) — a single-payment invoice
+      // produces exactly one row, unchanged from before this split.
+      for (const payment of payments) {
+        paidInvoices.push({
+          clientName: info.clientName,
+          subcontractorName: info.subcontractorName,
+          ...invoiceFields,
+          rowId: `${p.entryId}-${payment.paymentId}`,
+          amountAllocated: payment.amount,
+          balanceDue: payment.runningBalance,
+          fullyPaid: payment.runningBalance <= 0,
+          paymentId: payment.paymentId,
+          paymentDate: payment.paymentDate,
+          paymentReference: payment.paymentReference,
+        });
+      }
     }
   }
-  
-  // Sort by invoiceDate descending, then by clientName
+
+  // Sort by payment date descending (the real, user-facing ask — most
+  // recent payment event first), then by clientName.
   return paidInvoices.sort((a, b) => {
-    const dateA = a.invoiceDate ? new Date(a.invoiceDate).getTime() : 0;
-    const dateB = b.invoiceDate ? new Date(b.invoiceDate).getTime() : 0;
+    const dateA = a.paymentDate ? new Date(a.paymentDate).getTime() : 0;
+    const dateB = b.paymentDate ? new Date(b.paymentDate).getTime() : 0;
     if (dateA !== dateB) return dateB - dateA;
     return a.clientName.localeCompare(b.clientName);
   });

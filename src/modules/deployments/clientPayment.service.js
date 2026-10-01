@@ -64,30 +64,66 @@ async function clientPaymentAudience(clientId) {
  * (each `{ ...whateverTheCallerWants, revenue, invoiceSentAt }`, from
  * deployment.service.js, which is the only place that knows how to price
  * one), decide how much of each has actually been paid — oldest invoice
- * first — against this client's own Approved payments. Recomputed live on
- * every call, never cached, same discipline
- * computeMonthlyRevenueAndExpenses itself already follows. Whatever's left
- * in the pool once every item is fully covered is an implicit credit
- * balance — needs no field of its own, since the next call that includes a
- * newer invoice will simply see a bigger pool.
+ * first — against this client's own Approved payments, oldest payment
+ * first within that. Recomputed live on every call, never cached, same
+ * discipline computeMonthlyRevenueAndExpenses itself already follows.
+ * Whatever's left in the pool once every item is fully covered is an
+ * implicit credit balance — needs no field of its own, since the next call
+ * that includes a newer invoice will simply see a bigger pool.
+ *
+ * Each entry's `amountAllocated`/`balanceDue`/`fullyPaid` stay the
+ * invoice's own CUMULATIVE totals, exactly as before — every existing
+ * caller (Payments Due, the Actual Performance dashboard, coordinator
+ * targets) keeps working unchanged. `payments` is new (2026-10-01, the
+ * user's own ask — Paid Invoices shows a real $3,000-then-$2,000 history as
+ * two rows, not one $5,000 lump): the real, ordered list of which specific
+ * ClientPayment(s) actually cover this invoice and how much of each, with
+ * `runningBalance` = what was still owed on THIS invoice immediately after
+ * that one payment landed — a second-dimension FIFO (a payment can span
+ * across invoices, and an invoice can draw from more than one payment) on
+ * top of the existing oldest-invoice-first order.
  */
 export async function allocateClientPayments(clientId, invoicedItems) {
   const sorted = [...invoicedItems].sort((a, b) => new Date(a.invoiceSentAt) - new Date(b.invoiceSentAt));
 
   const approvedPayments = await ClientPayment.find({ client: clientId, decisionStatus: 'Approved' })
-    .select('amount')
+    .select('amount paymentDate paymentReference')
+    .sort({ paymentDate: 1, _id: 1 })
     .lean();
-  let pool = money(approvedPayments.reduce((sum, p) => sum + p.amount, 0));
+  const pool = approvedPayments.map((p) => ({ ...p, remaining: p.amount }));
+  let poolIndex = 0;
 
   const perEntry = [];
   for (const item of sorted) {
-    const allocated = money(Math.min(pool, item.revenue));
-    pool = money(pool - allocated);
-    const balanceDue = money(item.revenue - allocated);
-    perEntry.push({ ...item, amountAllocated: allocated, balanceDue, fullyPaid: balanceDue <= 0 });
+    let needed = item.revenue;
+    let runningBalance = item.revenue;
+    const payments = [];
+    while (needed > 0 && poolIndex < pool.length) {
+      const p = pool[poolIndex];
+      if (p.remaining <= 0) {
+        poolIndex += 1;
+        continue;
+      }
+      const take = money(Math.min(needed, p.remaining));
+      p.remaining = money(p.remaining - take);
+      needed = money(needed - take);
+      runningBalance = money(runningBalance - take);
+      payments.push({
+        paymentId: p._id,
+        amount: take,
+        paymentDate: p.paymentDate,
+        paymentReference: p.paymentReference,
+        runningBalance,
+      });
+      if (p.remaining <= 0) poolIndex += 1;
+    }
+    const allocated = money(item.revenue - needed);
+    const balanceDue = money(needed);
+    perEntry.push({ ...item, amountAllocated: allocated, balanceDue, fullyPaid: balanceDue <= 0, payments });
   }
 
-  return { perEntry, creditBalance: pool };
+  const creditBalance = money(pool.reduce((sum, p) => sum + p.remaining, 0));
+  return { perEntry, creditBalance };
 }
 
 /** One client's real payment history — Pending/Approved/Rejected, newest

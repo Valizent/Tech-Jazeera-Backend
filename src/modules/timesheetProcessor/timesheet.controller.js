@@ -39,7 +39,7 @@ export async function exportXlsx(req, res) {
   requireFile(req);
   const result = await timesheetService.processTimesheet({ buffer: req.file.buffer, ...req.body });
   const logo = await getLogoForEmbedding();
-  const buffer = await buildTimesheetXlsx(result, logo);
+  const buffer = await buildTimesheetXlsx(result, logo, { compactLayout: true });
 
   await logAudit({
     user: req.user.id,
