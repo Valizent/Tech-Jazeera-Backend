@@ -718,6 +718,7 @@ async function paymentTrackingAudience(mobilisationId) {
 }
 
 function invoiceFileFromUpload(file) {
+  if (!file) return undefined;
   return {
     fileName: file.filename, // Cloudinary public_id, set by uploadSingle
     resourceType: 'raw',
@@ -738,7 +739,6 @@ function invoiceFileFromUpload(file) {
 export async function sendInvoice(deploymentId, entryId, data, file, actor) {
   const allowed = await canAccessSection('deploymentsInvoicing', actor);
   if (!allowed) throw new ApiError(403, 'You do not have permission to send a client invoice.');
-  if (!file) throw new ApiError(400, 'A copy of the invoice PDF is required.');
 
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
@@ -767,6 +767,17 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
       400,
       `${entry.month} hasn't finished yet — the invoice date can't be before ${earliestInvoiceDate.toISOString().slice(0, 10)}.`
     );
+  }
+
+  // 2026-10-03, user requested: ensure no duplicate invoice numbers are used.
+  if (data.invoiceNumber) {
+    const existing = await Deployment.exists({
+      archived: { $ne: true },
+      'monthlyHours.invoiceNumber': data.invoiceNumber,
+    });
+    if (existing) {
+      throw new ApiError(400, `Invoice number ${data.invoiceNumber} has already been used.`);
+    }
   }
 
   const now = new Date();
@@ -870,6 +881,7 @@ async function gatherClientInvoicedItems(clientId) {
         month: entry.month,
         invoiceNumber: entry.invoiceNumber,
         invoiceDate: entry.invoiceDate,
+        invoiceFile: entry.invoiceFile,
         invoiceSentAt: entry.invoiceSentAt,
         invoiceDueAt: entry.invoiceDueAt,
         revenue: result.revenue,
