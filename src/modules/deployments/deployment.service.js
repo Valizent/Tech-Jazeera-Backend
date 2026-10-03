@@ -751,6 +751,23 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
   if (entry.invoiceSentAt) {
     throw new ApiError(400, 'This month has already been invoiced.');
   }
+  // 2026-10-03, a real user-reported gap: nothing stopped picking an invoice
+  // date that predates the month it's for even finishing — before the
+  // client's own timesheet for that month could exist, let alone be entered
+  // and approved here. The earliest a real invoice for entry.month ('YYYY-MM')
+  // could exist is the 1st of the FOLLOWING month. Built with Date.UTC, not
+  // the server's local timezone — `data.invoiceDate` came from a plain
+  // 'YYYY-MM-DD' <input type="date">, which z.coerce.date() parses as UTC
+  // midnight, so this has to be constructed the same way or the comparison
+  // could be off by a day depending on the server's own TZ.
+  const [entryYear, entryMonthNum] = entry.month.split('-').map(Number);
+  const earliestInvoiceDate = new Date(Date.UTC(entryYear, entryMonthNum, 1)); // entryMonthNum is 1-based, so this IS month+1, 0-based
+  if (data.invoiceDate < earliestInvoiceDate) {
+    throw new ApiError(
+      400,
+      `${entry.month} hasn't finished yet — the invoice date can't be before ${earliestInvoiceDate.toISOString().slice(0, 10)}.`
+    );
+  }
 
   const now = new Date();
   const invoiceDueAt = new Date(now.getTime() + INVOICE_DUE_DAYS * 86_400_000);
@@ -1116,6 +1133,46 @@ export async function getClientPaymentDetail(clientId, actor) {
  * actually act on this queue. Sorted oldest-approved-first, so the month
  * that's been waiting longest leads.
  */
+export async function countDeploymentsMissingTimesheets(actor) {
+  if (actor.role !== 'Coordinator' && !(await canAccessSection('deploymentsRelease', actor, 'read'))) return 0;
+
+  const filter = { status: { $in: ['Active', 'Ended'] }, archived: { $ne: true } };
+  if (actor.role === 'Coordinator') {
+    const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
+    filter.worker = { $in: teamIds };
+  }
+
+  const deployments = await Deployment.find(filter).select('status startDate endDate monthlyHours.month').lean();
+  let totalMissing = 0;
+
+  const monthStrOf = (date) => {
+    const d = new Date(date);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const addMonthsToStr = (monthStr, n) => {
+    const [y, m] = monthStr.split('-').map(Number);
+    const d = new Date(y, m - 1 + n, 1);
+    return monthStrOf(d);
+  };
+  const previousMonthStr = () => addMonthsToStr(monthStrOf(new Date()), -1);
+  
+  for (const d of deployments) {
+    if (!d.startDate) continue;
+    const start = monthStrOf(d.startDate);
+    const maxEligible = (d.status === 'Ended' && d.endDate) ? monthStrOf(d.endDate) : previousMonthStr();
+    if (start > maxEligible) continue;
+    
+    const entered = new Set((d.monthlyHours || []).map((m) => m.month));
+    let candidate = start;
+    while (candidate <= maxEligible) {
+      if (!entered.has(candidate)) totalMissing++;
+      candidate = addMonthsToStr(candidate, 1);
+    }
+  }
+  
+  return totalMissing;
+}
+
 export async function getReadyToInvoice(actor) {
   const allowed =
     (await canAccessSection('deploymentsInvoicing', actor, 'read')) ||

@@ -40,7 +40,7 @@ import { countStaleRequirements, getMyRequirementsSummary } from '../requirement
 import { countOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ExitReentry from '../exitDocuments/exitReentry.model.js';
-import { getStandbyWorkforce, getActualPerformanceSummary, countPaymentsDueSoon } from '../deployments/deployment.service.js';
+import { getStandbyWorkforce, getActualPerformanceSummary, countPaymentsDueSoon, getReadyToInvoice, countDeploymentsMissingTimesheets } from '../deployments/deployment.service.js';
 import User from '../auth/user.model.js';
 import { monthBounds, NON_OWN_EMPLOYEE_FILTER, realRevenueByCoordinator } from '../mobilisationTargets/mobilisationTarget.service.js';
 import MobilisationTarget from '../mobilisationTargets/mobilisationTarget.model.js';
@@ -218,10 +218,12 @@ async function getMyPendingActions(actor, mySectionAccess) {
     actor.role === 'Coordinator'
       ? new Set((await Employee.find({ coordinator: actor.userId }).distinct('_id')).map((id) => id.toString()))
       : null;
-  const [staleRequirements, openTasks, paymentsDueSoon, itemsByModule] = await Promise.all([
+  const [staleRequirements, openTasks, paymentsDueSoon, readyToInvoiceRes, missingTimesheetsCount, itemsByModule] = await Promise.all([
     countStaleRequirements(actor),
     countOpenTasks(actor),
     countPaymentsDueSoon(actor),
+    getReadyToInvoice(actor),
+    countDeploymentsMissingTimesheets(actor),
     Promise.all(
       PENDING_ACTION_MODULES.map(({ Model, pendingStatus }) =>
         Model.find({ status: pendingStatus }).select('workflow currentStep steps status employee').lean()
@@ -260,6 +262,8 @@ async function getMyPendingActions(actor, mySectionAccess) {
     { label: 'Stale requirements', url: '/requirements', count: staleRequirements },
     { label: 'Open tasks', url: '/daily-updates?tab=tasks', count: openTasks },
     { label: 'Payments due soon', url: '/deployments/payments-due', count: paymentsDueSoon },
+    { label: 'Ready to invoice', url: '/financial/ready-to-invoice', count: readyToInvoiceRes.length },
+    { label: 'Missing timesheets', url: '/deployments', count: missingTimesheetsCount },
   ].filter((m) => m.count > 0);
 }
 
