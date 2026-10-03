@@ -602,22 +602,32 @@ export async function createMobilisation(data, actor) {
     ip: actor.ip,
   });
 
-  // Auto-upsert into OutsourcedEmployees if applicable
+  // Auto-upsert into OutsourcedEmployees if applicable. $setOnInsert only
+  // fires on first sight of this worker (matching name+workerType — mirrors
+  // listPreviousWorkers' own tolerance for an Iqama-less Freelancer); a later
+  // mobilisation for the same worker never overwrites it here, same
+  // "never auto-applied, agreedRate is this record's own field" posture as
+  // the form's rate hint. iqamaNumber/nationality were missing from this
+  // $setOnInsert until 2026-10-03 — a real gap found while backfilling
+  // historical workers, since the model's own identity-matching rationale
+  // (see outsourcedEmployee.model.js) depends on Iqama being populated.
   if (data.workerType !== 'Employee') {
     try {
       await OutsourcedEmployee.findOneAndUpdate(
-        { 
-          name: { $regex: new RegExp(`^${escapeRegex(mobilisation.workerName)}$`, 'i') }, 
-          workerType: mobilisation.workerType 
+        {
+          name: { $regex: new RegExp(`^${escapeRegex(mobilisation.workerName)}$`, 'i') },
+          workerType: mobilisation.workerType
         },
-        { 
-          $setOnInsert: { 
-            name: mobilisation.workerName, 
+        {
+          $setOnInsert: {
+            name: mobilisation.workerName,
             workerType: mobilisation.workerType,
             phone: mobilisation.phone || null,
+            iqamaNumber: mobilisation.iqamaNumber || null,
+            nationality: mobilisation.nationality || null,
             subcontractor: mobilisation.subcontractor || null,
             createdBy: actor.userId
-          } 
+          }
         },
         { upsert: true, new: true }
       );
