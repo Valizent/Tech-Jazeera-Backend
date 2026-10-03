@@ -6,6 +6,7 @@ import Employee, { WORKFORCE_TYPES } from './employee.model.js';
 import User, { MANAGER_ELIGIBLE_ROLES } from '../auth/user.model.js';
 import RefreshToken from '../auth/refreshToken.model.js';
 import Attendance from '../attendance/attendance.model.js';
+import { activeMobilisationWorkerIds } from '../mobilisations/mobilisation.service.js';
 import ApprovalWorkflow from '../approvals/approvalWorkflow.model.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ApiError from '../../utils/ApiError.js';
@@ -62,7 +63,17 @@ const EXPIRY_FIELDS = [
  *                'Worker' — Mobilisation's "Own Employee" picker needs real
  *                field workers, not any Own-type employee who happens to be
  *                staff for payroll purposes)
+ * standby      → 'true' excludes anyone with a live `currentClient` OR a
+ *                Draft/PendingReview/Approved Mobilisation already in
+ *                flight for them (2026-10-03, a real user-reported gap: the
+ *                "New mobilisation" Worker picker was offering employees who
+ *                are already placed — selecting one would just 409 at submit
+ *                time, since assertNoActivePlacement enforces the same "one
+ *                active placement at a time" rule). Only passed by the New
+ *                Mobilisation page; Edit always fetches unfiltered so the
+ *                record's own already-placed worker stays selectable.
  *
+
  * Every returned item also carries `.login` (id/email/role/isActive, or
  * null) — same shape getEmployee already attaches, batched here into one
  * query rather than one per row — so a caller can distinguish login roles
@@ -72,7 +83,7 @@ const EXPIRY_FIELDS = [
  * script) can still list company-wide; every HTTP call supplies it.
  */
 export async function listEmployees(
-  { page, limit, search, status, type, alerts, thresholdDays, client, team, createdByRole, loginRole, sortBy, sortOrder },
+  { page, limit, search, status, type, alerts, thresholdDays, client, team, createdByRole, loginRole, standby, sortBy, sortOrder },
   actor
 ) {
   // Each condition is AND-ed; search and alerts are each internally OR-ed.
@@ -86,6 +97,17 @@ export async function listEmployees(
   if (status) conditions.push({ status });
   if (type) conditions.push({ type });
   if (client) conditions.push({ currentClient: client });
+  if (standby === 'true') {
+    // currentClient catches an already-Approved placement; activeMobilisation
+    // WorkerIds also catches a Draft/PendingReview one still awaiting approval
+    // (currentClient isn't set until the Deployment is actually created) —
+    // both must agree with assertNoActivePlacement's own definition of
+    // "already has an active mobilisation", or the picker and the submit-time
+    // guard would disagree — shared with mobilisation.service.js's own
+    // listPreviousWorkers rather than a second independent copy of the query.
+    const busyIds = await activeMobilisationWorkerIds();
+    conditions.push({ currentClient: null, _id: { $nin: busyIds } });
+  }
   if (alerts === 'true') {
     const days = thresholdDays ?? EXPIRY_WARNING_DAYS;
     const threshold = new Date(Date.now() + days * 24 * 60 * 60 * 1000);

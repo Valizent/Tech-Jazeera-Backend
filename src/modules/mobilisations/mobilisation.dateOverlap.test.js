@@ -25,6 +25,10 @@ async function makeEmployee() {
     type: 'Own',
     designation: 'Tester',
     joiningDate: new Date('2020-01-01'),
+    // 2026-10-03: createMobilisation now requires a salary on file for any
+    // Own employee before mobilising them (see its own doc comment) — this
+    // fixture predates that check.
+    salary: 3000,
   });
 }
 

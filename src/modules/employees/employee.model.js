@@ -187,5 +187,9 @@ employeeSchema.index({ coordinator: 1 });
 // attendance/deployment scoping (see employee.service.js listEmployees).
 employeeSchema.index({ manager: 1 });
 employeeSchema.index({ type: 1 });
+// Who's currently placed with a client (client profile's "Assigned Workers"
+// tab, the Standby List, and listEmployees' own `client`/`standby` filters)
+// — read/filtered on every one of those, with no supporting index until now.
+employeeSchema.index({ currentClient: 1 });
 
 export default mongoose.model('Employee', employeeSchema);

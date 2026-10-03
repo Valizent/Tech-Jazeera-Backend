@@ -207,6 +207,10 @@ export const listEmployeesSchema = z.object({
   // excluded too — deliberate, matches "mobilisable" meaning "a real
   // field worker," not "any payroll record."
   loginRole: z.preprocess(emptyToUndef, z.enum(ROLES).optional()),
+  // 'true' excludes anyone already placed (live currentClient) or with a
+  // Draft/PendingReview/Approved mobilisation in flight — see
+  // employee.service.js's listEmployees doc comment.
+  standby: z.preprocess(emptyToUndef, z.enum(['true', 'false']).optional()),
   // P2-M2: override the default 30-day expiry-alert window (customizable per
   // viewer — see docs/P2-M2-notes.md). Only meaningful together with alerts=true.
   thresholdDays: z.preprocess(emptyToUndef, z.coerce.number().int().min(1).max(365).optional()),

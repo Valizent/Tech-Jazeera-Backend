@@ -9,7 +9,7 @@
  * M5: multi-file documents.
  */
 import mongoose from 'mongoose';
-import Mobilisation from './mobilisation.model.js';
+import Mobilisation, { ACTIVE_MOBILISATION_STATUSES } from './mobilisation.model.js';
 import Employee from '../employees/employee.model.js';
 import OutsourcedEmployee from '../employees/outsourcedEmployee.model.js';
 import Client from '../clients/client.model.js';
@@ -312,6 +312,35 @@ export async function lookupWorkerByIqama(iqamaNumber) {
  * lookupWorkerByIqama. One entry per distinct Iqama, using that worker's
  * own most recent mobilisation snapshot as their current known details.
  */
+/**
+ * Iqama numbers with a currently-active (Draft/PendingReview/Approved)
+ * non-Employee mobilisation — "busy," in the same sense
+ * assertNoActiveNonEmployeePlacement already enforces at submit time.
+ * Extracted (2026-10-03, a real code-review finding) so listPreviousWorkers
+ * below and employee.service.js's own `standby` filter share one definition
+ * instead of two independently-maintained copies of the same query shape.
+ */
+export async function activeMobilisationIqamas() {
+  return Mobilisation.find({
+    workerType: { $ne: 'Employee' },
+    status: { $in: ACTIVE_MOBILISATION_STATUSES },
+    iqamaNumber: { $nin: [null, ''] },
+  }).distinct('iqamaNumber');
+}
+
+/** Employee ids with a currently-active (Draft/PendingReview/Approved)
+ *  Employee-type mobilisation — the Employee-identity analogue of
+ *  activeMobilisationIqamas above, for employee.service.js's `standby`
+ *  filter (the only caller; assertNoActivePlacement needs the full
+ *  matching document for its error message, not just the id list, so it
+ *  keeps its own findOne). */
+export async function activeMobilisationWorkerIds() {
+  return Mobilisation.find({
+    workerType: 'Employee',
+    status: { $in: ACTIVE_MOBILISATION_STATUSES },
+  }).distinct('worker');
+}
+
 export async function listPreviousWorkers(workerType, subcontractorId) {
   const filter = { workerType, iqamaNumber: { $nin: [null, ''] }, archived: { $ne: true } };
   if (workerType === 'SupplierEmployee') {
@@ -323,11 +352,19 @@ export async function listPreviousWorkers(workerType, subcontractorId) {
     .select('workerName iqamaNumber nationality phone subcontractor subcontractorName')
     .limit(1000)
     .lean();
+
+  // Standby only (2026-10-03, a real user-reported gap): offering a worker
+  // who already has an active mobilisation here would just 409 at submit
+  // time (assertNoActiveNonEmployeePlacement enforces the exact same
+  // identity+status check) — exclude them from the picker entirely instead.
+  const busyIqamas = new Set(await activeMobilisationIqamas());
+
   const seen = new Set();
   const results = [];
   for (const record of records) {
     if (seen.has(record.iqamaNumber)) continue;
     seen.add(record.iqamaNumber);
+    if (busyIqamas.has(record.iqamaNumber)) continue;
     results.push({
       workerName: record.workerName,
       iqamaNumber: record.iqamaNumber,
@@ -350,7 +387,7 @@ export async function listPreviousWorkers(workerType, subcontractorId) {
 async function assertNoActivePlacement(workerId) {
   const existing = await Mobilisation.findOne({
     worker: workerId,
-    status: { $in: ['Draft', 'PendingReview', 'Approved'] },
+    status: { $in: ACTIVE_MOBILISATION_STATUSES },
   })
     .populate('coordinators.user', 'name')
     .lean();
@@ -376,7 +413,7 @@ async function assertNoActiveNonEmployeePlacement(iqamaNumber) {
   const existing = await Mobilisation.findOne({
     iqamaNumber,
     workerType: { $ne: 'Employee' },
-    status: { $in: ['Draft', 'PendingReview', 'Approved'] },
+    status: { $in: ACTIVE_MOBILISATION_STATUSES },
   })
     .populate('coordinators.user', 'name')
     .lean();
@@ -526,6 +563,19 @@ export async function createMobilisation(data, actor) {
       // already a plain editable field on the Employee form.
       if (employee.status === 'Exited') {
         throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
+      }
+      // 2026-10-03, the user's own ask: salary only matters for an Own
+      // employee actually sent out to work for a client (every Employee-type
+      // mobilisation, by definition) — not office staff, who never go through
+      // this path at all. Required here, not on the Employee schema itself,
+      // because a worker's salary is sometimes only finalized after they're
+      // hired and before their first placement, same reasoning agreedRate
+      // works for a Freelancer/SupplierEmployee. Closes a real gap: the new
+      // per-deployment `expenseEmployeeSalary` cost (deployment.service.js)
+      // was silently computing as 0 for a worker with no salary on file,
+      // overstating profit with no warning anywhere.
+      if (employee.salary == null) {
+        throw new ApiError(400, `${employee.fullName} has no salary on file — set it on their employee profile before mobilising them.`);
       }
       await assertNoActivePlacement(data.worker);
       await assertNoDateOverlap('Employee', { workerId: data.worker }, data.mobilisationDate, data.checkoutDate);
@@ -1003,6 +1053,12 @@ export async function updateMobilisation(id, data, actor) {
       if (workerType === 'Employee') {
         if (employee.status === 'Exited') {
           throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
+        }
+        // See createMobilisation's own 2026-10-03 comment — same check,
+        // re-run here since retargeting onto a different Employee is exactly
+        // as capable of landing on a no-salary worker as creating fresh.
+        if (employee.salary == null) {
+          throw new ApiError(400, `${employee.fullName} has no salary on file — set it on their employee profile before mobilising them.`);
         }
         await assertNoActivePlacement(workerInput.worker);
       } else {
@@ -1796,7 +1852,7 @@ export async function getWorkerHistory(iqamaNumber) {
     // A currently active engagement blocks archiving below — a worker still
     // genuinely placed shouldn't just disappear from every list.
     hasActiveEngagement:
-      mobilisations.some((m) => ['Draft', 'PendingReview', 'Approved'].includes(m.status)) ||
+      mobilisations.some((m) => ACTIVE_MOBILISATION_STATUSES.includes(m.status)) ||
       deployments.some((d) => d.status === 'Active'),
     allArchived: mobilisations.every((m) => m.archived),
     records,
@@ -1824,7 +1880,7 @@ export async function archiveWorkerData(iqamaNumber, actor) {
         .select('status')
         .session(session)
         .lean();
-      const hasActiveMobilisation = currentMobilisations.some((m) => ['Draft', 'PendingReview', 'Approved'].includes(m.status));
+      const hasActiveMobilisation = currentMobilisations.some((m) => ACTIVE_MOBILISATION_STATUSES.includes(m.status));
       const activeDeploymentCount = await Deployment.countDocuments({
         mobilisation: { $in: mobilisationIds },
         status: 'Active',

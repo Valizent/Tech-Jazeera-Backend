@@ -66,6 +66,13 @@ import mongoose from 'mongoose';
 // deployment.service.js's releaseDeployment), never by a direct action on
 // the Mobilisation itself. Only reachable from 'Approved'.
 export const MOBILISATION_STATUSES = ['Draft', 'PendingReview', 'Approved', 'Rejected', 'Completed'];
+// The subset that still occupies its worker — a Draft/PendingReview/Approved
+// mobilisation makes that worker unavailable for a NEW one (see
+// mobilisation.service.js's assertNoActivePlacement/
+// assertNoActiveNonEmployeePlacement, and employee.service.js's listEmployees
+// `standby` filter — all three must agree on this exact set or the "who can I
+// mobilise right now" picker and the actual submit-time guard would disagree).
+export const ACTIVE_MOBILISATION_STATUSES = ['Draft', 'PendingReview', 'Approved'];
 // Who a final-step rejection sends the mobilisation back to — see
 // mobilisation.service.js's rejectMobilisation/submitMobilisation for what
 // each one actually does differently.
@@ -301,5 +308,18 @@ mobilisationSchema.index({ worker: 1, createdAt: -1 });
 mobilisationSchema.index({ client: 1 });
 mobilisationSchema.index({ status: 1, createdAt: -1 });
 mobilisationSchema.index({ 'coordinators.user': 1 });
+// A SupplierEmployee/Freelancer worker has no `worker` ref — iqamaNumber is
+// their only durable identity, read directly (not via the status/createdAt
+// index above) by lookupWorkerByIqama, listPreviousWorkers,
+// assertNoActiveNonEmployeePlacement, and getWorkerHistory/archiveWorkerData
+// — all real, frequently-hit queries with no supporting index until now.
+mobilisationSchema.index({ iqamaNumber: 1 });
+// assertNoActivePlacement/assertNoActiveNonEmployeePlacement and the
+// standby filters (employee.service.js's listEmployees, this module's own
+// listPreviousWorkers) all query workerType+status together on every New
+// Mobilisation page load — supports that compound directly instead of
+// falling back to the status-only index above and filtering workerType
+// in memory.
+mobilisationSchema.index({ workerType: 1, status: 1 });
 
 export default mongoose.model('Mobilisation', mobilisationSchema);

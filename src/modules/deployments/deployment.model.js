@@ -191,6 +191,10 @@ const monthlyHoursSchema = new mongoose.Schema(
     // figure negative, which is why the UI colors it dynamically).
     supplierDeductionAmount: { type: Number, default: 0, min: 0 },
     supplierDeductionNote: { type: String, trim: true, maxlength: 500, default: null },
+    // 2026-10-03: Add an option for additional amount to be paid for own employees,
+    // e.g. for OT or other reasons.
+    employeeAdditionalAmount: { type: Number, default: 0, min: 0 },
+    employeeAdditionalAmountNote: { type: String, trim: true, maxlength: 500, default: null },
     notes: { type: String, trim: true, maxlength: 500 },
     enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     enteredAt: { type: Date, default: Date.now },

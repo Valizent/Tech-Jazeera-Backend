@@ -90,10 +90,14 @@ export async function realRevenueByCoordinator(month) {
     .populate('mobilisation', 'coordinators')
     .lean();
 
+  // 2026-10-03, a real perf-audit finding: these were fetched one client at a
+  // time with a sequential await, turning into a full N-round-trip chain on
+  // every dashboard load. Each client's allocation is independent, so fire
+  // them concurrently instead — same result, no behavior change.
   const clientIds = [...new Set(deployments.map((d) => d.client.toString()))];
+  const allocations = await Promise.all(clientIds.map((clientId) => getClientAllocation(clientId)));
   const allocationByEntryId = new Map();
-  for (const clientId of clientIds) {
-    const { perEntry } = await getClientAllocation(clientId);
+  for (const { perEntry } of allocations) {
     for (const e of perEntry) allocationByEntryId.set(e.entryId.toString(), e.amountAllocated);
   }
 
@@ -142,10 +146,11 @@ async function realRevenueAndProfitByCoordinator(month) {
     })
     .lean();
 
+  // See realRevenueByCoordinator's own 2026-10-03 comment above — same fix.
   const clientIds = [...new Set(deployments.map((d) => d.client.toString()))];
+  const allocations = await Promise.all(clientIds.map((clientId) => getClientAllocation(clientId)));
   const allocationByEntryId = new Map();
-  for (const clientId of clientIds) {
-    const { perEntry } = await getClientAllocation(clientId);
+  for (const { perEntry } of allocations) {
     for (const e of perEntry) allocationByEntryId.set(e.entryId.toString(), e.amountAllocated);
   }
 
@@ -210,11 +215,19 @@ export async function getMySemiAnnualProgress(actor, endMonth) {
   let incentivePercent = 0;
   let hasAnyTarget = false;
 
-  for (const month of months) {
-    const [{ revenueTotals, profitTotals }, targetDoc] = await Promise.all([
-      realRevenueAndProfitByCoordinator(month),
-      MobilisationTarget.findOne({ coordinator: uid, month }).lean(),
-    ]);
+  // 2026-10-03, a real perf-audit finding: this awaited one month at a time,
+  // compounding realRevenueAndProfitByCoordinator's own per-client cost 6x.
+  // Each month is independent (getAllSemiAnnualProgress already fetches its
+  // own 6 months this way) — fetch all 6 concurrently, then fold the results
+  // in the SAME oldest-to-newest order `months` already provides, so
+  // `incentivePercent` still ends up as "whichever month's value was most
+  // recently set," unchanged.
+  const perMonth = await Promise.all(
+    months.map((month) =>
+      Promise.all([realRevenueAndProfitByCoordinator(month), MobilisationTarget.findOne({ coordinator: uid, month }).lean()])
+    )
+  );
+  for (const [{ revenueTotals, profitTotals }, targetDoc] of perMonth) {
     achieved = round2(achieved + (revenueTotals.get(uid) ?? 0));
     netProfit = round2(netProfit + (profitTotals.get(uid) ?? 0));
     if (targetDoc) {
