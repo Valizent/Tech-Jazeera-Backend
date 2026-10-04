@@ -73,10 +73,8 @@ const daysUntil = (date) => Math.ceil((new Date(date).getTime() - Date.now()) / 
  * getDashboard) is open.
  */
 async function computeActiveMobilisationRevenue(actor, isCoordinator) {
-  const startOfThisMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const deploymentFilter = {
-    startDate: { $lte: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59, 999) },
-    $or: [{ endDate: null }, { endDate: { $gte: startOfThisMonth } }],
+    status: 'Active',
     archived: { $ne: true },
   };
   if (isCoordinator) {
@@ -84,7 +82,7 @@ async function computeActiveMobilisationRevenue(actor, isCoordinator) {
     deploymentFilter.mobilisation = { $in: myMobIds };
   }
   const activeDeployments = await Deployment.find(deploymentFilter).select('mobilisation').lean();
-  const mobIds = activeDeployments.map((d) => d.mobilisation).filter(Boolean);
+  const mobIds = [...new Set(activeDeployments.map((d) => d.mobilisation?.toString()).filter(Boolean))];
   if (mobIds.length === 0) return 0;
   const activeMobs = await Mobilisation.find({ _id: { $in: mobIds } }).select('profitPerHour').lean();
   return activeMobs.reduce((sum, mob) => sum + (mob.profitPerHour || 0), 0);
@@ -117,6 +115,7 @@ async function computeActiveMobilisationRevenueTrend(actor, isCoordinator) {
       month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
       start: new Date(d.getFullYear(), d.getMonth(), 1),
       end: new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999),
+      isCurrentMonth: i === 0,
     });
   }
   const windowStart = months[0].start;
@@ -124,14 +123,14 @@ async function computeActiveMobilisationRevenueTrend(actor, isCoordinator) {
 
   const deploymentFilter = {
     startDate: { $lte: windowEnd },
-    $or: [{ endDate: null }, { endDate: { $gte: windowStart } }],
+    $or: [{ endDate: null }, { endDate: { $gte: windowStart } }, { status: 'Active' }],
     archived: { $ne: true },
   };
   if (isCoordinator) {
     const myMobIds = await Mobilisation.find({ 'coordinators.user': actor.userId }).distinct('_id');
     deploymentFilter.mobilisation = { $in: myMobIds };
   }
-  const deployments = await Deployment.find(deploymentFilter).select('mobilisation startDate endDate').lean();
+  const deployments = await Deployment.find(deploymentFilter).select('mobilisation startDate endDate status').lean();
 
   const allMobIds = [...new Set(deployments.map((d) => d.mobilisation?.toString()).filter(Boolean))];
   const profitById = new Map();
@@ -140,10 +139,16 @@ async function computeActiveMobilisationRevenueTrend(actor, isCoordinator) {
     for (const m of mobs) profitById.set(m._id.toString(), m.profitPerHour || 0);
   }
 
-  return months.map(({ month, start, end }) => ({
+  return months.map(({ month, end, isCurrentMonth }) => ({
     month,
     revenue: deployments
-      .filter((d) => d.mobilisation && d.startDate <= end && (!d.endDate || d.endDate >= start))
+      .filter((d) => {
+        if (!d.mobilisation || d.startDate > end) return false;
+        if (isCurrentMonth) {
+          return d.status === 'Active';
+        }
+        return !d.endDate || d.endDate > end;
+      })
       .reduce((sum, d) => sum + (profitById.get(d.mobilisation.toString()) || 0), 0),
   }));
 }
