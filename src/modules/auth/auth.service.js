@@ -75,6 +75,7 @@ function publicUser(user) {
     email: user.email,
     role: user.role,
     avatarUrl: user.avatarUrl ?? null,
+    forcePasswordChange: Boolean(user.forcePasswordChange),
   };
 }
 
@@ -141,6 +142,12 @@ export async function login({ email, password, ip }) {
   if (!user || !passwordOk || !user.isActive) {
     await logAudit({ action: 'auth.login.failed', meta: { email }, ip });
     throw new ApiError(401, 'Invalid email or password.');
+  }
+
+  const isWeak = password.length < 12 || !/[0-9]/.test(password) || !/[^A-Za-z0-9]/.test(password) || !/[A-Za-z]/.test(password);
+  if (isWeak && !user.forcePasswordChange) {
+    user.forcePasswordChange = true;
+    await user.save();
   }
 
   const tokens = await issueTokens(user);
@@ -230,6 +237,7 @@ export async function changePassword({ userId, currentPassword, newPassword }, i
 
   user.passwordHash = await hashPassword(newPassword);
   user.passwordChangedAt = new Date();
+  user.forcePasswordChange = false;
   // The real revocation signal for an already-issued access token — see
   // user.model.js's tokenVersion doc comment (F8, 2026-09-15).
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;

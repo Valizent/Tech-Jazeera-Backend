@@ -26,10 +26,12 @@ router.use(requireAuth, requireStaff);
 // Coordinator-own read — must be before the param routes.
 router.get('/my', validate({ query: getMyTargetSchema }), asyncHandler(targetController.getMy));
 router.get('/semi-annual/my', validate({ query: getSemiAnnualSchema }), asyncHandler(targetController.getMySemiAnnual));
+router.get('/monthly-window/my', validate({ query: getSemiAnnualSchema }), asyncHandler(targetController.getMyMonthlyWindow));
 
 // Management reads.
 router.get('/progress', validate({ query: getProgressSchema }), asyncHandler(targetController.getProgress));
 router.get('/semi-annual', validate({ query: getSemiAnnualSchema }), asyncHandler(targetController.getSemiAnnual));
+router.get('/monthly-window', validate({ query: getSemiAnnualSchema }), asyncHandler(targetController.getMonthlyWindow));
 router.get('/', asyncHandler(targetController.listAll));
 
 // Management writes.

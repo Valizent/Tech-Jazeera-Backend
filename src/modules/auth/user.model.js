@@ -127,6 +127,7 @@ const userSchema = new mongoose.Schema(
     // default — so no already-logged-in session is force-invalidated by
     // this fix shipping.
     tokenVersion: { type: Number, default: 0 },
+    forcePasswordChange: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

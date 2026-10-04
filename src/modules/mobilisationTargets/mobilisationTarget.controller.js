@@ -40,6 +40,20 @@ export async function getSemiAnnual(req, res) {
   res.json(new ApiResponse('Semi-annual progress.', result));
 }
 
+/** GET /api/mobilisation-targets/monthly-window/my?endMonth=YYYY-MM — own 6-month monthly progress. */
+export async function getMyMonthlyWindow(req, res) {
+  const endMonth = req.query.endMonth ?? new Date().toISOString().slice(0, 7);
+  const result = await targetService.getMyMonthlyProgressWindow(actor(req), endMonth);
+  res.json(new ApiResponse('Your monthly progress.', result));
+}
+
+/** GET /api/mobilisation-targets/monthly-window?endMonth=YYYY-MM — all coordinators 6-month monthly progress. */
+export async function getMonthlyWindow(req, res) {
+  const endMonth = req.query.endMonth ?? new Date().toISOString().slice(0, 7);
+  const result = await targetService.getAllMonthlyProgressWindow(actor(req), endMonth);
+  res.json(new ApiResponse('Monthly progress.', result));
+}
+
 /** POST /api/mobilisation-targets — upsert a target. */
 export async function set(req, res) {
   const target = await targetService.setTarget(req.body, actor(req));

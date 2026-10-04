@@ -136,7 +136,7 @@ async function realRevenueAndProfitByCoordinator(month) {
   const deployments = await Deployment.find({
     workerType: { $ne: 'Employee' },
     archived: { $ne: true },
-    monthlyHours: { $elemMatch: { month, invoiceSentAt: { $ne: null } } },
+    monthlyHours: { $elemMatch: { month } },
   })
     .select('client monthlyHours mobilisation')
     .populate({
@@ -156,14 +156,27 @@ async function realRevenueAndProfitByCoordinator(month) {
 
   const revenueTotals = new Map();
   const profitTotals = new Map();
+  const pendingByCoordinator = new Set();
+  
   for (const d of deployments) {
     if (!d.mobilisation) continue;
-    const entry = d.monthlyHours.find((m) => m.month === month && m.invoiceSentAt);
+    const entry = d.monthlyHours.find((m) => m.month === month);
     if (!entry) continue;
     const { revenue, profit } = computeMonthlyRevenueAndExpenses(entry, d.mobilisation, d.monthlyHours) ?? {};
     if (!revenue) continue;
-    const amountAllocated = allocationByEntryId.get(entry._id.toString()) ?? 0;
-    if (!amountAllocated) continue;
+
+    const isInvoiced = !!entry.invoiceSentAt;
+    const amountAllocated = isInvoiced ? (allocationByEntryId.get(entry._id.toString()) ?? 0) : 0;
+    
+    // If it's not invoiced, or allocated is less than revenue, money is still pending
+    if (!isInvoiced || amountAllocated < revenue) {
+      for (const c of d.mobilisation.coordinators ?? []) {
+        pendingByCoordinator.add(c.user.toString());
+      }
+    }
+
+    if (!isInvoiced || !amountAllocated) continue;
+
     // Capped at 1 — a real-world payment can exceed the computed estimate
     // (e.g. a negotiated adjustment); never credit MORE profit than the
     // entry's own computed profit.
@@ -178,7 +191,13 @@ async function realRevenueAndProfitByCoordinator(month) {
       profitTotals.set(uid, round2((profitTotals.get(uid) ?? 0) + receivedProfit * share));
     }
   }
-  return { revenueTotals, profitTotals };
+
+  const currentMonthStr = new Date().toISOString().slice(0, 7);
+  const isClosedByCoordinator = new Map();
+  // We'll let callers populate isClosedByCoordinator for specific users.
+  // A month is closed for a user if month < currentMonthStr AND !pendingByCoordinator.has(uid)
+
+  return { revenueTotals, profitTotals, pendingByCoordinator, currentMonthStr };
 }
 
 /** 'YYYY-MM' strings for the 6 calendar months ending at (and including)
@@ -215,13 +234,6 @@ export async function getMySemiAnnualProgress(actor, endMonth) {
   let incentivePercent = 0;
   let hasAnyTarget = false;
 
-  // 2026-10-03, a real perf-audit finding: this awaited one month at a time,
-  // compounding realRevenueAndProfitByCoordinator's own per-client cost 6x.
-  // Each month is independent (getAllSemiAnnualProgress already fetches its
-  // own 6 months this way) — fetch all 6 concurrently, then fold the results
-  // in the SAME oldest-to-newest order `months` already provides, so
-  // `incentivePercent` still ends up as "whichever month's value was most
-  // recently set," unchanged.
   const perMonth = await Promise.all(
     months.map((month) =>
       Promise.all([realRevenueAndProfitByCoordinator(month), MobilisationTarget.findOne({ coordinator: uid, month }).lean()])
@@ -237,7 +249,7 @@ export async function getMySemiAnnualProgress(actor, endMonth) {
     }
   }
 
-  if (!hasAnyTarget) return null; // widget hides itself, same as getMyTarget
+  if (!hasAnyTarget) return null;
 
   const excess = Math.max(0, round2(achieved - semiAnnualTarget));
   const marginRatio = achieved > 0 ? netProfit / achieved : 0;
@@ -255,6 +267,40 @@ export async function getMySemiAnnualProgress(actor, endMonth) {
     incentiveAmount,
     hit: semiAnnualTarget > 0 && achieved >= semiAnnualTarget,
   };
+}
+
+export async function getMyMonthlyProgressWindow(actor, endMonth) {
+  const months = last6Months(endMonth);
+  const uid = actor.userId.toString();
+  
+  const perMonth = await Promise.all(
+    months.map((month) =>
+      Promise.all([realRevenueAndProfitByCoordinator(month), MobilisationTarget.findOne({ coordinator: uid, month }).lean()])
+    )
+  );
+
+  const results = [];
+  for (let i = 0; i < months.length; i++) {
+    const month = months[i];
+    const [{ profitTotals, pendingByCoordinator, currentMonthStr }, targetDoc] = perMonth[i];
+    
+    // We use profit as achieved, as per requirements
+    const achieved = profitTotals.get(uid) ?? 0;
+    const target = targetDoc?.target ?? 0;
+    const isClosed = month < currentMonthStr && !pendingByCoordinator.has(uid);
+    
+    results.push({
+      month,
+      target,
+      achieved,
+      remaining: Math.max(0, target - achieved),
+      hit: target > 0 && achieved >= target,
+      isClosed,
+      hasTarget: !!targetDoc,
+    });
+  }
+  
+  return results;
 }
 
 /**
@@ -324,11 +370,73 @@ export async function getAllSemiAnnualProgress(actor, endMonth) {
   return { windowMonths: months, rows: rows.sort((a, b) => a.coordinator.name.localeCompare(b.coordinator.name)) };
 }
 
+export async function getAllMonthlyProgressWindow(actor, endMonth) {
+  if (!(await canManageTargets(actor))) {
+    throw new ApiError(403, 'You do not have permission to view mobilisation targets.');
+  }
+  const months = last6Months(endMonth);
+
+  const perMonth = await Promise.all(
+    months.map(async (month) => {
+      const [totalsAndPending, targets] = await Promise.all([
+        realRevenueAndProfitByCoordinator(month),
+        MobilisationTarget.find({ month }).lean(),
+      ]);
+      return { 
+        ...totalsAndPending, 
+        targetByCoordinator: new Map(targets.map((t) => [t.coordinator.toString(), t])) 
+      };
+    })
+  );
+
+  const coordinatorIds = new Set();
+  for (const { targetByCoordinator } of perMonth) {
+    for (const uid of targetByCoordinator.keys()) coordinatorIds.add(uid);
+  }
+  if (coordinatorIds.size === 0) return { windowMonths: months, rows: [] };
+
+  const coordinators = await User.find({ _id: { $in: [...coordinatorIds] } })
+    .select('name email')
+    .lean();
+
+  const rows = coordinators.map((c) => {
+    const uid = c._id.toString();
+    const monthlyData = [];
+
+    for (let i = 0; i < months.length; i++) {
+      const month = months[i];
+      const { profitTotals, pendingByCoordinator, currentMonthStr, targetByCoordinator } = perMonth[i];
+      const t = targetByCoordinator.get(uid);
+      
+      const achieved = profitTotals.get(uid) ?? 0;
+      const target = t?.target ?? 0;
+      const isClosed = month < currentMonthStr && !pendingByCoordinator.has(uid);
+      
+      monthlyData.push({
+        month,
+        target,
+        achieved,
+        remaining: Math.max(0, target - achieved),
+        hit: target > 0 && achieved >= target,
+        isClosed,
+        hasTarget: !!t,
+      });
+    }
+
+    return {
+      coordinator: c,
+      monthlyData,
+    };
+  });
+
+  return { windowMonths: months, rows: rows.sort((a, b) => a.coordinator.name.localeCompare(b.coordinator.name)) };
+}
+
 /** A single coordinator's real revenue credit for one month — see
  *  realRevenueByCoordinator's own doc comment. */
 async function sumProgress(coordinatorId, month) {
-  const totals = await realRevenueByCoordinator(month);
-  return totals.get(coordinatorId.toString()) ?? 0;
+  const { profitTotals } = await realRevenueAndProfitByCoordinator(month);
+  return profitTotals.get(coordinatorId.toString()) ?? 0;
 }
 
 /** Count of a coordinator's Own-Employee mobilisations in a month — shown
@@ -373,10 +481,10 @@ async function countOwnEmployeeBatch(coordinatorIds, month) {
  * Mobilisation.aggregate version had to).
  */
 async function sumProgressBatch(coordinatorIds, month) {
-  const totals = await realRevenueByCoordinator(month);
+  const { profitTotals } = await realRevenueAndProfitByCoordinator(month);
   const idSet = new Set(coordinatorIds.map((id) => id.toString()));
   const filtered = new Map();
-  for (const [uid, total] of totals) {
+  for (const [uid, total] of profitTotals) {
     if (idSet.has(uid)) filtered.set(uid, total);
   }
   return filtered;
