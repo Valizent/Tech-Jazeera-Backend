@@ -47,9 +47,16 @@ export function computeEosb({ joiningDate, exitDate, monthlyWage, exitReason }) 
   const totalMonths = monthsOfService(joiningDate, exitDate);
   const serviceYears = totalMonths / 12;
 
-  const firstBracketYears = Math.min(serviceYears, 5);
-  const remainingYears = Math.max(0, serviceYears - 5);
-  const eosbGross = money(firstBracketYears * 0.5 * monthlyWage + remainingYears * monthlyWage);
+  // User requested logic: if contract ends (2 years), 2 months salary. 
+  // Otherwise standard Article 84 fallback.
+  let eosbGross = 0;
+  if (serviceYears >= 2) {
+    eosbGross = money(2 * monthlyWage);
+  } else {
+    const firstBracketYears = Math.min(serviceYears, 5);
+    const remainingYears = Math.max(0, serviceYears - 5);
+    eosbGross = money(firstBracketYears * 0.5 * monthlyWage + remainingYears * monthlyWage);
+  }
 
   let reductionFactor = 1;
   if (exitReason === 'Resignation') {
@@ -98,15 +105,35 @@ export async function createSettlement(data, actor) {
     );
   }
 
-  const { serviceYears, eosbGross, reductionFactor, eosbNet } = computeEosb({
+  let { serviceYears, eosbGross, reductionFactor, eosbNet } = computeEosb({
     joiningDate: employee.joiningDate,
     exitDate: data.exitDate,
     monthlyWage: employee.salary,
     exitReason: data.exitReason,
   });
+  
+  if (data.overrideEosbGross !== undefined) {
+    eosbGross = money(data.overrideEosbGross);
+    eosbNet = money(eosbGross * reductionFactor);
+  }
 
-  const unusedLeaveDays = await unusedLeaveDaysAsOf(employee, data.exitDate);
-  const leaveEncashment = money(unusedLeaveDays * (employee.salary / DAILY_WAGE_DIVISOR));
+  let unusedLeaveDays = await unusedLeaveDaysAsOf(employee, data.exitDate);
+  // User requested logic: 45 days if 2 years, 21 days if 1 year
+  if (serviceYears >= 2) {
+    unusedLeaveDays = 45;
+  } else if (serviceYears >= 1) {
+    unusedLeaveDays = 21;
+  }
+  
+  if (data.overrideLeaveDays !== undefined) {
+    unusedLeaveDays = data.overrideLeaveDays;
+  }
+
+  let leaveEncashment = money(unusedLeaveDays * (employee.salary / DAILY_WAGE_DIVISOR));
+  if (data.overrideLeaveEncashment !== undefined) {
+    leaveEncashment = money(data.overrideLeaveEncashment);
+  }
+
   const totalSettlement = money(eosbNet + leaveEncashment);
 
   const settlement = await Settlement.create({

@@ -14,6 +14,11 @@ export const createSettlementSchema = z.object({
   exitDate: z.coerce.date({ error: 'Exit date is required.' }),
   exitReason: z.enum(EXIT_REASONS, { error: 'Choose why the employee is exiting.' }),
   notes: z.preprocess(emptyToUndef, z.string().trim().max(1000).optional()),
+  
+  // HR manual overrides for the final calculation
+  overrideEosbGross: z.coerce.number().min(0).optional(),
+  overrideLeaveDays: z.coerce.number().min(0).optional(),
+  overrideLeaveEncashment: z.coerce.number().min(0).optional(),
 });
 
 export const listSettlementsSchema = z.object({

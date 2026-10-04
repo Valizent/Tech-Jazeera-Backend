@@ -91,8 +91,19 @@ const employeeObjectSchema = z
     iqama: documentSchema,
     medical: documentSchema,
     drivingLicense: documentSchema,
+    additionalDocuments: z
+      .array(
+        z.object({
+          name: z.string().trim().min(1, 'Name is required.'),
+          number: optionalStr(50),
+          expiry: optionalDate,
+        })
+      )
+      .optional()
+      .default([]),
 
     joiningDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
+    employmentEndDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
     designation: z.string().trim().min(2, 'Designation is required.').max(60),
     department: optionalStr(60),
     salary: z.preprocess(
