@@ -147,38 +147,47 @@ export async function demobilise(req, res) {
   res.json(new ApiResponse('Deployment demobilised.'));
 }
 
+/** POST /api/deployments/:id/monthly-hours/:entryId/sub-invoice — multipart
+ *  (invoiceNumber, invoiceDate, file) — subcontractor-side mirror of
+ *  sendInvoice above — 200 → data: deployment */
 export async function recordSubInvoice(req, res) {
   const file = req.file;
   const data = await subcontractorInvoiceService.recordSubInvoice(req.params.id, req.params.entryId, req.body, file, actor(req));
-  res.json(data);
+  res.json(new ApiResponse('Subcontractor invoice recorded.', data));
 }
 
+/** GET /api/deployments/ready-for-sub-invoice — 200 → data: [{...}] */
 export async function readyForSubInvoice(req, res) {
   const data = await subcontractorInvoiceService.getReadyForSubInvoice(actor(req));
-  res.json({ items: data });
+  res.json(new ApiResponse('Ready for sub-invoice.', data));
 }
 
+/** GET /api/deployments/sub-payments-due — 200 → data: [{...}], one row per subcontractor */
 export async function subPaymentsDue(req, res) {
   const data = await subcontractorInvoiceService.getSubcontractorsPaymentSummary(actor(req));
-  res.json({ items: data });
+  res.json(new ApiResponse('Subcontractor payments due.', data));
 }
 
+/** GET /api/deployments/paid-sub-invoices — 200 → data: [{...}] */
 export async function paidSubInvoices(req, res) {
   const data = await subcontractorInvoiceService.getPaidSubInvoices(actor(req));
-  res.json({ items: data });
+  res.json(new ApiResponse('Paid subcontractor invoices.', data));
 }
 
+/** GET /api/deployments/sub-payments-due/:subcontractorId — 200 → data: {...} drill-down */
 export async function subcontractorPaymentDetail(req, res) {
   const data = await subcontractorInvoiceService.getSubcontractorPaymentDetail(req.params.subcontractorId, actor(req));
-  res.json(data);
+  res.json(new ApiResponse('Subcontractor payment detail.', data));
 }
 
+/** POST /api/deployments/sub-payments-due/:subcontractorId/payments — 201 → data: payment */
 export async function recordSubcontractorPayment(req, res) {
   const data = await subcontractorPaymentService.recordSubcontractorPayment(req.params.subcontractorId, req.body, actor(req));
-  res.status(201).json(data);
+  res.status(201).json(new ApiResponse('Payment recorded.', data));
 }
 
+/** PATCH /api/deployments/sub-payments/:paymentId/decide — 200 → data: payment */
 export async function decideSubcontractorPayment(req, res) {
   const data = await subcontractorPaymentService.decideSubcontractorPayment(req.params.paymentId, req.body, actor(req));
-  res.json(data);
+  res.json(new ApiResponse('Payment decision recorded.', data));
 }
