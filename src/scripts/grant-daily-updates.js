@@ -31,12 +31,12 @@ const GRANTS = [
 await mongoose.connect(env.mongodbUri, { serverSelectionTimeoutMS: 10_000 });
 
 const admin = await User.findOne({ role: 'Admin' }).select('_id name email').lean();
-if (!admin) throw new Error('No real Admin user found — refusing to guess an actor for the audit log.');
+if (!admin) throw new Error('No real Admin user found refusing to guess an actor for the audit log.');
 const actor = { userId: admin._id.toString(), ip: '127.0.0.1' };
 
 for (const { roleName, sectionKey } of GRANTS) {
   const role = await ApprovalRole.findOne({ name: roleName, isActive: true }).select('_id name').lean();
-  if (!role) throw new Error(`ApprovalRole "${roleName}" not found (or inactive) — nothing granted for ${sectionKey}.`);
+  if (!role) throw new Error(`ApprovalRole "${roleName}" not found (or inactive) nothing granted for ${sectionKey}.`);
 
   const current = await getSectionAccess(sectionKey);
   const writeIds = new Set(current.writeApprovalRoles.map((id) => id.toString()));
@@ -50,7 +50,7 @@ for (const { roleName, sectionKey } of GRANTS) {
     },
     actor
   );
-  console.log(`✓ ${sectionKey}: writeApprovalRoles now has ${updated.writeApprovalRoles.length} role(s) — granted ${role.name}`);
+  console.log(`✓ ${sectionKey}: writeApprovalRoles now has ${updated.writeApprovalRoles.length} role(s) granted ${role.name}`);
 }
 
 console.log(`Attributed to Admin: ${admin.name} <${admin.email}>`);

@@ -52,7 +52,7 @@ describe('advance.service addRepayment', () => {
     expect(updated.status).toBe('Closed');
   });
 
-  it('F1-class race: two concurrent repayments that together exceed the amount — exactly one succeeds', async () => {
+  it('F1-class race: two concurrent repayments that together exceed the amount exactly one succeeds', async () => {
     const advance = await makeApprovedAdvance(100);
     const results = await Promise.allSettled([
       addRepayment(advance._id.toString(), { amount: 70, date: new Date() }, actor()),

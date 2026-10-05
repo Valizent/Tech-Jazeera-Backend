@@ -13,7 +13,7 @@ export const ASSET_ASSIGNMENT_STATUSES = ['Active', 'Ended'];
 const assetAssignmentSchema = new mongoose.Schema(
   {
     asset: { type: mongoose.Schema.Types.ObjectId, ref: 'Asset', required: true },
-    assetTag: { type: String, required: true }, // snapshot — reads correctly even if the asset is later retired/renamed
+    assetTag: { type: String, required: true }, // snapshot reads correctly even if the asset is later retired/renamed
     assetName: { type: String, required: true },
     employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true },
     employeeName: { type: String, required: true },

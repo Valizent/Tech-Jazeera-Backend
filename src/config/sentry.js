@@ -42,7 +42,7 @@ if (env.sentryDsn) {
   Sentry.init({
     dsn: env.sentryDsn,
     environment: env.nodeEnv,
-    tracesSampleRate: 0, // error tracking only — no performance/tracing data
+    tracesSampleRate: 0, // error tracking only no performance/tracing data
     sendDefaultPii: false,
     beforeSend(event) {
       if (event.request) {

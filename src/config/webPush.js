@@ -17,7 +17,7 @@ if (pushEnabled) {
   webpush.setVapidDetails(env.vapidSubject, env.vapidPublicKey, env.vapidPrivateKey);
 } else {
   logger.warn(
-    '[webPush] VAPID keys not configured — push notifications are disabled. ' +
+    '[webPush] VAPID keys not configured push notifications are disabled. ' +
       'Run `npm run generate:vapid` and add the output to server/.env to enable them.'
   );
 }

@@ -18,7 +18,7 @@ export async function connectDb() {
     logger.error(`MongoDB connection error: ${err.message}`);
   });
   mongoose.connection.on('disconnected', () => {
-    logger.warn('MongoDB disconnected — Mongoose will retry automatically.');
+    logger.warn('MongoDB disconnected Mongoose will retry automatically.');
   });
   mongoose.connection.on('reconnected', () => {
     logger.info('MongoDB reconnected.');

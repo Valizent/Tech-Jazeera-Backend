@@ -24,7 +24,7 @@ export const MAX_REQUIRED_MINUTES = 24 * 60;
  */
 export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 export const XLS_MIME = 'application/vnd.ms-excel';
-export const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — a month of punches is tiny
+export const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5 MB a month of punches is tiny
 
 /**
  * Worksheet dimension limits (2026-09-22, a real QA-audit finding — P7).

@@ -507,7 +507,7 @@ async function assertNoDateOverlap(workerType, identity, proposedStartDate, prop
       const rangeLabel = periodEnd ? `${startLabel} to ${new Date(period.endDate).toLocaleDateString('en-GB')}` : `${startLabel} (still active)`;
       throw new ApiError(
         409,
-        `This worker was already deployed at ${period.clientName} from ${rangeLabel} — choose dates outside that period.`
+        `This worker was already deployed at ${period.clientName} from ${rangeLabel} choose dates outside that period.`
       );
     }
   }
@@ -545,7 +545,7 @@ export async function createMobilisation(data, actor) {
       await MobilisationSubmissionLock.create({ key: lockKey });
     } catch (err) {
       if (err?.code === 11000) {
-        throw new ApiError(409, 'Another mobilisation for this worker is already being processed — try again in a moment.');
+        throw new ApiError(409, 'Another mobilisation for this worker is already being processed try again in a moment.');
       }
       throw err;
     }
@@ -562,7 +562,7 @@ export async function createMobilisation(data, actor) {
       // minutes later. Reversing a mistaken Exit needs no new UI — status is
       // already a plain editable field on the Employee form.
       if (employee.status === 'Exited') {
-        throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
+        throw new ApiError(400, 'This employee has exited the company re-activate their record first if this is a mistake.');
       }
       // 2026-10-03, the user's own ask: salary only matters for an Own
       // employee actually sent out to work for a client (every Employee-type
@@ -575,7 +575,7 @@ export async function createMobilisation(data, actor) {
       // was silently computing as 0 for a worker with no salary on file,
       // overstating profit with no warning anywhere.
       if (employee.salary == null) {
-        throw new ApiError(400, `${employee.fullName} has no salary on file — set it on their employee profile before mobilising them.`);
+        throw new ApiError(400, `${employee.fullName} has no salary on file set it on their employee profile before mobilising them.`);
       }
       await assertNoActivePlacement(data.worker);
       await assertNoDateOverlap('Employee', { workerId: data.worker }, data.mobilisationDate, data.checkoutDate);
@@ -1052,13 +1052,13 @@ export async function updateMobilisation(id, data, actor) {
     if (workerActuallyChanged) {
       if (workerType === 'Employee') {
         if (employee.status === 'Exited') {
-          throw new ApiError(400, 'This employee has exited the company — re-activate their record first if this is a mistake.');
+          throw new ApiError(400, 'This employee has exited the company re-activate their record first if this is a mistake.');
         }
         // See createMobilisation's own 2026-10-03 comment — same check,
         // re-run here since retargeting onto a different Employee is exactly
         // as capable of landing on a no-salary worker as creating fresh.
         if (employee.salary == null) {
-          throw new ApiError(400, `${employee.fullName} has no salary on file — set it on their employee profile before mobilising them.`);
+          throw new ApiError(400, `${employee.fullName} has no salary on file set it on their employee profile before mobilising them.`);
         }
         await assertNoActivePlacement(workerInput.worker);
       } else {
@@ -1608,7 +1608,7 @@ async function approveMobilisation(id, decisionNote, actor) {
       );
       throw new ApiError(
         500,
-        'Approval could not be completed because creating the deployment record failed. The approval was reverted — please try again.'
+        'Approval could not be completed because creating the deployment record failed. The approval was reverted please try again.'
       );
     }
     // A mobilisation started from a Requirements card: mark that candidate
@@ -1888,7 +1888,7 @@ export async function archiveWorkerData(iqamaNumber, actor) {
       if (hasActiveMobilisation || activeDeploymentCount > 0) {
         throw new ApiError(
           409,
-          'This worker still has an active mobilisation or deployment — demobilise/complete it first.'
+          'This worker still has an active mobilisation or deployment demobilise/complete it first.'
         );
       }
 

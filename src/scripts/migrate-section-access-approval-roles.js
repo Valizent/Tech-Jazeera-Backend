@@ -88,7 +88,7 @@ for (const roleName of MIGRATABLE_ROLES) {
   if (!approvalRole) {
     approvalRole = await ApprovalRole.create({
       name: roleName,
-      description: `Auto-created during the Section Access login-role migration — every login with role "${roleName}".`,
+      description: `Auto-created during the Section Access login-role migration every login with role "${roleName}".`,
       members: usersWithRole.map((u) => u._id),
     });
     console.log(`  + created "${roleName}" with ${usersWithRole.length} member(s): ${usersWithRole.map((u) => u.name).join(', ') || '(none)'}`);
@@ -100,7 +100,7 @@ for (const roleName of MIGRATABLE_ROLES) {
       await approvalRole.save();
       console.log(`  ~ reused existing "${roleName}", added ${missing.length} missing member(s): ${missing.map((u) => u.name).join(', ')}`);
     } else {
-      console.log(`  = reused existing "${roleName}" — already has every ${roleName} login (${usersWithRole.length}).`);
+      console.log(`  = reused existing "${roleName}" already has every ${roleName} login (${usersWithRole.length}).`);
     }
   }
   roleIdByName.set(roleName, approvalRole._id);

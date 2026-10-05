@@ -80,7 +80,7 @@ function baseMobilisationInput({ employeeId, clientId, mobilisationDate, checkou
   };
 }
 
-describe('assertNoDateOverlap — checkout-date-aware (2026-09-16 backlog-entry fix)', () => {
+describe('assertNoDateOverlap checkout-date-aware (2026-09-16 backlog-entry fix)', () => {
   it('reproduces the user\'s exact report: a backlog entry with NO checkout date is blocked by a later real placement', async () => {
     const employee = await makeEmployee();
     const conflictClient = await makeClient('UNITED ARK CONTRACTING');
@@ -204,7 +204,7 @@ describe('assertNoDateOverlap — checkout-date-aware (2026-09-16 backlog-entry 
     });
   });
 
-  it('no checkout date and no later real placement — plain open-ended create still works (baseline unaffected)', async () => {
+  it('no checkout date and no later real placement plain open-ended create still works (baseline unaffected)', async () => {
     const employee = await makeEmployee();
     const newClient = await makeClient('Backlog Test Client F');
     const created = await createMobilisation(

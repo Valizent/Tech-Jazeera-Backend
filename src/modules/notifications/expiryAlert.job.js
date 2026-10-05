@@ -69,7 +69,7 @@ export async function runExpiryAlertCheck() {
   }
 
   if (items.length === 0 || staffUsers.length === 0) {
-    logger.info('[expiryAlertJob] nothing expiring, or no staff to notify — skipped.');
+    logger.info('[expiryAlertJob] nothing expiring, or no staff to notify skipped.');
     return { itemsFound: items.length, notificationsSent: 0 };
   }
 
@@ -77,7 +77,7 @@ export async function runExpiryAlertCheck() {
   for (const item of items) {
     const daysLeft = daysUntil(item.expiry);
     const title = daysLeft < 0 ? `${item.label} expired` : `${item.label} expiring soon`;
-    const body = `${item.ownerName} (${item.ref}) — ${
+    const body = `${item.ownerName} (${item.ref}) ${
       daysLeft < 0 ? `expired ${Math.abs(daysLeft)} day(s) ago` : `${daysLeft} day(s) left`
     }.`;
     for (const staff of staffUsers) {

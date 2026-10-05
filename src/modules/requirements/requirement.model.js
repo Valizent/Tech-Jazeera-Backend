@@ -32,7 +32,7 @@ import mongoose from 'mongoose';
 const stageMoveSchema = new mongoose.Schema(
   {
     stage: { type: mongoose.Schema.Types.ObjectId, ref: 'RequirementStage', required: true },
-    stageName: { type: String, required: true }, // snapshot — survives the stage being renamed or deleted
+    stageName: { type: String, required: true }, // snapshot survives the stage being renamed or deleted
     movedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     movedAt: { type: Date, default: Date.now },
   },
@@ -52,7 +52,7 @@ export const CANDIDATE_WORKER_TYPES = ['SupplierEmployee', 'Freelancer'];
 const candidateSchema = new mongoose.Schema({
   workerType: { type: String, enum: CANDIDATE_WORKER_TYPES, required: true },
   workerName: { type: String, required: true, trim: true, maxlength: 150 },
-  iqamaNumber: { type: String, trim: true, default: null }, // often not known yet — optional
+  iqamaNumber: { type: String, trim: true, default: null }, // often not known yet optional
   nationality: { type: String, trim: true, maxlength: 80, default: null },
   phone: { type: String, trim: true, maxlength: 30, default: null },
   // Only for SupplierEmployee. `subcontractorName` is the usual durable snapshot.

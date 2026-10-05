@@ -18,7 +18,7 @@ export async function buildXlsx(summary) {
   const ws = wb.addWorksheet('Attendance Summary');
 
   ws.mergeCells('A1', 'H1');
-  ws.getCell('A1').value = `Attendance Summary — ${summary.from} to ${summary.to}`;
+  ws.getCell('A1').value = `Attendance Summary ${summary.from} to ${summary.to}`;
   ws.getCell('A1').font = { bold: true, size: 14 };
   ws.addRow([]);
 

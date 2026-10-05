@@ -334,7 +334,7 @@ ${ogImage ? `<meta property="og:image" content="${h(ogImage)}">` : ''}
      IP or a tunnel host that differs from the configured public base url, and a
      relative path always posts back to wherever the page actually came from.
      sendBeacon survives the page being unloaded by the outgoing tel:/https link;
-     fetch(keepalive) is the fallback. Failure is silent — it must never get in
+     fetch(keepalive) is the fallback. Failure is silent it must never get in
      the way of the tap. */
   var endpoint='/c/'+${JSON.stringify(String(token ?? ''))}+'/e';
   Array.prototype.forEach.call(document.querySelectorAll('[data-t]'),function(a){

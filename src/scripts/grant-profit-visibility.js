@@ -43,13 +43,13 @@ const TARGET_KEYS = ['mobilisationsViewer', 'deploymentsHoursDecide', 'dashboard
 await mongoose.connect(env.mongodbUri, { serverSelectionTimeoutMS: 10_000 });
 
 const admin = await User.findOne({ role: 'Admin' }).select('_id name email').lean();
-if (!admin) throw new Error('No real Admin user found — refusing to guess an actor for the audit log.');
+if (!admin) throw new Error('No real Admin user found refusing to guess an actor for the audit log.');
 const actor = { userId: admin._id.toString(), ip: '127.0.0.1' };
 
 const roles = await ApprovalRole.find({ name: { $in: TARGET_ROLE_NAMES }, isActive: true }).select('_id name').lean();
 console.log(`Found ${roles.length}/${TARGET_ROLE_NAMES.length} target roles:`, roles.map((r) => r.name).join(', '));
 const missing = TARGET_ROLE_NAMES.filter((n) => !roles.some((r) => r.name === n));
-if (missing.length) console.log('MISSING (not granted — role does not exist or is inactive):', missing.join(', '));
+if (missing.length) console.log('MISSING (not granted role does not exist or is inactive):', missing.join(', '));
 const roleIds = roles.map((r) => r._id);
 
 for (const key of TARGET_KEYS) {

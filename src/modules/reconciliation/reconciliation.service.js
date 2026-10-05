@@ -46,7 +46,7 @@ async function orphanedMobilisations() {
     .map((m) => ({
       category: 'orphanedMobilisation',
       severity: 'high',
-      summary: `${m.serialNumber} (${m.workerName} — ${m.clientName}) is ${m.status} but has no Deployment.`,
+      summary: `${m.serialNumber} (${m.workerName} ${m.clientName}) is ${m.status} but has no Deployment.`,
       targetType: 'Mobilisation',
       targetId: m._id,
       url: `/mobilisations/${m._id}`,

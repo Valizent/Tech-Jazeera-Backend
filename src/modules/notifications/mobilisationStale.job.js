@@ -44,7 +44,7 @@ export async function runMobilisationStaleCheck() {
   ]);
 
   if (staleMobilisations.length === 0 || managers.length === 0) {
-    logger.info('[mobilisationStaleJob] nothing stale, or no Manager to notify — skipped.');
+    logger.info('[mobilisationStaleJob] nothing stale, or no Manager to notify skipped.');
     return { itemsFound: staleMobilisations.length, notificationsSent: 0 };
   }
 

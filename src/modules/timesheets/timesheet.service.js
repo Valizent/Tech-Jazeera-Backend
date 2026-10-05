@@ -227,7 +227,7 @@ function buildTimesheetFinalNotification(doc) {
   return {
     type: 'RequestStatus',
     title: `Timesheet ${doc.status.toLowerCase()}`,
-    body: `Week of ${new Date(doc.periodStart).toISOString().slice(0, 10)}${doc.decisionNote ? ` — ${doc.decisionNote}` : ''}`,
+    body: `Week of ${new Date(doc.periodStart).toISOString().slice(0, 10)}${doc.decisionNote ? ` ${doc.decisionNote}` : ''}`,
     url: (role) => (role === 'Worker' ? '/me/attendance' : '/timesheets'),
   };
 }

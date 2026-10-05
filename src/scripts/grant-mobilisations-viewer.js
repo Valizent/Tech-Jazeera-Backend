@@ -24,11 +24,11 @@ const TARGET_KEY = 'mobilisationsViewer';
 await mongoose.connect(env.mongodbUri, { serverSelectionTimeoutMS: 10_000 });
 
 const admin = await User.findOne({ role: 'Admin' }).select('_id name email').lean();
-if (!admin) throw new Error('No real Admin user found — refusing to guess an actor for the audit log.');
+if (!admin) throw new Error('No real Admin user found refusing to guess an actor for the audit log.');
 const actor = { userId: admin._id.toString(), ip: '127.0.0.1' };
 
 const role = await ApprovalRole.findOne({ name: TARGET_ROLE_NAME, isActive: true }).select('_id name').lean();
-if (!role) throw new Error(`ApprovalRole "${TARGET_ROLE_NAME}" not found (or inactive) — nothing granted.`);
+if (!role) throw new Error(`ApprovalRole "${TARGET_ROLE_NAME}" not found (or inactive) nothing granted.`);
 
 const current = await getSectionAccess(TARGET_KEY);
 const existingReadIds = new Set(current.readApprovalRoles.map((id) => id.toString()));

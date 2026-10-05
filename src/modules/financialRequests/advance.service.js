@@ -52,7 +52,7 @@ export async function submitAdvance(employeeId, data, actor) {
     status: { $in: ['Pending', 'Approved'] },
   }).lean();
   if (active) {
-    throw new ApiError(409, 'You already have an advance request in progress — it must be decided and repaid before requesting another.');
+    throw new ApiError(409, 'You already have an advance request in progress it must be decided and repaid before requesting another.');
   }
 
   // Unlike Leave, every advance request needs a real decision (no

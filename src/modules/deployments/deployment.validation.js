@@ -120,7 +120,7 @@ const employeeAdditionalAmountNote = optionalStr(500);
 
 export const addMonthlyHoursSchema = z.object({
   month: monthStr,
-  actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
+  actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month check the figure.'),
   supplierHours,
   deductionAmount,
   supplierDeductionAmount,
@@ -133,7 +133,7 @@ export const addMonthlyHoursSchema = z.object({
 /** Correcting an already-entered month — same shape, month itself is fixed
  *  (it identifies which entry, never changes on an edit). */
 export const updateMonthlyHoursSchema = z.object({
-  actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month — check the figure.'),
+  actualHours: z.coerce.number({ error: 'Enter the client timesheet hours.' }).min(0, 'Cannot be negative.').max(1000, 'That looks too high for one month check the figure.'),
   supplierHours,
   deductionAmount,
   supplierDeductionAmount,
@@ -167,7 +167,7 @@ export const clientPaymentIdParamSchema = z.object({ paymentId: id });
  *  pays in bulk for everyone placed there, never per worker; see
  *  clientPayment.service.js). */
 export const recordClientPaymentSchema = z.object({
-  amount: z.coerce.number({ error: 'Enter the amount received.' }).positive('Must be greater than zero.').max(10_000_000, 'That looks too high — check the figure.'),
+  amount: z.coerce.number({ error: 'Enter the amount received.' }).positive('Must be greater than zero.').max(10_000_000, 'That looks too high check the figure.'),
   paymentReference: optionalStr(100),
   paymentDate: z.coerce.date({ error: 'Enter a valid payment date.' }).optional(),
 });

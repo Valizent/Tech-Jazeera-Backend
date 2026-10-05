@@ -169,7 +169,7 @@ export async function parseAttendanceWorkbook(buffer, { month, year }) {
     if (rowCount > MAX_DATA_ROWS) {
       throw new ApiError(
         400,
-        `This workbook has ${rowCount.toLocaleString()} rows, more than the ${MAX_DATA_ROWS.toLocaleString()} this tool accepts. A real one-employee, one-month export is far smaller — check the file.`
+        `This workbook has ${rowCount.toLocaleString()} rows, more than the ${MAX_DATA_ROWS.toLocaleString()} this tool accepts. A real one-employee, one-month export is far smaller check the file.`
       );
     }
     if (colCount > MAX_DATA_COLUMNS) {
@@ -243,7 +243,7 @@ export async function parseAttendanceWorkbook(buffer, { month, year }) {
       if (hasContent) {
         skipped++;
         if (skipWarnShown < 15) {
-          warnings.push(`Row ${excelRowNumber}: could not read the date/time — skipped.`);
+          warnings.push(`Row ${excelRowNumber}: could not read the date/time skipped.`);
           skipWarnShown++;
         }
       }

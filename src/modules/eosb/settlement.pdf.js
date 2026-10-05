@@ -66,7 +66,7 @@ export function buildSettlementPdf(s, company = null, logo = null) {
     doc.font('Helvetica-Bold').fontSize(9).fillColor('#666').text('END OF SERVICE AWARD (ARTICLES 84–85)', left, y);
     y += 16;
     row('Gross award (Article 84)', money(s.eosbGross), { note: 'Half a month’s wage per year for the first 5 years, a full month’s wage per year after.' });
-    row('Reduction applied', fraction(s.reductionFactor), { note: s.exitReason === 'Resignation' ? 'Article 85 resignation tiering, by length of service.' : 'Not a resignation — full award, no reduction.' });
+    row('Reduction applied', fraction(s.reductionFactor), { note: s.exitReason === 'Resignation' ? 'Article 85 resignation tiering, by length of service.' : 'Not a resignation full award, no reduction.' });
     row('Net end-of-service award', money(s.eosbNet), { bold: true });
 
     y += 10;

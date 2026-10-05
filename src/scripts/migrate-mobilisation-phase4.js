@@ -44,7 +44,7 @@ const legacyDocs = await Mobilisation.collection
   .toArray();
 
 if (legacyDocs.length === 0) {
-  console.log('✓ No pre-Phase-4 mobilisation documents found — nothing to migrate.');
+  console.log('✓ No pre-Phase-4 mobilisation documents found nothing to migrate.');
 } else {
   for (const doc of legacyDocs) {
     const set = {};

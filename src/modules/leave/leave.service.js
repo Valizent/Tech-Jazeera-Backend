@@ -132,7 +132,7 @@ async function evaluateContractCycle(employee, leaveType, requestedDays, now) {
     entitlementDays: leaveType.daysPerCycle,
     usedDays: cyclesUsed * leaveType.daysPerCycle,
     remainingDays: cyclesAvailable * leaveType.daysPerCycle,
-    ruleApplied: `Contract-cycle leave: ${leaveType.daysPerCycle} days every ${leaveType.cycleYears} years — ${cyclesCompleted} cycle(s) completed, ${cyclesUsed} already taken.`,
+    ruleApplied: `Contract-cycle leave: ${leaveType.daysPerCycle} days every ${leaveType.cycleYears} years ${cyclesCompleted} cycle(s) completed, ${cyclesUsed} already taken.`,
   };
 }
 
@@ -223,7 +223,7 @@ async function evaluateSick(employee, leaveType, requestedDays, now) {
     remainingDays,
     ruleApplied: eligible
       ? `Sick leave: ${breakdownText || 'no days allocated'}. ${usedDays} used of ${totalCap} this leave year (since ${yearStart.toDateString()}).`
-      : `Sick leave: only ${remainingDays} of ${totalCap} day(s) remain this leave year (since ${yearStart.toDateString()}) — requested ${requestedDays}.`,
+      : `Sick leave: only ${remainingDays} of ${totalCap} day(s) remain this leave year (since ${yearStart.toDateString()}) requested ${requestedDays}.`,
     payBreakdown,
   };
 }
@@ -252,7 +252,7 @@ export async function evaluateEligibility(employee, leaveType, requestedDays, no
   if (!employee.joiningDate) {
     throw new ApiError(
       400,
-      'This employee has no joining date on file — add one before requesting leave.'
+      'This employee has no joining date on file add one before requesting leave.'
     );
   }
   if (leaveType.recurrence === 'Annual') return evaluateAnnual(employee, leaveType, requestedDays, now);
@@ -361,7 +361,7 @@ export async function submitLeaveRequest(employeeId, { leaveType: leaveTypeId, s
     await LeaveSubmissionLock.create({ employee: employee._id });
   } catch (err) {
     if (err?.code === 11000) {
-      throw new ApiError(409, 'Another leave submission for this employee is already being processed — try again in a moment.');
+      throw new ApiError(409, 'Another leave submission for this employee is already being processed try again in a moment.');
     }
     throw err;
   }

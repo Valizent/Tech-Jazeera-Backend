@@ -221,7 +221,7 @@ export async function markReimbursementPaid(id, actor) {
     category: 'Staff Reimbursement',
     vendor: employee?.fullName ?? 'Employee reimbursement',
     amount: claim.amount,
-    notes: `${claim.category} reimbursement claim${claim.description ? ` — ${claim.description}` : ''}.`,
+    notes: `${claim.category} reimbursement claim${claim.description ? ` ${claim.description}` : ''}.`,
     recordedBy: actor.userId,
     sourceReimbursement: claim._id,
   });

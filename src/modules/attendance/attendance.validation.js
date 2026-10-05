@@ -36,7 +36,7 @@ export const markBulkSchema = z.object({
         note: optionalNote,
       })
     )
-    .min(1, 'Nothing to save — mark at least one worker.')
+    .min(1, 'Nothing to save mark at least one worker.')
     .max(500),
 });
 

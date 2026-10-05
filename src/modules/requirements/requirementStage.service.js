@@ -107,7 +107,7 @@ export async function reorderStages(ids, actor) {
 
 export async function createSuggestedStages(actor) {
   if ((await RequirementStage.estimatedDocumentCount()) > 0) {
-    throw new ApiError(409, 'Stages already exist — the suggested set is only offered on an empty board.');
+    throw new ApiError(409, 'Stages already exist the suggested set is only offered on an empty board.');
   }
   const stages = await RequirementStage.insertMany(SUGGESTED_STAGES.map((s, order) => ({ ...s, order })));
   await audit('requirementStage.defaults', null, actor, { count: stages.length });

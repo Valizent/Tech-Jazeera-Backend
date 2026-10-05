@@ -30,10 +30,10 @@ export const createDailyUpdateSchema = z
   .object({
     kind: z.enum(DAILY_UPDATE_KINDS),
     text,
-    date: optionalDate, // Log only — defaults to today in the service
+    date: optionalDate, // Log only defaults to today in the service
     dueDate: optionalDate, // Task only
-    coordinator: z.preprocess(emptyToUndef, objectId.optional()), // Task only — the assignee; defaults to the caller
-    requirement: z.preprocess(emptyToUndef, objectId.optional()), // Log only — the Requirements card it is about
+    coordinator: z.preprocess(emptyToUndef, objectId.optional()), // Task only the assignee; defaults to the caller
+    requirement: z.preprocess(emptyToUndef, objectId.optional()), // Log only the Requirements card it is about
   })
   .superRefine((v, ctx) => {
     if (v.kind === 'Log') {

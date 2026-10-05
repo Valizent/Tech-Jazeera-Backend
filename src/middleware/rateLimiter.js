@@ -27,7 +27,7 @@ const limitReached = {
 
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 600, // per IP per window — roomy for an office sharing one IP
+  limit: 600, // per IP per window roomy for an office sharing one IP
   standardHeaders: 'draft-7', // send RateLimit-* headers so clients can back off
   legacyHeaders: false,
   message: limitReached,

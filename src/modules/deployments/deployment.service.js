@@ -433,7 +433,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     { new: true }
   );
   if (!updated) {
-    throw new ApiError(409, 'Hours for this month have already been entered — edit that entry instead.');
+    throw new ApiError(409, 'Hours for this month have already been entered edit that entry instead.');
   }
 
   await logAudit({
@@ -682,7 +682,7 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
         notifyUser(userId, {
           type: 'RequestStatus',
           title: `${updatedEntry.month} hours ready to invoice for ${updated.workerName}`,
-          body: `${updated.clientName} — approved and ready for a client invoice.`,
+          body: `${updated.clientName} approved and ready for a client invoice.`,
           url: `/deployments/${updated._id}`,
         })
       )
@@ -765,7 +765,7 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
   if (data.invoiceDate < earliestInvoiceDate) {
     throw new ApiError(
       400,
-      `${entry.month} hasn't finished yet — the invoice date can't be before ${earliestInvoiceDate.toISOString().slice(0, 10)}.`
+      `${entry.month} hasn't finished yet the invoice date can't be before ${earliestInvoiceDate.toISOString().slice(0, 10)}.`
     );
   }
 
@@ -829,7 +829,7 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
       notifyUser(userId, {
         type: 'RequestStatus',
         title: `Invoice ${data.invoiceNumber} sent for ${updated.workerName} (${updatedEntry.month})`,
-        body: `${updated.clientName} — payment due by ${updatedEntry.invoiceDueAt.toDateString()}.`,
+        body: `${updated.clientName} payment due by ${updatedEntry.invoiceDueAt.toDateString()}.`,
         url: `/deployments/payments-due`,
       })
     )
@@ -1302,7 +1302,7 @@ export async function demobiliseDeployment(deploymentId, data, actor) {
 
   const isEmployeeOnlyReason = EMPLOYEE_ONLY_DEMOBILISATION_REASONS.includes(data.reason);
   if (isEmployeeOnlyReason && deployment.workerType !== 'Employee') {
-    throw new ApiError(400, 'This reason only applies to a real Employee — this worker has no employment relationship with the company to end.');
+    throw new ApiError(400, 'This reason only applies to a real Employee this worker has no employment relationship with the company to end.');
   }
   const isExitOutcome =
     deployment.workerType === 'Employee' &&
@@ -1333,7 +1333,7 @@ export async function demobiliseDeployment(deploymentId, data, actor) {
         { session }
       );
       if (!updatedMobilisation) {
-        throw new ApiError(409, 'The source mobilisation is no longer Approved — cannot demobilise.');
+        throw new ApiError(409, 'The source mobilisation is no longer Approved cannot demobilise.');
       }
     });
     await logAudit({
@@ -1365,7 +1365,7 @@ export async function demobiliseDeployment(deploymentId, data, actor) {
       deciderIds.map((userId) =>
         notifyUser(userId, {
           type: 'RequestStatus',
-          title: `${deployment.workerName} has exited the company — an EOSB settlement may be due`,
+          title: `${deployment.workerName} has exited the company an EOSB settlement may be due`,
           url: `/eosb/new?employee=${deployment.worker}`,
         })
       )
@@ -1846,7 +1846,7 @@ export async function deductionsForEmployeesMonth(employeeIds, monthStr) {
       (m) => m.month === monthStr && m.deductionAmount > 0 && m.status === 'Approved'
     );
     if (entry) {
-      byEmployee.get(String(deployment.worker))?.push({ label: `Client deduction — ${deployment.clientName} (${monthStr})`, amount: entry.deductionAmount });
+      byEmployee.get(String(deployment.worker))?.push({ label: `Client deduction ${deployment.clientName} (${monthStr})`, amount: entry.deductionAmount });
     }
   }
   return byEmployee;

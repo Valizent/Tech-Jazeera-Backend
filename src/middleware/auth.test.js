@@ -60,7 +60,7 @@ async function makeUser() {
   });
 }
 
-describe('requireAuth — tokenVersion revocation (F8)', () => {
+describe('requireAuth tokenVersion revocation (F8)', () => {
   it('accepts a token whose tokenVersion matches the current user', async () => {
     const user = await makeUser();
     const req = fakeReq(sign(user._id, 0));
@@ -88,7 +88,7 @@ describe('requireAuth — tokenVersion revocation (F8)', () => {
     expect(err).toBeUndefined();
   });
 
-  it('treats a legacy token with no tokenVersion claim as version 0 — not force-invalidated by this field existing', async () => {
+  it('treats a legacy token with no tokenVersion claim as version 0 not force-invalidated by this field existing', async () => {
     const user = await makeUser(); // tokenVersion defaults to 0
     const legacyToken = jwt.sign({ sub: user._id.toString(), role: 'Admin' }, env.jwtAccessSecret, { expiresIn: '15m' });
     const err = await runAuth(fakeReq(legacyToken));

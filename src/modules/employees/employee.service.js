@@ -264,7 +264,7 @@ export async function createEmployeeLogin(employeeId, { email, role }, actor) {
   if (employee.type !== 'Own') {
     throw new ApiError(
       400,
-      'A login can only be created for an Own-type (internal staff) employee — the self-service portal is not available to Outsourced or Subcontracted workers.'
+      'A login can only be created for an Own-type (internal staff) employee the self-service portal is not available to Outsourced or Subcontracted workers.'
     );
   }
 
@@ -275,7 +275,7 @@ export async function createEmployeeLogin(employeeId, { email, role }, actor) {
   if (!loginEmail) {
     throw new ApiError(
       400,
-      'This employee has no email on file — add one, or provide an email for the login.'
+      'This employee has no email on file add one, or provide an email for the login.'
     );
   }
 

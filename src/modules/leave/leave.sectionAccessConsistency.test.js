@@ -41,11 +41,11 @@ async function makePendingLeaveRequest() {
     startDate: new Date('2027-01-10'),
     endDate: new Date('2027-01-12'),
     days: 3,
-    status: 'PendingReview', // legacy path — no workflow
+    status: 'PendingReview', // legacy path no workflow
   });
 }
 
-describe('listLeaveRequests canDecideCurrentStep — Section Access consistency', () => {
+describe('listLeaveRequests canDecideCurrentStep Section Access consistency', () => {
   it('a Manager (a legacy-allowed decide role) with NO leaveRequests Section Access write grant sees canDecideCurrentStep: false', async () => {
     await makePendingLeaveRequest();
     const actor = { userId: new mongoose.Types.ObjectId().toString(), role: 'Manager', employee: null };

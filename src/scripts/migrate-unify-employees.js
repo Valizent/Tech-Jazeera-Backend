@@ -66,7 +66,7 @@ for (const user of unlinked) {
   await user.save();
   console.log(`✓ ${user.email} (${user.role}) → new employee ${employeeId} (${user.name}).`);
 }
-if (unlinked.length === 0) console.log('✓ No unlinked non-Admin logins found — nothing to backfill.');
+if (unlinked.length === 0) console.log('✓ No unlinked non-Admin logins found nothing to backfill.');
 
 // --- Step 3: drop the now-superseded managedBy field ------------------------
 const unsetResult = await User.collection.updateMany({}, { $unset: { managedBy: '' } });

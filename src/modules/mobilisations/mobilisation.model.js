@@ -160,7 +160,7 @@ const mobilisationSchema = new mongoose.Schema(
     site: { type: String, trim: true, default: null },
     clientRate: { type: Number, default: 0, min: 0 }, // per hour
     clientCommission: { type: Number, default: 0, min: 0 }, // per hour
-    fta: { type: Number, default: 0, min: 0 }, // per month — Food/Travel/Accommodation, company-paid
+    fta: { type: Number, default: 0, min: 0 }, // per month Food/Travel/Accommodation, company-paid
     ftaType: { type: String, enum: FTA_TYPES, default: null }, // what the amount above actually covers
     allowance: { type: Number, default: 0, min: 0 }, // per month, company-paid
     allowanceRemark: { type: String, trim: true, maxlength: 200, default: null }, // free-typed: what this allowance is for
@@ -176,7 +176,7 @@ const mobilisationSchema = new mongoose.Schema(
     mobilisationCost: { type: Number, default: 0, min: 0 },
 
     // --- Section 1: subcontractor — only when workerType === 'SupplierEmployee' ---
-    hasSubcontractor: { type: Boolean, default: false }, // server-derived from workerType — never client-writable
+    hasSubcontractor: { type: Boolean, default: false }, // server-derived from workerType never client-writable
     subcontractor: { type: mongoose.Schema.Types.ObjectId, ref: 'Subcontractor', default: null },
     subcontractorName: { type: String, default: null }, // snapshot of Subcontractor.name
     subcontractorRate: { type: Number, default: 0, min: 0 }, // per hour

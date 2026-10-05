@@ -185,7 +185,7 @@ export async function refresh({ refreshToken, ip }) {
   if (stored.rotatedAt && Date.now() - stored.rotatedAt.getTime() > REFRESH_REUSE_GRACE_MS) {
     await RefreshToken.deleteMany({ user: stored.user });
     await logAudit({ user: stored.user, action: 'auth.refresh.reuse_detected', ip });
-    logger.warn(`Refresh token reuse detected for user ${stored.user} — all sessions revoked.`);
+    logger.warn(`Refresh token reuse detected for user ${stored.user} all sessions revoked.`);
     throw new ApiError(401, 'Session invalidated. Please log in again.');
   }
 

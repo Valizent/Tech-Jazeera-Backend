@@ -96,7 +96,7 @@ export async function updateClient(id, data, actor) {
       throw new ApiError(403, 'You can only edit clients you added yourself.');
     }
     if (client.approvalStatus === 'Approved') {
-      throw new ApiError(403, 'This client is already approved — ask an Admin or Manager to make further changes.');
+      throw new ApiError(403, 'This client is already approved ask an Admin or Manager to make further changes.');
     }
     const wasRejected = client.approvalStatus === 'Rejected';
     data.approvalStatus = 'Pending';
@@ -176,7 +176,7 @@ export async function decideClient(id, { status, decisionNote }, actor) {
   // notifyEmployeeUser() call in this module.
   await notifyUser(client.createdBy, {
     type: 'RequestStatus',
-    title: `${client.companyName} — client submission ${status.toLowerCase()}`,
+    title: `${client.companyName} client submission ${status.toLowerCase()}`,
     body: decisionNote || undefined,
     url: `/clients/${client._id}`,
   });

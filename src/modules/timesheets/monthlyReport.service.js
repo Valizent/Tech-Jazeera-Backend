@@ -49,7 +49,7 @@ import Holiday from '../holidays/holiday.model.js';
 import { minutesToHHMM, daysInMonth, weekdayShort } from '../timesheetProcessor/timesheet.time.js';
 import { DEFAULT_REQUIRED_MINUTES } from '../timesheetProcessor/timesheet.constants.js';
 
-const RIYADH_TZ = 'Asia/Riyadh'; // fixed UTC+3, no DST — safe to hardcode
+const RIYADH_TZ = 'Asia/Riyadh'; // fixed UTC+3, no DST safe to hardcode
 
 /** Minute-of-day (0..1439), in Saudi local time, for a stored UTC instant.
  *  Needed because this runs server-side (unlike the rest of the app, which
@@ -109,8 +109,8 @@ export async function buildMonthlyAttendanceReport(employee, { year, month }) {
   const summary = {
     workingDays: 0, // expected to work: excludes Holiday and Off days
     holidayDays: 0,
-    offDays: 0, // weekly off — inferred, or explicitly marked
-    presentDays: 0, // includes Present/Overtime/Deficient — any day with a real worked-hours figure
+    offDays: 0, // weekly off inferred, or explicitly marked
+    presentDays: 0, // includes Present/Overtime/Deficient any day with a real worked-hours figure
     absentDays: 0,
     leaveDays: 0,
     sickDays: 0,

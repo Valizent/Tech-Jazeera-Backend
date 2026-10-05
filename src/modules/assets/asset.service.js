@@ -58,7 +58,7 @@ export async function setAssetStatus(id, status, actor) {
   const asset = await Asset.findById(id);
   if (!asset) throw new ApiError(404, 'Asset not found.');
   if (asset.status === 'Assigned') {
-    throw new ApiError(400, 'This asset is currently assigned — return it first.');
+    throw new ApiError(400, 'This asset is currently assigned return it first.');
   }
   asset.status = status;
   await asset.save();
@@ -76,7 +76,7 @@ export async function setAssetStatus(id, status, actor) {
 export async function deleteAsset(id, actor) {
   const hasHistory = await AssetAssignment.exists({ asset: id });
   if (hasHistory) {
-    throw new ApiError(400, 'This asset has assignment history — retire it instead of deleting.');
+    throw new ApiError(400, 'This asset has assignment history retire it instead of deleting.');
   }
   const asset = await Asset.findByIdAndDelete(id).lean();
   if (!asset) throw new ApiError(404, 'Asset not found.');
@@ -154,7 +154,7 @@ export async function assignAsset(assetId, data, actor) {
     return assignment.toObject();
   } catch (err) {
     if (err?.code === 11000) {
-      throw new ApiError(409, 'This asset was just assigned to someone else — refresh and try again.');
+      throw new ApiError(409, 'This asset was just assigned to someone else refresh and try again.');
     }
     throw err;
   } finally {

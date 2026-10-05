@@ -163,7 +163,7 @@ const audit = (action, requirement, actor, meta = {}) =>
     ip: actor.ip,
   });
 
-const summary = (requirement) => `${requirement.serialNumber} · ${requirement.clientName} — ${requirement.jobTitle} ×${requirement.headcount}`;
+const summary = (requirement) => `${requirement.serialNumber} · ${requirement.clientName} ${requirement.jobTitle} ×${requirement.headcount}`;
 
 /** One stageHistory entry — the shape moveStage and the auto-advance both write. */
 const moveEntry = (stage, moverId, at) => ({ stage: stage._id, stageName: stage.name, movedBy: moverId, movedAt: at });
@@ -439,7 +439,7 @@ export async function createRequirement(data, actor) {
   if (onlySelf ? !(access.ownWrite || access.teamWrite) : !access.teamWrite) throw new ApiError(403, FORBIDDEN);
   await assertActiveCoordinators(
     coordinatorIds,
-    onlySelf ? 'Only a coordinator can own a requirement — pick the coordinator(s) it is for.' : 'Every owner must be an active coordinator.'
+    onlySelf ? 'Only a coordinator can own a requirement pick the coordinator(s) it is for.' : 'Every owner must be an active coordinator.'
   );
 
   const firstStage = await RequirementStage.findOne({}).sort({ order: 1 }).lean();
@@ -544,7 +544,7 @@ export async function moveStage(id, stageId, actor) {
 
   const stage = await RequirementStage.findById(stageId).lean();
   if (!stage) throw new ApiError(400, 'That stage does not exist.');
-  if (idOf(requirement.stage) === idOf(stage)) return presentOne(requirement._id, actor, access); // already there — idempotent
+  if (idOf(requirement.stage) === idOf(stage)) return presentOne(requirement._id, actor, access); // already there idempotent
 
   const from = await RequirementStage.findById(requirement.stage).select('name').lean();
   const now = new Date();
@@ -559,7 +559,7 @@ export async function moveStage(id, stageId, actor) {
     await notifyUserSafely(userId, {
       type: 'Requirement',
       title: why === 'notifyStage' ? `Requirement moved to "${stage.name}"` : `Your requirement was moved to "${stage.name}"`,
-      body: `${summary(requirement)} — by ${mover?.name ?? 'someone'}`.slice(0, 500),
+      body: `${summary(requirement)} by ${mover?.name ?? 'someone'}`.slice(0, 500),
       url: boardUrl(requirement),
     });
   }
@@ -630,7 +630,7 @@ export async function updateCandidate(id, candidateId, data, actor) {
   // 'Mobilised' is the system's word for "an approved placement exists" — once
   // it's true it can't be walked back by editing a status.
   if (data.status !== undefined && candidate.status === 'Mobilised') {
-    throw new ApiError(409, `${candidate.workerName} is already mobilised — their status can't be changed.`);
+    throw new ApiError(409, `${candidate.workerName} is already mobilised their status can't be changed.`);
   }
   if (data.subcontractor !== undefined) {
     if (candidate.workerType !== 'SupplierEmployee') throw new ApiError(400, "Only a subcontractor's worker has a subcontractor.");
@@ -650,7 +650,7 @@ export async function removeCandidate(id, candidateId, actor) {
   // A candidate who has a mobilisation is part of a real placement record —
   // removing the row would orphan it. "Dropped" is the honest way out.
   if (candidate.mobilisation) {
-    throw new ApiError(409, `${candidate.workerName} has a mobilisation — mark them Dropped instead of removing them.`);
+    throw new ApiError(409, `${candidate.workerName} has a mobilisation mark them Dropped instead of removing them.`);
   }
   const workerName = candidate.workerName;
   requirement.candidates.pull(candidateId);
@@ -727,7 +727,7 @@ export async function onMobilisationApproved(mobilisation) {
     { $set: { 'candidates.$.status': 'Mobilised', 'candidates.$.mobilisation': mobilisation._id } },
     { new: true }
   );
-  if (!requirement) return; // the card or candidate is gone — nothing to update
+  if (!requirement) return; // the card or candidate is gone nothing to update
 
   const candidate = requirement.candidates.id(mobilisation.requirementCandidate);
   const mobilised = requirement.candidates.filter((c) => c.status === 'Mobilised').length;
@@ -761,12 +761,12 @@ export async function onMobilisationApproved(mobilisation) {
     for (const id of await membersOfRoles([...team.readApprovalRoles, ...team.writeApprovalRoles])) recipients.add(id);
   }
   recipients.delete(moverId);
-  const title = advancedTo ? `All workers mobilised — moved to "${advancedTo.name}"` : `${candidate.workerName} approved for mobilisation`;
+  const title = advancedTo ? `All workers mobilised moved to "${advancedTo.name}"` : `${candidate.workerName} approved for mobilisation`;
   for (const userId of recipients) {
     await notifyUserSafely(userId, {
       type: 'Requirement',
       title,
-      body: `${summary(requirement)} — ${mobilised} of ${requirement.headcount} mobilised`.slice(0, 500),
+      body: `${summary(requirement)} ${mobilised} of ${requirement.headcount} mobilised`.slice(0, 500),
       url: boardUrl(requirement),
     });
   }

@@ -11,7 +11,7 @@ import logger from '../../config/logger.js';
 import { imageFileFilter, wrapImageUpload } from '../../utils/imageUpload.js';
 
 const ALLOWED_FORMATS = ['jpg', 'jpeg', 'png', 'webp'];
-const MAX_BYTES = 2 * 1024 * 1024; // 2 MB — a face crop, not a document
+const MAX_BYTES = 2 * 1024 * 1024; // 2 MB a face crop, not a document
 
 const storage = new CloudinaryStorage({
   cloudinary,
@@ -36,6 +36,6 @@ export async function deleteAvatarMedia(url) {
     const publicId = folderAndFile.split('.')[0]; // "user-avatars/xyz"
     await cloudinary.uploader.destroy(publicId);
   } catch (err) {
-    logger.error(`[auth] Failed to delete avatar from Cloudinary: ${url} — ${err.message}`);
+    logger.error(`[auth] Failed to delete avatar from Cloudinary: ${url} ${err.message}`);
   }
 }

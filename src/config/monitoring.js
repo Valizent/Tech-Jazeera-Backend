@@ -27,7 +27,7 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 import mongoose from 'mongoose';
 import logger from './logger.js';
 
-const SAMPLE_INTERVAL_MS = 60_000; // 1 minute — frequent enough for a trend, not so frequent it floods the logs
+const SAMPLE_INTERVAL_MS = 60_000; // 1 minute frequent enough for a trend, not so frequent it floods the logs
 
 const nsToMs = (ns) => Math.round((ns / 1e6) * 100) / 100;
 

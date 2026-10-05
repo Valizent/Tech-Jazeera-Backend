@@ -70,9 +70,9 @@ const STATUS_COLOR = {
   Holiday: 'FF0D9488', // teal
   'Holiday (Worked)': 'FFB45309', // amber, like overtime
   Absent: 'FFDC2626', // red, same family as Deficient
-  Leave: 'FF0D9488', // teal, same family as Holiday — an excused day off
-  Sick: 'FF0D9488', // teal, same family as Holiday — an excused day off
-  Off: MUTED, // gray, same family as No Attendance — a neutral non-working day
+  Leave: 'FF0D9488', // teal, same family as Holiday an excused day off
+  Sick: 'FF0D9488', // teal, same family as Holiday an excused day off
+  Off: MUTED, // gray, same family as No Attendance a neutral non-working day
 };
 
 // compactLayout-only: the raw status value shown as different, friendlier

@@ -165,11 +165,11 @@ async function checkPaymentDueEscalation() {
         daysRemaining < 0
           ? `Payment overdue for ${d.workerName} (${entry.month})`
           : `Payment due in ${daysRemaining} day(s) for ${d.workerName} (${entry.month})`;
-      const invoiceRef = entry.invoiceNumber ? `Invoice ${entry.invoiceNumber} — ` : '';
+      const invoiceRef = entry.invoiceNumber ? `Invoice ${entry.invoiceNumber} ` : '';
       const body =
         daysRemaining < 0
-          ? `${invoiceRef}${Math.abs(daysRemaining)} day(s) past due — follow up with ${d.clientName}.`
-          : `${invoiceRef}due ${new Date(entry.invoiceDueAt).toDateString()} — time to follow up with ${d.clientName}.`;
+          ? `${invoiceRef}${Math.abs(daysRemaining)} day(s) past due follow up with ${d.clientName}.`
+          : `${invoiceRef}due ${new Date(entry.invoiceDueAt).toDateString()} time to follow up with ${d.clientName}.`;
 
       for (const userId of audience) {
         const result = await notifyUser(userId, {
@@ -190,7 +190,7 @@ export async function runDeploymentBillingCheck() {
   const [timesheet, payment] = await Promise.all([checkTimesheetOverdue(), checkPaymentDueEscalation()]);
 
   if (timesheet.found === 0 && payment.found === 0) {
-    logger.info('[deploymentBillingJob] nothing overdue — skipped.');
+    logger.info('[deploymentBillingJob] nothing overdue skipped.');
   } else {
     logger.info(
       `[deploymentBillingJob] ${timesheet.found} timesheet(s) overdue (${timesheet.sent} notified), ${payment.found} payment(s) overdue (${payment.sent} notified).`

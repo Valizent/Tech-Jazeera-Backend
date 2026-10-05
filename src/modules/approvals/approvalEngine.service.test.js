@@ -57,8 +57,8 @@ function decideAdvance(advanceId, decision, act) {
   });
 }
 
-describe('approvalEngine.decideApprovalStep — legacy (no-workflow) path', () => {
-  it('F1: two concurrent decisions on the same request — exactly one wins, one gets a clean 409', async () => {
+describe('approvalEngine.decideApprovalStep legacy (no-workflow) path', () => {
+  it('F1: two concurrent decisions on the same request exactly one wins, one gets a clean 409', async () => {
     const advance = await makePendingAdvance();
     const results = await Promise.allSettled([
       decideAdvance(advance._id.toString(), 'Approved', actor()),
@@ -82,7 +82,7 @@ describe('approvalEngine.decideApprovalStep — legacy (no-workflow) path', () =
     });
   });
 
-  it('F2: a Notification.create failure does not abort the decision — the status still commits and the caller still gets its result', async () => {
+  it('F2: a Notification.create failure does not abort the decision the status still commits and the caller still gets its result', async () => {
     const advance = await makePendingAdvance();
     const spy = vi.spyOn(Notification, 'create').mockRejectedValueOnce(new Error('simulated notification outage'));
 

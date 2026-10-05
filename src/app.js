@@ -80,7 +80,7 @@ app.use(requestMetrics);
 app.use(helmet());
 app.use(
   cors({
-    origin: env.clientUrls, // array of exact origins, not '*' — required for cookies;
+    origin: env.clientUrls, // array of exact origins, not '*' required for cookies;
                             // `cors` reflects back only the matched origin
     credentials: true, // allow the httpOnly refresh-token cookie (M2)
   })

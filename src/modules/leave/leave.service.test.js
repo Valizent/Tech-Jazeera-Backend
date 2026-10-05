@@ -45,7 +45,7 @@ describe('leave.service submitLeaveRequest', () => {
   // even if another test file already triggered it.
   beforeAll(() => LeaveSubmissionLock.init());
 
-  it('F3: two concurrent overlapping submissions for the same employee — exactly one succeeds, one 409s', async () => {
+  it('F3: two concurrent overlapping submissions for the same employee exactly one succeeds, one 409s', async () => {
     const employee = await makeEmployee();
     const leaveType = await makeLeaveType();
     const payload = {

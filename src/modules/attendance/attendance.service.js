@@ -280,7 +280,7 @@ export function verifyOfficeLocation(office, { lat, lng }, actor) {
     throw new ApiError(
       403,
       distance != null
-        ? `You're about ${distance}m from the office — within ${office.radiusMeters}m (or on the office network) is required.`
+        ? `You're about ${distance}m from the office within ${office.radiusMeters}m (or on the office network) is required.`
         : 'Could not read your location. Enable location access and try again, or connect to the office network.'
     );
   }
@@ -290,7 +290,7 @@ export function verifyOfficeLocation(office, { lat, lng }, actor) {
 export async function requireOfficeLocation() {
   const office = await OfficeLocation.findOne().lean();
   if (!office) {
-    throw new ApiError(400, 'Office location has not been set up yet — ask your Admin to configure it.');
+    throw new ApiError(400, 'Office location has not been set up yet ask your Admin to configure it.');
   }
   return office;
 }

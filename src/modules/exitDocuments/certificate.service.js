@@ -194,7 +194,7 @@ export async function resolveCertificateForPdf(id, requesterEmployeeId = null, a
     await assertEmployeeVisibleToActor(request.employee, actor);
   }
   if (!CERTIFICATE_TYPES_WITH_PDF.includes(request.type)) {
-    throw new ApiError(400, 'This request type does not generate a document — its status is tracked instead.');
+    throw new ApiError(400, 'This request type does not generate a document its status is tracked instead.');
   }
   if (!['Approved', 'Issued'].includes(request.status)) {
     throw new ApiError(400, 'This request has not been approved yet.');

@@ -16,7 +16,7 @@ import { cloudinary, CloudinaryStorage } from '../../config/cloudinary.js';
 import logger from '../../config/logger.js';
 import { imageFileFilter, wrapImageUpload } from '../../utils/imageUpload.js';
 
-const MAX_BYTES = 2 * 1024 * 1024; // 2 MB — a logo, not a photo library
+const MAX_BYTES = 2 * 1024 * 1024; // 2 MB a logo, not a photo library
 
 const storage = new CloudinaryStorage({
   cloudinary,
@@ -41,6 +41,6 @@ export async function deleteLogoMedia(url) {
     const publicId = folderAndFile.split('.')[0]; // "company-logo/xyz"
     await cloudinary.uploader.destroy(publicId);
   } catch (err) {
-    logger.error(`[companySettings] Failed to delete logo from Cloudinary: ${url} — ${err.message}`);
+    logger.error(`[companySettings] Failed to delete logo from Cloudinary: ${url} ${err.message}`);
   }
 }

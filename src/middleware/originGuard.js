@@ -39,7 +39,7 @@ const normalize = (value) => String(value ?? '').replace(/\/+$/, '').toLowerCase
 
 export function requireTrustedOrigin(req, res, next) {
   const origin = req.get('origin');
-  if (!origin) return next(); // non-browser client — no ambient cookies to abuse
+  if (!origin) return next(); // non-browser client no ambient cookies to abuse
 
   const trusted = env.clientUrls.map(normalize);
   if (!trusted.includes(normalize(origin))) {

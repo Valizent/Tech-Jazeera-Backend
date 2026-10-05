@@ -84,7 +84,7 @@ const deploymentBillingInterval = setInterval(
  * cut off requests mid-write.
  */
 async function shutdown(signal) {
-  logger.info(`${signal} received — shutting down gracefully...`);
+  logger.info(`${signal} received shutting down gracefully...`);
   clearInterval(expiryAlertInterval);
   clearInterval(mobilisationStaleInterval);
   clearInterval(deploymentBillingInterval);

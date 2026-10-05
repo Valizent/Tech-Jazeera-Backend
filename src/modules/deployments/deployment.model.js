@@ -157,7 +157,7 @@ const monthlyHoursSchema = new mongoose.Schema(
     // subcontractor's OWN overtime is a separate, independent concept now —
     // see computeMonthlyRevenueAndExpenses's own doc comment.
     otHours: { type: Number, required: true, min: 0 },
-    otAmount: { type: Number, default: 0, min: 0 }, // server-computed = otHours × Mobilisation.otClientRate — see module doc comment
+    otAmount: { type: Number, default: 0, min: 0 }, // server-computed = otHours × Mobilisation.otClientRate see module doc comment
     // A deduction the CLIENT applied on their own timesheet (their most
     // common reason: an Absent day — see DAILY_ENTRY_STATUSES above — but
     // this is whatever figure their timesheet actually shows, not something
@@ -299,7 +299,7 @@ const deploymentSchema = new mongoose.Schema(
 
     client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', required: true },
     clientName: { type: String, required: true }, // snapshot
-    site: { type: String, trim: true, default: null }, // snapshot of Mobilisation.site — optional, free-typed there
+    site: { type: String, trim: true, default: null }, // snapshot of Mobilisation.site optional, free-typed there
 
     subcontractor: { type: mongoose.Schema.Types.ObjectId, ref: 'Subcontractor', default: null },
     subcontractorName: { type: String, default: null }, // snapshot, SupplierEmployee only

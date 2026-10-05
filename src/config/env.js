@@ -117,7 +117,7 @@ const env = Object.freeze({
 // console.error here (not the Winston logger) because the logger itself may
 // depend on configuration.
 if (problems.length > 0) {
-  console.error('\n[env] Server cannot start — invalid environment configuration:\n');
+  console.error('\n[env] Server cannot start invalid environment configuration:\n');
   for (const problem of problems) console.error(`  ✗ ${problem}`);
   console.error('\nFix server/.env and try again.\n');
   process.exit(1);
