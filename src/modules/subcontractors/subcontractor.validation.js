@@ -27,6 +27,7 @@ export const createSubcontractorSchema = z.object({
     (v) => (typeof v === 'string' ? emptyToUndef(v.trim().toLowerCase()) : v),
     z.email('Enter a valid email address.').optional()
   ),
+  creditLimitDays: z.preprocess(emptyToUndef, z.coerce.number().int().min(0).optional()),
   status: z.enum(SUBCONTRACTOR_STATUSES).default('Active'),
   notes: optionalStr(2000),
 });

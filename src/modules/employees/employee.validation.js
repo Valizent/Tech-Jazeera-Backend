@@ -103,7 +103,8 @@ const employeeObjectSchema = z
       .default([]),
 
     joiningDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
-    employmentEndDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
+    contractStartDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
+    contractEndDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
     designation: z.string().trim().min(2, 'Designation is required.').max(60),
     department: optionalStr(60),
     salary: z.preprocess(

@@ -194,3 +194,24 @@ export const demobiliseDeploymentSchema = z.object({
   exitOutcome: strictOptionalBoolean,
   releaseNote: optionalStr(1000),
 });
+
+export const recordSubInvoiceSchema = z.object({
+  invoiceNumber: optionalStr(100),
+  invoiceDate: z.coerce.date({ error: 'Enter a valid date.' }).optional(),
+});
+
+export const subcontractorIdParamSchema = z.object({ subcontractorId: id });
+
+export const subcontractorPaymentIdParamSchema = z.object({ paymentId: id });
+
+export const recordSubcontractorPaymentSchema = z.object({
+  amount: z.coerce.number({ error: 'Enter the amount paid.' }).positive('Must be greater than zero.'),
+  paymentReference: optionalStr(100),
+  paymentDate: z.coerce.date({ error: 'Enter a valid payment date.' }).optional(),
+});
+
+export const decideSubcontractorPaymentSchema = z.object({
+  decision: z.enum(DECISIONS, { error: 'Choose Approved or Rejected.' }),
+  note: optionalStr(500),
+});
+

@@ -47,6 +47,7 @@ export const createClientSchema = z.object({
   ),
   industry: optionalStr(80),
   sites: z.array(siteSchema).max(50).optional(),
+  creditLimitDays: z.preprocess(emptyToUndef, z.coerce.number().int().min(0).optional()),
   status: z.enum(CLIENT_STATUSES).default('Active'),
   notes: optionalStr(2000),
 });

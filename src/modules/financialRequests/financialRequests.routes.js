@@ -42,7 +42,7 @@ import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.
 import { validate } from '../../middleware/validate.js';
 import { uploadSingle, destroyDocumentFile } from '../../middleware/upload.js';
 import {
-  submitAdvanceSchema,
+  submitAdvanceSchema, submitAnnualVacationSchema,
   decideAdvanceSchema,
   addRepaymentSchema,
   listAdvancesSchema,
@@ -136,5 +136,13 @@ router.use((err, req, res, next) => {
   }
   next(err);
 });
+
+
+router.post(
+  '/annual-vacation',
+  requireEmployeeAuth,
+  validate({ body: submitAnnualVacationSchema.extend({ employee: z.string().regex(/^[a-f0-9]{24}$/i) }) }),
+  asyncHandler(advanceController.submitAnnualVacation)
+);
 
 export default router;

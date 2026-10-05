@@ -691,7 +691,7 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
   return updated.toObject();
 }
 
-const INVOICE_DUE_DAYS = 50;
+
 
 /** Same shape, against 'deploymentsInvoicing' — the "Clerk" circle. */
 async function decidersOfDeploymentsInvoicing() {
@@ -781,7 +781,9 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
   }
 
   const now = new Date();
-  const invoiceDueAt = new Date(now.getTime() + INVOICE_DUE_DAYS * 86_400_000);
+  const clientDoc = await mongoose.model('Client').findById(deployment.client).lean();
+  const dueDays = clientDoc?.creditLimitDays ?? 50;
+  const invoiceDueAt = new Date(now.getTime() + dueDays * 86_400_000);
   // Atomic transition (2026-09-29, a real audit finding): the old
   // read-then-save let two concurrent "send invoice" submissions for the
   // same entry both pass the in-memory `invoiceSentAt` check above, and the
@@ -1168,6 +1170,8 @@ export async function countDeploymentsMissingTimesheets(actor) {
   };
   const previousMonthStr = () => addMonthsToStr(monthStrOf(new Date()), -1);
   
+  const now = new Date();
+  
   for (const d of deployments) {
     if (!d.startDate) continue;
     const start = monthStrOf(d.startDate);
@@ -1177,7 +1181,24 @@ export async function countDeploymentsMissingTimesheets(actor) {
     const entered = new Set((d.monthlyHours || []).map((m) => m.month));
     let candidate = start;
     while (candidate <= maxEligible) {
-      if (!entered.has(candidate)) totalMissing++;
+      if (!entered.has(candidate)) {
+        // Candidate is YYYY-MM
+        const [y, m] = candidate.split('-').map(Number);
+        // Deadline is 28th of the FOLLOWING month
+        const deadlineDate = new Date(y, m, 28);
+        const notificationStart = new Date(deadlineDate);
+        notificationStart.setDate(deadlineDate.getDate() - 7); // 21st
+        
+        let visible = false;
+        if (['MM', 'FM', 'COO', 'Manager'].includes(actor.role)) {
+          if (now > deadlineDate) visible = true;
+        } else {
+          // Office Secretary, Coordinator, Admin, HR, etc.
+          if (now >= notificationStart) visible = true;
+        }
+        
+        if (visible) totalMissing++;
+      }
       candidate = addMonthsToStr(candidate, 1);
     }
   }

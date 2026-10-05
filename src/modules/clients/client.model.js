@@ -49,6 +49,7 @@ const clientSchema = new mongoose.Schema(
     industry: { type: String, trim: true },
     sites: { type: [siteSchema], default: [] },
     status: { type: String, enum: CLIENT_STATUSES, default: 'Active' },
+    creditLimitDays: { type: Number, default: 50, min: 0 },
     notes: { type: String, trim: true, maxlength: 2000 },
     approvalStatus: { type: String, enum: CLIENT_APPROVAL_STATUSES, default: 'Approved' },
     // Who created this record — null for records predating this field.

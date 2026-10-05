@@ -29,6 +29,7 @@ export const APPROVAL_REQUEST_TYPES = [
   'Mobilisation',
   'ExitReentry',
   'Certificate',
+  'AnnualVacation',
 ];
 
 const workflowStepSchema = new mongoose.Schema(

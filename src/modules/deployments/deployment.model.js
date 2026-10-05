@@ -244,6 +244,28 @@ const monthlyHoursSchema = new mongoose.Schema(
     // date. Read by the overdue background job (deploymentPayment.job.js).
     invoiceDueAt: { type: Date, default: null },
 
+    // --- Subcontractor Invoice lifecycle ---
+    // Mirrors the client billing lifecycle above, but for the invoice WE receive
+    // from a Subcontractor for a SupplierEmployee.
+    subcontractorInvoiceReceivedAt: { type: Date, default: null },
+    subcontractorInvoiceReceivedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    subcontractorInvoiceNumber: { type: String, trim: true, default: null },
+    subcontractorInvoiceDate: { type: Date, default: null },
+    subcontractorInvoiceFile: {
+      type: new mongoose.Schema(
+        {
+          fileName: { type: String, required: true },
+          resourceType: { type: String, required: true },
+          originalName: { type: String, required: true },
+          mimeType: { type: String, required: true },
+          size: { type: Number, required: true },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    subcontractorInvoiceDueAt: { type: Date, default: null },
+
     // 2026-09-27 follow-up, the user's own correction: a client doesn't pay
     // per worker — they send ONE bulk payment a month covering everyone
     // placed there. Per-entry `amountReceived`/`paymentDecisionStatus`

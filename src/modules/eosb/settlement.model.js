@@ -22,7 +22,7 @@ import mongoose from 'mongoose';
 // ultimately be confirmed with the company's own HR/legal advisor — this
 // reason stays fully editable on the settlement form regardless, so HR can
 // override it before computing if that guidance differs.
-export const EXIT_REASONS = ['Resignation', 'TerminationByEmployer', 'EndOfContract', 'SponsorshipTransfer'];
+export const EXIT_REASONS = ['Resignation', 'TerminationByEmployer', 'EndOfContract', 'SponsorshipTransfer', 'CurrentEmployee'];
 
 const settlementSchema = new mongoose.Schema(
   {

@@ -64,6 +64,12 @@ import {
   clientPaymentIdParamSchema,
   recordClientPaymentSchema,
   decideClientPaymentSchema,
+  recordSubInvoiceSchema,
+  subcontractorIdParamSchema,
+  subcontractorPaymentIdParamSchema,
+  recordSubcontractorPaymentSchema,
+  decideSubcontractorPaymentSchema,
+
   demobiliseDeploymentSchema,
 } from './deployment.validation.js';
 import * as deploymentController from './deployment.controller.js';

@@ -10,6 +10,8 @@ import ApiResponse from '../../utils/ApiResponse.js';
 import { contentDisposition } from '../../utils/contentDisposition.js';
 import * as deploymentService from './deployment.service.js';
 import * as clientPaymentService from './clientPayment.service.js';
+import * as subcontractorPaymentService from './subcontractorPayment.service.js';
+import * as subcontractorInvoiceService from './subcontractorInvoice.service.js';
 import { buildDeploymentsListXlsx } from './deployment.export.js';
 
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
@@ -143,4 +145,40 @@ export async function pendingPaymentsQueue(req, res) {
 export async function demobilise(req, res) {
   await deploymentService.demobiliseDeployment(req.params.id, req.body, actor(req));
   res.json(new ApiResponse('Deployment demobilised.'));
+}
+
+export async function recordSubInvoice(req, res) {
+  const file = req.file;
+  const data = await subcontractorInvoiceService.recordSubInvoice(req.params.id, req.params.entryId, req.body, file, actor(req));
+  res.json(data);
+}
+
+export async function readyForSubInvoice(req, res) {
+  const data = await subcontractorInvoiceService.getReadyForSubInvoice(actor(req));
+  res.json({ items: data });
+}
+
+export async function subPaymentsDue(req, res) {
+  const data = await subcontractorInvoiceService.getSubcontractorsPaymentSummary(actor(req));
+  res.json({ items: data });
+}
+
+export async function paidSubInvoices(req, res) {
+  const data = await subcontractorInvoiceService.getPaidSubInvoices(actor(req));
+  res.json({ items: data });
+}
+
+export async function subcontractorPaymentDetail(req, res) {
+  const data = await subcontractorInvoiceService.getSubcontractorPaymentDetail(req.params.subcontractorId, actor(req));
+  res.json(data);
+}
+
+export async function recordSubcontractorPayment(req, res) {
+  const data = await subcontractorPaymentService.recordSubcontractorPayment(req.params.subcontractorId, req.body, actor(req));
+  res.status(201).json(data);
+}
+
+export async function decideSubcontractorPayment(req, res) {
+  const data = await subcontractorPaymentService.decideSubcontractorPayment(req.params.paymentId, req.body, actor(req));
+  res.json(data);
 }

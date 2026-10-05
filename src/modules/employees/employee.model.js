@@ -103,7 +103,8 @@ const employeeSchema = new mongoose.Schema(
     },
 
     joiningDate: { type: Date, required: requiredForWorkforce },
-    employmentEndDate: { type: Date, default: null },
+    contractStartDate: { type: Date, default: null },
+    contractEndDate: { type: Date, default: null },
     designation: { type: String, required: true, trim: true },
     department: { type: String, trim: true },
     // Monthly salary in SAR. Number (not string) so M10 can aggregate costs.

@@ -97,7 +97,7 @@ export async function createSettlement(data, actor) {
   // forgetting one already exists), never a legitimate second award. Block
   // it instead of silently creating a duplicate; deleteSettlement is the
   // documented way to remove a wrong one before recomputing.
-  const existing = await Settlement.findOne({ employee: employee._id }).lean();
+  const existing = await Settlement.findOne({ employee: employee._id, exitReason: { $ne: 'CurrentEmployee' } }).lean();
   if (existing) {
     throw new ApiError(
       409,
