@@ -138,11 +138,24 @@ async function gatherSubcontractorInvoicedItems(subcontractorId) {
         invoiceSentAt: entry.subcontractorInvoiceReceivedAt,
         invoiceDueAt: entry.subcontractorInvoiceDueAt,
         revenue, // Treating the subcontractor cost as "revenue" for the sake of the generic allocateSubcontractorPayments ledger function
+        clientRevenue: result.revenue,
+        expenses: result.expenses,
+        profit: result.profit,
         breakdown: result.breakdown,
+        // Rate fields
+        clientRate: dep.mobilisation?.clientRate ?? null,
+        clientCommission: dep.mobilisation?.clientCommission ?? null,
+        subcontractorRate: dep.mobilisation?.subcontractorRate ?? null,
+        subcontractorCommission: dep.mobilisation?.subcontractorCommission ?? null,
+        fta: dep.mobilisation?.fta ?? null,
+        allowance: dep.mobilisation?.allowance ?? null,
+        mobilisationCost: dep.mobilisation?.mobilisationCost ?? null,
         contractHours: entry.contractHours,
         actualHours: entry.actualHours,
         supplierHours: entry.supplierHours,
         otHours: entry.otHours,
+        deductionAmount: entry.deductionAmount ?? 0,
+        supplierDeductionNote: entry.supplierDeductionNote ?? null,
       });
     }
   }
@@ -328,7 +341,20 @@ export async function getReadyForSubInvoice(actor) {
         otHours: entry.otHours,
         hoursApprovedAt: entry.decidedAt,
         invoiceAmount,
+        clientRevenue: revExp ? revExp.revenue : null,
+        expenses: revExp ? revExp.expenses : null,
+        profit: revExp ? revExp.profit : null,
         breakdown: revExp ? revExp.breakdown : null,
+        // Rate fields
+        clientRate: dep.mobilisation?.clientRate ?? null,
+        clientCommission: dep.mobilisation?.clientCommission ?? null,
+        subcontractorRate: dep.mobilisation?.subcontractorRate ?? null,
+        subcontractorCommission: dep.mobilisation?.subcontractorCommission ?? null,
+        fta: dep.mobilisation?.fta ?? null,
+        allowance: dep.mobilisation?.allowance ?? null,
+        mobilisationCost: dep.mobilisation?.mobilisationCost ?? null,
+        deductionAmount: entry.deductionAmount ?? 0,
+        supplierDeductionNote: entry.supplierDeductionNote ?? null,
       });
     }
   }
