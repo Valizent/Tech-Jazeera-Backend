@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
-import { APPROVAL_STATUSES } from '../approvals/approvalLog.model.js';
+
+const VACATION_STATUSES = ['PendingReview', 'Approved', 'Rejected'];
 
 const annualVacationSchema = new mongoose.Schema(
   {
@@ -8,7 +9,7 @@ const annualVacationSchema = new mongoose.Schema(
     requestedDays: { type: Number, required: true, min: 1, max: 90 },
     reason: { type: String, trim: true, maxlength: 1000 },
     
-    status: { type: String, enum: APPROVAL_STATUSES, default: 'PendingReview' },
+    status: { type: String, enum: VACATION_STATUSES, default: 'PendingReview' },
     approvedAt: { type: Date, default: null },
     rejectedAt: { type: Date, default: null },
     
