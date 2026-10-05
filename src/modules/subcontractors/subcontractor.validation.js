@@ -28,6 +28,10 @@ export const createSubcontractorSchema = z.object({
     z.email('Enter a valid email address.').optional()
   ),
   creditLimitDays: z.preprocess(emptyToUndef, z.coerce.number().int().min(0).optional()),
+  industry: optionalStr(150),
+  vatNumber: optionalStr(15),
+  crNumber: optionalStr(10),
+  address: optionalStr(500),
   status: z.enum(SUBCONTRACTOR_STATUSES).default('Active'),
   notes: optionalStr(2000),
 });

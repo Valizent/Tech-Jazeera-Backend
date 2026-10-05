@@ -18,6 +18,10 @@ const subcontractorSchema = new mongoose.Schema(
     email: { type: String, trim: true, lowercase: true },
     status: { type: String, enum: SUBCONTRACTOR_STATUSES, default: 'Active' },
     creditLimitDays: { type: Number, default: 30, min: 0 },
+    industry: { type: String, trim: true },
+    vatNumber: { type: String, trim: true },
+    crNumber: { type: String, trim: true },
+    address: { type: String, trim: true },
     notes: { type: String, trim: true, maxlength: 2000 },
   },
   { timestamps: true }
