@@ -193,9 +193,6 @@ async function realRevenueAndProfitByCoordinator(month) {
   }
 
   const currentMonthStr = new Date().toISOString().slice(0, 7);
-  const isClosedByCoordinator = new Map();
-  // We'll let callers populate isClosedByCoordinator for specific users.
-  // A month is closed for a user if month < currentMonthStr AND !pendingByCoordinator.has(uid)
 
   return { revenueTotals, profitTotals, pendingByCoordinator, currentMonthStr };
 }

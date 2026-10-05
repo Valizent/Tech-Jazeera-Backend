@@ -34,6 +34,7 @@
  * deliberately NOT folded into 'financialRequests'.
  */
 import { Router } from 'express';
+import { z } from 'zod';
 import asyncHandler from '../../utils/asyncHandler.js';
 import logger from '../../config/logger.js';
 import { requireAuth } from '../../middleware/auth.js';
@@ -140,7 +141,7 @@ router.use((err, req, res, next) => {
 
 router.post(
   '/annual-vacation',
-  requireEmployeeAuth,
+  requireStaffOrExecutive,
   validate({ body: submitAnnualVacationSchema.extend({ employee: z.string().regex(/^[a-f0-9]{24}$/i) }) }),
   asyncHandler(advanceController.submitAnnualVacation)
 );

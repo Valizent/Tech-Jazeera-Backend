@@ -2,7 +2,7 @@ import AnnualVacationRequest from './annualVacation.model.js';
 import Employee from '../employees/employee.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
-import { resolveApprovalWorkflow, startApprovalWorkflow } from '../approvals/approvals.service.js';
+import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 
 export async function submitAnnualVacation(employeeId, { requestedDays, reason }, actor) {
   const employee = await Employee.findById(employeeId).lean();
@@ -36,15 +36,23 @@ export async function submitAnnualVacation(employeeId, { requestedDays, reason }
     throw new ApiError(400, 'You can only apply for Annual Vacation after a contract ends.');
   }
 
-  const workflow = await resolveApprovalWorkflow('AnnualVacation', employee);
+  // Resolve the workflow for this request type (same pattern as leave.service.js)
+  const workflow = await resolveApprovalWorkflow(employee, 'AnnualVacation');
 
-  const request = await AnnualVacationRequest.create({
+  const createData = {
     employee: employee._id,
     requestedDays,
     reason,
-    workflowSnapshot: workflow.steps,
     status: 'PendingReview',
-  });
+  };
+
+  // If a workflow exists, snapshot it onto the request (same pattern as
+  // leaveRequest.model.js — the steps array is frozen at submission time)
+  if (workflow) {
+    createData.workflowSnapshot = workflow.steps;
+  }
+
+  const request = await AnnualVacationRequest.create(createData);
 
   await logAudit({
     user: actor.userId,
@@ -54,14 +62,6 @@ export async function submitAnnualVacation(employeeId, { requestedDays, reason }
     meta: { requestedDays },
     ip: actor.ip,
   });
-
-  await startApprovalWorkflow(
-    'AnnualVacation',
-    request._id,
-    workflow,
-    employee._id,
-    `Annual Vacation Request (${requestedDays} days)`
-  );
 
   return request.toObject();
 }

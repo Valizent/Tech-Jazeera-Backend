@@ -125,6 +125,30 @@ router.patch(
 // is computed in the service, not this route-level gate.
 router.get('/ready-to-invoice', asyncHandler(deploymentController.readyToInvoice));
 router.get('/pending-hours', asyncHandler(deploymentController.pendingHoursQueue));
+// Subcontractor-side mirror of ready-to-invoice/payments-due/paid-invoices
+// above — same "no router gate, checked inside the service" pattern
+// (subcontractorInvoice.service.js/subcontractorPayment.service.js both call
+// canAccessSection('deploymentsInvoicing'/'deploymentsPaymentDecide'/
+// 'deploymentsHours', actor) themselves).
+router.get('/ready-for-sub-invoice', asyncHandler(deploymentController.readyForSubInvoice));
+router.get('/sub-payments-due', asyncHandler(deploymentController.subPaymentsDue));
+router.get('/paid-sub-invoices', asyncHandler(deploymentController.paidSubInvoices));
+// Before /:id, or a real subcontractorId is read as a deployment id.
+router.get(
+  '/sub-payments-due/:subcontractorId',
+  validate({ params: subcontractorIdParamSchema }),
+  asyncHandler(deploymentController.subcontractorPaymentDetail)
+);
+router.post(
+  '/sub-payments-due/:subcontractorId/payments',
+  validate({ params: subcontractorIdParamSchema, body: recordSubcontractorPaymentSchema }),
+  asyncHandler(deploymentController.recordSubcontractorPayment)
+);
+router.patch(
+  '/sub-payments/:paymentId/decide',
+  validate({ params: subcontractorPaymentIdParamSchema, body: decideSubcontractorPaymentSchema }),
+  asyncHandler(deploymentController.decideSubcontractorPayment)
+);
 router.get(
   '/export',
   canReadDeployments,
@@ -165,6 +189,15 @@ router.post(
   uploadSingle,
   validate({ params: monthlyHoursEntryParamSchema, body: sendInvoiceSchema }),
   asyncHandler(deploymentController.sendInvoice)
+);
+// Subcontractor-side mirror of send-invoice above — no router gate, same
+// reasoning as the other subcontractor routes: subcontractorInvoice.service.js
+// checks canAccessSection('deploymentsInvoicing', actor) itself.
+router.post(
+  '/:id/monthly-hours/:entryId/sub-invoice',
+  uploadSingle,
+  validate({ params: monthlyHoursEntryParamSchema, body: recordSubInvoiceSchema }),
+  asyncHandler(deploymentController.recordSubInvoice)
 );
 router.get(
   '/:id/monthly-hours/:entryId/invoice-file',
