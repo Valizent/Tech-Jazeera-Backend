@@ -6,7 +6,26 @@ on:
       - main
 
 jobs:
+  # Fixed 2026-10-06, a real QA-audit finding (D01): this workflow went
+  # straight from push to `git pull` + `pm2 restart` on the real production
+  # VM with nothing checking the code first — exactly the gap that let a
+  # commit with a broken import (SyntaxError at module load, the whole API
+  # crash-looping) reach production undetected. A real test/lint job now has
+  # to pass before `deploy` is even allowed to start (`needs: test`).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:

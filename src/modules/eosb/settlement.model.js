@@ -59,4 +59,27 @@ const settlementSchema = new mongoose.Schema(
 // An employee's settlement history, newest first; the staff list, newest first.
 settlementSchema.index({ employee: 1, createdAt: -1 });
 
+// Fixed 2026-10-06, a real QA-audit finding (F03): the service's own
+// findOne-then-create check in createSettlement is a classic race — five
+// concurrent requests all pass the findOne before any of them finishes the
+// create. This is the real, database-level guarantee: exactly one REAL
+// (non-CurrentEmployee) settlement can ever exist per employee, enforced by
+// MongoDB itself, not just application code. CurrentEmployee rows (the EOSB
+// simulation feature) are deliberately excluded — a person can "simulate"
+// their EOSB any number of times while still employed. `$in` (not `$ne`,
+// which MongoDB's partialFilterExpression silently does NOT support — the
+// exact bug Deployment's own uniq_active_worker index hit before) is
+// confirmed supported here. Verified empirically against this app's real
+// database before relying on it.
+settlementSchema.index(
+  { employee: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      exitReason: { $in: ['Resignation', 'TerminationByEmployer', 'EndOfContract', 'SponsorshipTransfer'] },
+    },
+    name: 'uniq_real_settlement_per_employee',
+  }
+);
+
 export default mongoose.model('Settlement', settlementSchema);

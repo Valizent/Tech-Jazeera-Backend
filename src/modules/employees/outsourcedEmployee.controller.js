@@ -11,7 +11,7 @@ export async function list(req, res) {
   const data = await service.listOutsourcedEmployees({
     search: req.query.search,
     workerType: req.query.workerType,
-    limit: parseInt(req.query.limit, 10) || 100,
+    limit: req.query.limit,
   });
   res.json(new ApiResponse('Outsourced employees retrieved.', data));
 }

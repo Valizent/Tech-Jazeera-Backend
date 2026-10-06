@@ -207,8 +207,6 @@ async function buildScope({ coordinator, closed, client, subcontractor }, actor)
   }
 
   if (closed !== 'all' && mobilisedIds.length > 0) {
-    const activeAndLostIds = stages.filter((s) => !s.isTerminal || (!s.isMobilisedStage)).map((s) => s._id);
-    
     // We already excluded lostIds above. Now we either want non-terminal cards,
     // OR mobilised cards closed within the last 30 days.
     const baseStageFilter = filter.stage;

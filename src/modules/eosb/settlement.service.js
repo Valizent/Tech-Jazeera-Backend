@@ -136,24 +136,52 @@ export async function createSettlement(data, actor) {
 
   const totalSettlement = money(eosbNet + leaveEncashment);
 
-  const settlement = await Settlement.create({
-    employee: employee._id,
-    employeeName: employee.fullName,
-    employeeCode: employee.employeeId,
-    joiningDate: employee.joiningDate,
-    exitDate: data.exitDate,
-    exitReason: data.exitReason,
-    monthlyWage: employee.salary,
-    serviceYears,
-    eosbGross,
-    reductionFactor,
-    eosbNet,
-    unusedLeaveDays,
-    leaveEncashment,
-    totalSettlement,
-    notes: data.notes,
-    computedBy: actor.userId,
-  });
+  // Fixed 2026-10-06, a real QA-audit finding (F02): the Zod max() above on
+  // the override fields is the real fix, but a last-resort check belongs
+  // here too — this is the one place every money field on this document is
+  // computed, so it's the one place that can guarantee none of them is ever
+  // persisted as Infinity/NaN no matter how a future change reaches this
+  // point (a different override combination, a future formula change, etc).
+  for (const [field, value] of Object.entries({ eosbGross, eosbNet, leaveEncashment, totalSettlement })) {
+    if (!Number.isFinite(value)) {
+      throw new ApiError(400, `Computed ${field} is not a valid number — check the entered override values.`);
+    }
+  }
+
+  let settlement;
+  try {
+    settlement = await Settlement.create({
+      employee: employee._id,
+      employeeName: employee.fullName,
+      employeeCode: employee.employeeId,
+      joiningDate: employee.joiningDate,
+      exitDate: data.exitDate,
+      exitReason: data.exitReason,
+      monthlyWage: employee.salary,
+      serviceYears,
+      eosbGross,
+      reductionFactor,
+      eosbNet,
+      unusedLeaveDays,
+      leaveEncashment,
+      totalSettlement,
+      notes: data.notes,
+      computedBy: actor.userId,
+    });
+  } catch (err) {
+    // Fixed 2026-10-06 (F03): the findOne check above is a best-effort, not a
+    // guarantee — two concurrent submits can both pass it before either
+    // writes. This is the real backstop: the model's own unique index
+    // rejects the loser of the race with the SAME friendly message the
+    // pre-check above already gives the common (non-concurrent) case.
+    if (err.code === 11000) {
+      throw new ApiError(
+        409,
+        `${employee.fullName} already has a settlement on file. Delete it first if this one needs to be recomputed.`
+      );
+    }
+    throw err;
+  }
 
   await logAudit({
     user: actor.userId,

@@ -29,6 +29,7 @@ import { notifyUser } from '../notifications/notification.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 import { signedDownloadUrl } from '../../middleware/upload.js';
 import { allocateClientPayments, getClientPaymentHistory } from './clientPayment.service.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 
 function currentMonthStr() {
   const d = new Date();
@@ -55,13 +56,19 @@ function currentMonthStr() {
  */
 async function assertDeploymentVisibleToActor(deployment, actor) {
   if (actor?.role !== 'Coordinator') return;
-  // `deployment.worker`/`.mobilisation` may be a raw ObjectId or a populated
-  // document depending on the caller — handle both.
-  const workerId = deployment.worker?._id ?? deployment.worker;
-  if (workerId) {
-    await assertEmployeeVisibleToActor(workerId, actor);
-    return;
-  }
+  // Fixed 2026-10-06, a real QA-audit finding (A01): this used to branch on
+  // worker type — an Employee-type deployment checked `Employee.coordinator`
+  // (assertEmployeeVisibleToActor, a SINGLE field) while a SupplierEmployee/
+  // Freelancer one checked `Mobilisation.coordinators.user` (the full joint-
+  // coordinator array) right below. That meant a real joint (non-primary)
+  // coordinator on an Employee-type mobilisation showed up correctly in the
+  // LIST (findDeployments already scopes by Mobilisation.coordinators, see
+  // its own doc comment) but got a 403 the moment they opened that exact
+  // deployment — two different policies deciding the same question. Now both
+  // paths use the one true policy findDeployments already settled on:
+  // Mobilisation.coordinators.user, which is strictly more correct (it
+  // includes every joint coordinator, and keeps working after the employee
+  // is later reassigned) and matches for every worker type.
   const mobilisationId = deployment.mobilisation?._id ?? deployment.mobilisation;
   const owned = await Mobilisation.exists({ _id: mobilisationId, 'coordinators.user': actor.userId });
   if (!owned) throw new ApiError(403, 'You do not have access to this deployment.');
@@ -1508,7 +1515,13 @@ async function findDeployments({ worker, client, site, status, sortBy = 'startDa
   if (worker) filter.worker = worker;
   if (client) filter.client = client;
   if (status) filter.status = status;
-  if (site) filter.site = { $regex: site, $options: 'i' };
+  // Fixed 2026-10-06, a real QA-audit finding (F08): `site` went straight
+  // into $regex unescaped — a search like `[` is invalid regex syntax and
+  // 500'd instead of being treated as the literal text it obviously is.
+  // escapeRegex (already used elsewhere in this app, e.g.
+  // outsourcedEmployee.service.js's own search) makes every character here
+  // literal.
+  if (site) filter.site = { $regex: escapeRegex(site), $options: 'i' };
   // Fixed 2026-09-17, a follow-up QA-audit gap: the check above only ever
   // fired when the caller explicitly passed `?worker=`. The plain,
   // unfiltered list/export (the normal way the register page is opened)

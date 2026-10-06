@@ -17,6 +17,7 @@ import LeaveSubmissionLock from './leaveSubmissionLock.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
+import { createLeaveTypeSchema } from './leave.validation.js';
 import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import { signedDownloadUrl } from '../../middleware/upload.js';
@@ -62,6 +63,19 @@ function currentLeaveYearStart(joiningDate, now) {
   return anniversary;
 }
 
+/** The exclusive end of a leave year that starts at `yearStart` — one year later.
+ *  Fixed 2026-10-06, a real QA-audit finding (F05): evaluateAnnual/evaluateSick
+ *  used to filter `startDate: { $gte: yearStart }` with NO upper bound, so
+ *  every request ever approved from that anniversary into the indefinite
+ *  future — next year, the year after — pooled into the same "used so far"
+ *  total. Paired with the `$lt` below, each leave year is now a real closed
+ *  window. */
+function leaveYearEnd(yearStart) {
+  const end = new Date(yearStart);
+  end.setFullYear(end.getFullYear() + 1);
+  return end;
+}
+
 async function evaluateAnnual(employee, leaveType, requestedDays, now) {
   const serviceMonths = monthsOfService(employee.joiningDate, now);
   if (serviceMonths < leaveType.minServiceMonths) {
@@ -80,13 +94,14 @@ async function evaluateAnnual(employee, leaveType, requestedDays, now) {
       ? leaveType.tierDaysPerYear
       : leaveType.daysPerYear;
   const yearStart = currentLeaveYearStart(employee.joiningDate, now);
+  const yearEnd = leaveYearEnd(yearStart);
   const [usedAgg] = await LeaveRequest.aggregate([
     {
       $match: {
         employee: employee._id,
         leaveType: leaveType._id,
         status: { $in: ['AutoApproved', 'Approved'] },
-        startDate: { $gte: yearStart },
+        startDate: { $gte: yearStart, $lt: yearEnd },
       },
     },
     { $group: { _id: null, total: { $sum: '$days' } } },
@@ -183,6 +198,14 @@ function allocateSickDays(usedDays, requestedDays, tiers) {
 }
 
 async function evaluateSick(employee, leaveType, requestedDays, now) {
+  // Fixed 2026-10-06 (F04): updateLeaveType now blocks a Sick policy with no
+  // tiers from ever being saved, but this is still a cheap, worthwhile
+  // backstop against any record that predates that fix (or any other future
+  // path that writes a LeaveType directly) — a clear 400 instead of
+  // allocateSickDays crashing on `tiers.reduce` of a missing/empty array.
+  if (!Array.isArray(leaveType.sickPayTiers) || leaveType.sickPayTiers.length === 0) {
+    throw new ApiError(400, `"${leaveType.name}" has no sick-pay tiers configured — ask an admin to fix this leave type before submitting.`);
+  }
   const serviceMonths = monthsOfService(employee.joiningDate, now);
   if (serviceMonths < leaveType.minServiceMonths) {
     return {
@@ -198,13 +221,14 @@ async function evaluateSick(employee, leaveType, requestedDays, now) {
   }
 
   const yearStart = currentLeaveYearStart(employee.joiningDate, now);
+  const yearEnd = leaveYearEnd(yearStart);
   const [usedAgg] = await LeaveRequest.aggregate([
     {
       $match: {
         employee: employee._id,
         leaveType: leaveType._id,
         status: { $in: ['AutoApproved', 'Approved'] },
-        startDate: { $gte: yearStart },
+        startDate: { $gte: yearStart, $lt: yearEnd },
       },
     },
     { $group: { _id: null, total: { $sum: '$days' } } },
@@ -288,6 +312,36 @@ export async function createLeaveType(data, actor) {
 }
 
 export async function updateLeaveType(id, data, actor) {
+  const existing = await LeaveType.findById(id).lean();
+  if (!existing) throw new ApiError(404, 'Leave type not found.');
+
+  // Fixed 2026-10-06, a real QA-audit finding (F04): updateLeaveTypeSchema
+  // (the route's own body validator) deliberately has no cross-field check,
+  // since "any subset of fields" is normal for a PATCH — but that meant a
+  // PATCH could flip `recurrence` to 'Sick' with no `sickPayTiers` at all
+  // (the rule createLeaveTypeSchema's own superRefine enforces at creation),
+  // and the resulting policy crashed the next real leave submission inside
+  // allocateSickDays (`tiers.reduce` on an empty/missing array). Merge the
+  // patch onto the STORED policy and re-run the exact same full-policy check
+  // creation uses, so an update can never produce a policy creation itself
+  // would have rejected.
+  // The stored document has real `null`s for every unset optional field
+  // (Mongoose's own rest state); createLeaveTypeSchema's optional fields only
+  // treat an empty STRING as "unset" (the normal create-form shape), so a raw
+  // merge made `tierYears: null` reach `z.coerce.number()` and coerce to 0,
+  // failing `.min(1)` on every leave type that simply never set it. Convert
+  // storage nulls to undefined first so "never set" reads the same way here
+  // as it does on the create form.
+  const existingAsUnset = Object.fromEntries(Object.entries(existing).map(([k, v]) => [k, v === null ? undefined : v]));
+  const merged = createLeaveTypeSchema.safeParse({ ...existingAsUnset, ...data });
+  if (!merged.success) {
+    const details = merged.error.issues.map((issue) => ({
+      field: issue.path.join('.') || 'policy',
+      message: issue.message,
+    }));
+    throw new ApiError(400, 'This change would leave the leave type in an invalid state.', details);
+  }
+
   const type = await LeaveType.findByIdAndUpdate(id, data, { new: true, runValidators: true }).lean();
   if (!type) throw new ApiError(404, 'Leave type not found.');
   await logAudit({
@@ -375,7 +429,13 @@ export async function submitLeaveRequest(employeeId, { leaveType: leaveTypeId, s
     }).lean();
     if (overlap) throw new ApiError(409, 'A leave request already exists that overlaps these dates.');
 
-    const evaluation = await evaluateEligibility(employee, leaveType, days);
+    // Fixed 2026-10-06, a real QA-audit finding (F05): this used to omit
+    // `now`, defaulting to the SERVER'S today — so a request dated years in
+    // the future was evaluated against TODAY's leave-year window, not the
+    // window the requested dates actually fall in. `startDate` is the
+    // correct reference point: it's what determines which leave year this
+    // specific request belongs to.
+    const evaluation = await evaluateEligibility(employee, leaveType, days, startDate);
     const status = evaluation.eligible && evaluation.autoApprovable ? 'AutoApproved' : 'PendingReview';
 
     // Only a request that will actually go through decide() needs a workflow —

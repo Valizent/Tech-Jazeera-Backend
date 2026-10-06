@@ -53,6 +53,14 @@ function normalizeError(err) {
   if (err.type === 'entity.parse.failed') {
     return new ApiError(400, 'Request body is not valid JSON.');
   }
+  // body-parser: request body exceeds the configured size limit. Fixed
+  // 2026-10-06, a real QA-audit finding (F09): this fell through to the
+  // generic "unknown error → bug" branch below, so a plain oversized request
+  // logged as a 500 operational alarm (and paged Sentry) for something that
+  // is really just a 413 — an ordinary, expected client-side condition.
+  if (err.type === 'entity.too.large') {
+    return new ApiError(413, 'Request body is too large.');
+  }
 
   // Unknown error → a bug. Mark non-operational so the message is masked.
   const wrapped = new ApiError(500, 'Something went wrong. Please try again.');

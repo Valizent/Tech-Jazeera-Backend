@@ -132,11 +132,14 @@ export async function realRevenueByCoordinator(month) {
  * paid-for share of profit too. Returns { revenueTotals, profitTotals },
  * both Map<coordinatorIdString, amount>.
  */
-async function realRevenueAndProfitByCoordinator(month) {
-  const deployments = await Deployment.find({
+/** ONE query covering every month in `months`, instead of one query per
+ *  month — the first half of the 2026-10-06 perf fix (P02), see
+ *  revenueAndProfitForMonths' own doc comment below for the full reasoning. */
+async function fetchDeploymentsForMonths(months) {
+  return Deployment.find({
     workerType: { $ne: 'Employee' },
     archived: { $ne: true },
-    monthlyHours: { $elemMatch: { month } },
+    monthlyHours: { $elemMatch: { month: { $in: months } } },
   })
     .select('client monthlyHours mobilisation')
     .populate({
@@ -145,19 +148,31 @@ async function realRevenueAndProfitByCoordinator(month) {
         'coordinators workerType clientRate clientCommission otClientRate otEmployeeRate subcontractorRate subcontractorCommission fta allowance mobilisationCost',
     })
     .lean();
+}
 
-  // See realRevenueByCoordinator's own 2026-10-03 comment above — same fix.
+/** One client-ledger walk per DISTINCT client across the WHOLE deployments
+ *  set handed in — never per month. getClientAllocation always returns a
+ *  client's complete history regardless of which month asked for it (see its
+ *  own doc comment), so calling it once per month it happens to be touched in
+ *  was pure duplicated work computing the identical answer repeatedly. */
+async function buildAllocationByEntryId(deployments) {
   const clientIds = [...new Set(deployments.map((d) => d.client.toString()))];
   const allocations = await Promise.all(clientIds.map((clientId) => getClientAllocation(clientId)));
   const allocationByEntryId = new Map();
   for (const { perEntry } of allocations) {
     for (const e of perEntry) allocationByEntryId.set(e.entryId.toString(), e.amountAllocated);
   }
+  return allocationByEntryId;
+}
 
+/** Pure, in-memory, no DB calls — the exact per-entry math this function
+ *  always did, just reading from data the caller already fetched instead of
+ *  fetching its own copy. */
+function computeMonthTotals(month, deployments, allocationByEntryId) {
   const revenueTotals = new Map();
   const profitTotals = new Map();
   const pendingByCoordinator = new Set();
-  
+
   for (const d of deployments) {
     if (!d.mobilisation) continue;
     const entry = d.monthlyHours.find((m) => m.month === month);
@@ -167,7 +182,7 @@ async function realRevenueAndProfitByCoordinator(month) {
 
     const isInvoiced = !!entry.invoiceSentAt;
     const amountAllocated = isInvoiced ? (allocationByEntryId.get(entry._id.toString()) ?? 0) : 0;
-    
+
     // If it's not invoiced, or allocated is less than revenue, money is still pending
     if (!isInvoiced || amountAllocated < revenue) {
       for (const c of d.mobilisation.coordinators ?? []) {
@@ -193,8 +208,39 @@ async function realRevenueAndProfitByCoordinator(month) {
   }
 
   const currentMonthStr = new Date().toISOString().slice(0, 7);
-
   return { revenueTotals, profitTotals, pendingByCoordinator, currentMonthStr };
+}
+
+/**
+ * Fixed 2026-10-06, a real QA-audit perf finding (P02): the semi-annual
+ * report (6 months × N clients) used to call the single-month function below
+ * once per month, and EACH of those independently re-fetched deployments for
+ * just that month AND re-walked every one of that month's clients' COMPLETE
+ * payment history from scratch — even though the same client showing up in
+ * multiple months of the window produced the exact same ledger-walk answer
+ * every time (getClientAllocation's result doesn't depend on which month
+ * asked for it at all). Measured: 234 DB calls for a 6-month/12-client
+ * report. This is the real fix: ONE deployment fetch for the whole window,
+ * ONE ledger walk per distinct client across the whole window, then a cheap
+ * in-memory pass per month — the math per month is byte-for-byte identical
+ * to before (computeMonthTotals is the untouched original loop), only how
+ * many times the expensive parts run has changed.
+ */
+export async function revenueAndProfitForMonths(months) {
+  const deployments = await fetchDeploymentsForMonths(months);
+  const allocationByEntryId = await buildAllocationByEntryId(deployments);
+  const byMonth = new Map();
+  for (const month of months) {
+    byMonth.set(month, computeMonthTotals(month, deployments, allocationByEntryId));
+  }
+  return byMonth;
+}
+
+/** Single-month convenience wrapper for callers (sumProgress/sumProgressBatch
+ *  below) that only ever need one month at a time — same work either way
+ *  when there's only one month in the window. */
+async function realRevenueAndProfitByCoordinator(month) {
+  return (await revenueAndProfitForMonths([month])).get(month);
 }
 
 /** 'YYYY-MM' strings for the 6 calendar months ending at (and including)
@@ -231,12 +277,13 @@ export async function getMySemiAnnualProgress(actor, endMonth) {
   let incentivePercent = 0;
   let hasAnyTarget = false;
 
-  const perMonth = await Promise.all(
-    months.map((month) =>
-      Promise.all([realRevenueAndProfitByCoordinator(month), MobilisationTarget.findOne({ coordinator: uid, month }).lean()])
-    )
-  );
-  for (const [{ revenueTotals, profitTotals }, targetDoc] of perMonth) {
+  const [revenueByMonth, targetDocs] = await Promise.all([
+    revenueAndProfitForMonths(months),
+    Promise.all(months.map((month) => MobilisationTarget.findOne({ coordinator: uid, month }).lean())),
+  ]);
+  for (let i = 0; i < months.length; i++) {
+    const { revenueTotals, profitTotals } = revenueByMonth.get(months[i]);
+    const targetDoc = targetDocs[i];
     achieved = round2(achieved + (revenueTotals.get(uid) ?? 0));
     netProfit = round2(netProfit + (profitTotals.get(uid) ?? 0));
     if (targetDoc) {
@@ -269,18 +316,18 @@ export async function getMySemiAnnualProgress(actor, endMonth) {
 export async function getMyMonthlyProgressWindow(actor, endMonth) {
   const months = last6Months(endMonth);
   const uid = actor.userId.toString();
-  
-  const perMonth = await Promise.all(
-    months.map((month) =>
-      Promise.all([realRevenueAndProfitByCoordinator(month), MobilisationTarget.findOne({ coordinator: uid, month }).lean()])
-    )
-  );
+
+  const [revenueByMonth, targetDocs] = await Promise.all([
+    revenueAndProfitForMonths(months),
+    Promise.all(months.map((month) => MobilisationTarget.findOne({ coordinator: uid, month }).lean())),
+  ]);
 
   const results = [];
   for (let i = 0; i < months.length; i++) {
     const month = months[i];
-    const [{ profitTotals, pendingByCoordinator, currentMonthStr }, targetDoc] = perMonth[i];
-    
+    const { profitTotals, pendingByCoordinator, currentMonthStr } = revenueByMonth.get(month);
+    const targetDoc = targetDocs[i];
+
     // We use profit as achieved, as per requirements
     const achieved = profitTotals.get(uid) ?? 0;
     const target = targetDoc?.target ?? 0;
@@ -312,15 +359,18 @@ export async function getAllSemiAnnualProgress(actor, endMonth) {
   }
   const months = last6Months(endMonth);
 
-  const perMonth = await Promise.all(
-    months.map(async (month) => {
-      const [{ revenueTotals, profitTotals }, targets] = await Promise.all([
-        realRevenueAndProfitByCoordinator(month),
-        MobilisationTarget.find({ month }).lean(),
-      ]);
-      return { revenueTotals, profitTotals, targetByCoordinator: new Map(targets.map((t) => [t.coordinator.toString(), t])) };
-    })
-  );
+  const [revenueByMonth, targetsByMonth] = await Promise.all([
+    revenueAndProfitForMonths(months),
+    Promise.all(months.map((month) => MobilisationTarget.find({ month }).lean())),
+  ]);
+  const perMonth = months.map((month, i) => {
+    const { revenueTotals, profitTotals } = revenueByMonth.get(month);
+    return {
+      revenueTotals,
+      profitTotals,
+      targetByCoordinator: new Map(targetsByMonth[i].map((t) => [t.coordinator.toString(), t])),
+    };
+  });
 
   const coordinatorIds = new Set();
   for (const { targetByCoordinator } of perMonth) {
@@ -373,18 +423,14 @@ export async function getAllMonthlyProgressWindow(actor, endMonth) {
   }
   const months = last6Months(endMonth);
 
-  const perMonth = await Promise.all(
-    months.map(async (month) => {
-      const [totalsAndPending, targets] = await Promise.all([
-        realRevenueAndProfitByCoordinator(month),
-        MobilisationTarget.find({ month }).lean(),
-      ]);
-      return { 
-        ...totalsAndPending, 
-        targetByCoordinator: new Map(targets.map((t) => [t.coordinator.toString(), t])) 
-      };
-    })
-  );
+  const [revenueByMonth, targetsByMonth] = await Promise.all([
+    revenueAndProfitForMonths(months),
+    Promise.all(months.map((month) => MobilisationTarget.find({ month }).lean())),
+  ]);
+  const perMonth = months.map((month, i) => ({
+    ...revenueByMonth.get(month),
+    targetByCoordinator: new Map(targetsByMonth[i].map((t) => [t.coordinator.toString(), t])),
+  }));
 
   const coordinatorIds = new Set();
   for (const { targetByCoordinator } of perMonth) {

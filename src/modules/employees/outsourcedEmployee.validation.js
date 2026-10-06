@@ -70,6 +70,16 @@ export const updateOutsourcedEmployeeSchema = z
 
 export const outsourcedEmployeeIdParamSchema = z.object({ id: id('outsourced employee') });
 
+// Fixed 2026-10-06, a real QA-audit finding (S01): this list had no query
+// validation at all, so `?limit=1000000` returned every record in one
+// response. Capped the same way listEmployeesSchema caps the real Employees
+// list.
+export const listOutsourcedEmployeesSchema = z.object({
+  search: optionalStr(100),
+  workerType: z.preprocess(emptyToUndef, z.enum(['Freelancer', 'SupplierEmployee']).optional()),
+  limit: z.coerce.number().int().min(1).max(100).default(100),
+});
+
 export const outsourcedEmployeeDocumentBodySchema = z.object({
   title: z.string().trim().min(2, 'Title is required.').max(150),
   expiryDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),

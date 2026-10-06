@@ -56,6 +56,22 @@ export const requireAuth = asyncHandler(async (req, res, next) => {
     throw new ApiError(401, 'Session expired or invalid. Please log in again.');
   }
 
+  // Fixed 2026-10-06, a real QA-audit finding (S02): forcePasswordChange was
+  // only ever enforced by the login screen's own UI (ChangePasswordModal,
+  // rendered `force`d open whenever this flag is true) — the access token
+  // this function hands back still worked for every other authenticated
+  // route, so a flagged account could reach the whole API with no password
+  // change at all, just by not using the browser flow. `details.code` is a
+  // stable, machine-readable value the client can check for (unlike the
+  // message text, which can change) — PATCH /api/auth/password and logout
+  // are the two escapes a flagged account must always keep: logout never
+  // reaches this middleware at all (cookie-based, no Bearer token), and the
+  // password-change route is explicitly exempted below.
+  const isChangePasswordRequest = req.method === 'PATCH' && req.path === '/password';
+  if (user.forcePasswordChange && !isChangePasswordRequest) {
+    throw new ApiError(403, 'You must change your password before continuing.', { code: 'PASSWORD_CHANGE_REQUIRED' });
+  }
+
   // `employee` (P2-M1) is the linked workforce record, or null for staff. It
   // is the anchor for ownership checks — an ESS route (P2-M2) will compare a
   // resource's owner against req.user.employee. Stringified for easy ===.

@@ -25,9 +25,22 @@ const limitReached = {
   message: 'Too many requests. Please wait a moment and try again.',
 };
 
+// Fixed 2026-10-06, a real QA-audit finding (P01): 600/IP/15min — meant to be
+// "roomy for an office sharing one IP" — was actually BELOW what a handful of
+// genuinely active staff generate on their own: the audit's own measurement
+// put one normal active user around 200 requests/15min, so just 3 people
+// sharing an office IP (no misuse, just ordinary polling/tabs) exhausted the
+// whole budget before `userLimiter` below — the limiter actually meant to
+// catch a runaway individual — ever got a say. Raised 5x (headroom for ~15
+// people at that same real measured rate, or ~10 at userLimiter's own
+// documented 300/15min design baseline) so the IP floor is a backstop against
+// a genuinely abusive volume again, not a shared-office tax. The sensitive
+// unauthenticated surface this also covers (login) keeps its own much
+// stricter `loginLimiter` below regardless — this number only ever mattered
+// for brute-force resistance there, and that protection is unchanged.
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  limit: 600, // per IP per window roomy for an office sharing one IP
+  limit: 3000, // per IP per window roomy for an office sharing one IP
   standardHeaders: 'draft-7', // send RateLimit-* headers so clients can back off
   legacyHeaders: false,
   message: limitReached,

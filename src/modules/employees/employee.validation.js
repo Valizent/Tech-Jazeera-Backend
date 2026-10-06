@@ -91,6 +91,15 @@ const employeeObjectSchema = z
     iqama: documentSchema,
     medical: documentSchema,
     drivingLicense: documentSchema,
+    // Fixed 2026-10-06, a real QA-audit finding (F01): `.default([])` here,
+    // same as `.default('Outsourced')` on `type` below, survives `.partial()`
+    // — Zod applies a field's default whenever the key is OMITTED, which is
+    // exactly what every PATCH that doesn't touch this field does. A PATCH
+    // that only changed `{department: '...'}` was silently wiping the whole
+    // document register. No default needed here at all: the Mongoose schema
+    // (employee.model.js) already defaults this to `[]` for a brand new
+    // document, so create is unaffected — same reasoning as `nullableWeekday`
+    // above, just for an array instead of a number.
     additionalDocuments: z
       .array(
         z.object({
@@ -99,8 +108,7 @@ const employeeObjectSchema = z
           expiry: optionalDate,
         })
       )
-      .optional()
-      .default([]),
+      .optional(),
 
     joiningDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
     contractStartDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),

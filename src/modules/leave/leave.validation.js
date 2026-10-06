@@ -89,10 +89,22 @@ export const listLeaveTypesSchema = z.object({
 
 export const leaveTypeIdParamSchema = z.object({ id: objectId('leave type') });
 
+// Fixed 2026-10-06, a real QA-audit finding (F06): leave is counted in whole
+// CALENDAR days (daysInclusive in leave.service.js), but this accepted any
+// timestamp, not just a date. A same-day request with a real time-of-day gap
+// (e.g. 06:00 to 20:30) rounds the elapsed ~0.6 fractional days up to a whole
+// day before the +1 inclusive count, so one calendar day came out as two.
+// The web client always sends a plain 'YYYY-MM-DD' (z.coerce.date() parses
+// that as UTC midnight already, so this is a no-op for it); this only
+// changes behavior for a caller — an API/mobile client — that sends a full
+// timestamp, collapsing it to its UTC calendar date before anything compares
+// it to another date.
+const dateOnly = (date) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+
 export const submitLeaveRequestSchema = z.object({
   leaveType: objectId('leave type'),
-  startDate: z.coerce.date({ error: 'Start date is required.' }),
-  endDate: z.coerce.date({ error: 'End date is required.' }),
+  startDate: z.coerce.date({ error: 'Start date is required.' }).transform(dateOnly),
+  endDate: z.coerce.date({ error: 'End date is required.' }).transform(dateOnly),
   reason: z.preprocess(emptyToUndef, z.string().trim().max(500).optional()),
 });
 
