@@ -83,8 +83,10 @@ src/theme/          tokens.js (the web's light/dark palettes) + ThemeProvider
   the generic dialog showed two buttons both labelled "Cancel".
 - Downloads open in the phone's own viewer (Android "open with" intent, iOS
   share sheet/Quick Look), after an authenticated native download.
-- The 12-minute inactivity sign-out from the web is kept for parity — see the
-  open decision below.
+- **No inactivity sign-out on phones** (the user's decision, 6 October): the
+  web's 12-minute rule exists for shared office PCs. A phone stays signed in
+  until the 7-day refresh token runs out, the user logs out, or an admin
+  revokes the session.
 - Error tracking (Sentry/GlitchTip) is deferred to M8 — it only matters in
   real release builds.
 
@@ -119,10 +121,7 @@ src/theme/          tokens.js (the web's light/dark palettes) + ThemeProvider
   Go's own toolbar stayed left-to-right; the app's manifest already sets
   `supportsRtl`), native dialogs following the dark theme, and whether the
   RTL switch applies on the first automatic reload.
-- Not exercised on the emulator yet: the offline screen, the 12-minute
-  inactivity sign-out, the camera (the emulator has no real camera).
-- **Decision for the user:** keep the web's 12-minute inactivity sign-out on
-  phones? It exists for shared office PCs; on a personal phone it's exactly
-  the "it keeps logging me out" complaint.
+- Not exercised on the emulator yet: the offline screen, the camera (the
+  emulator has no real camera).
 - Found during M1 and cleaned up: two test leave types and a test employee
   ("Verify F04/F06…") left in the dev DB by the 6 October audit verification.
