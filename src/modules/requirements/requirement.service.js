@@ -198,12 +198,25 @@ async function buildScope({ coordinator, closed, client, subcontractor }, actor)
   }
   if (client) filter.clientName = { $regex: `^${escapeRegex(client)}$`, $options: 'i' };
   if (subcontractor) filter.candidates = { $elemMatch: { subcontractor, status: { $ne: 'Dropped' } } };
-  const terminalIds = stages.filter((s) => s.isTerminal).map((s) => s._id);
-  if (closed !== 'all' && terminalIds.length > 0) {
+  const mobilisedIds = stages.filter((s) => s.isTerminal && s.isMobilisedStage).map((s) => s._id);
+  const lostIds = stages.filter((s) => s.isTerminal && !s.isMobilisedStage).map((s) => s._id);
+
+  if (lostIds.length > 0) {
+    // "Lost" cards never appear on the board — they go to the Lost Leads section.
+    filter.stage = { $nin: lostIds };
+  }
+
+  if (closed !== 'all' && mobilisedIds.length > 0) {
+    const activeAndLostIds = stages.filter((s) => !s.isTerminal || (!s.isMobilisedStage)).map((s) => s._id);
+    
+    // We already excluded lostIds above. Now we either want non-terminal cards,
+    // OR mobilised cards closed within the last 30 days.
+    const baseStageFilter = filter.stage;
     filter.$or = [
-      { stage: { $nin: terminalIds } },
-      { stageEnteredAt: { $gte: new Date(Date.now() - CLOSED_VISIBLE_DAYS * DAY_MS) } },
+      { stage: { $nin: mobilisedIds, ...(baseStageFilter && { $nin: [...baseStageFilter.$nin, ...mobilisedIds] }) } },
+      { stage: { $in: mobilisedIds }, stageEnteredAt: { $gte: new Date(Date.now() - CLOSED_VISIBLE_DAYS * DAY_MS) } },
     ];
+    delete filter.stage; // merged into $or
   }
   return { access, stages, stageById, filter };
 }
