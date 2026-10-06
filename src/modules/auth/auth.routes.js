@@ -9,7 +9,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
 import { loginLimiter } from '../../middleware/rateLimiter.js';
 import { requireTrustedOrigin } from '../../middleware/originGuard.js';
-import { loginSchema, changePasswordSchema } from './auth.validation.js';
+import { loginSchema, changePasswordSchema, refreshTokenBodySchema } from './auth.validation.js';
 import { uploadAvatarImage } from './avatar.upload.js';
 import * as authController from './auth.controller.js';
 
@@ -23,8 +23,8 @@ const router = Router();
 router.use(requireTrustedOrigin);
 
 router.post('/login', loginLimiter, validate({ body: loginSchema }), asyncHandler(authController.login));
-router.post('/refresh', asyncHandler(authController.refresh));
-router.post('/logout', asyncHandler(authController.logout));
+router.post('/refresh', validate({ body: refreshTokenBodySchema }), asyncHandler(authController.refresh));
+router.post('/logout', validate({ body: refreshTokenBodySchema }), asyncHandler(authController.logout));
 
 // Bearer-authenticated, unlike the three above — an attacker's site can't
 // forge an Authorization header, so requireTrustedOrigin isn't what protects

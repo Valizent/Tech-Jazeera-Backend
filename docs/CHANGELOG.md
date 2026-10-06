@@ -2159,3 +2159,21 @@ when requested):**
   Verified: full server test suite green (34/34), `eslint` clean on both
   repos once shell tooling recovered from a transient outage mid-session,
   and every fix re-confirmed present on disk.
+- **6 October 2026: native mobile app (React Native + Expo) — milestone M1
+  COMPLETE.** The user chose to replace the Capacitor wrap with a real native
+  app: full parity with the web, Expo, its own repo (`Mobile application/`,
+  GitHub `Valizent/Valizent-WMS-App`) — knowingly reversing the earlier
+  "React Native rejected" decision (every feature now ships twice). 8-milestone
+  plan; M1 delivers the foundation (Expo SDK 57 + Expo Router, NativeWind with
+  the web's own color tokens, a native UI kit, i18n with Arabic RTL, light/dark),
+  login, the forced password change, role routing, and all 6 Worker/Staff
+  self-service screens plus notifications and an Account screen. One server
+  change: `X-Client: mobile` carries the refresh token in the JSON body instead
+  of the cookie (web untouched, same rotation/theft detection). Verified with
+  19 real-HTTP checks, 40/40 server tests, and a full click-through on an
+  Android emulator — which caught and fixed real bugs (class-order styling,
+  dark mode not applying, two identical "Cancel" buttons, picked files named
+  "document:…", the Riyal glyph rendering as a box, "+966" flipping in
+  Arabic). Also cleaned up test leave types/employee left in the dev DB by the
+  6 October audit verification. **User action still needed**: an Expo account
+  for the first installable build. See `docs/MOBILE-RN-notes.md`.

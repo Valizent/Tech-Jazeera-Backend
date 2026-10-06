@@ -54,45 +54,79 @@ const cookieOptions = {
 };
 
 /**
+ * NATIVE MOBILE TRANSPORT (2026-10-06, the React Native app in the separate
+ * `Mobile application/` repo — see docs/MOBILE-RN-notes.md).
+ *
+ * A native app has no browser cookie jar it can rely on across app restarts
+ * (exactly the problem the Capacitor build had to work around), so it sends
+ * `X-Client: mobile` and carries the refresh token in the JSON body instead,
+ * keeping it in the phone's Keychain/Keystore (expo-secure-store). Only the
+ * TRANSPORT differs: the same token, the same rotation, the same 30s reuse
+ * grace and theft detection in auth.service.js all apply unchanged.
+ *
+ * Mobile reads the token ONLY from the body and web ONLY from the cookie, so
+ * the cookie's CSRF reasoning above is untouched: a body token is never
+ * attached automatically by a browser, so a hostile site can't forge one.
+ */
+function isMobileClient(req) {
+  return req.get('x-client') === 'mobile';
+}
+
+function readRefreshToken(req) {
+  return isMobileClient(req) ? req.body?.refreshToken : req.cookies?.[REFRESH_COOKIE];
+}
+
+/** Hand the NEXT refresh token to the client the way it can store it. */
+function sendSession(req, res, message, { user, accessToken, refreshToken }) {
+  if (isMobileClient(req)) {
+    res.json(new ApiResponse(message, { user, accessToken, refreshToken }));
+    return;
+  }
+  res.cookie(REFRESH_COOKIE, refreshToken, cookieOptions);
+  res.json(new ApiResponse(message, { user, accessToken }));
+}
+
+/**
  * POST /api/auth/login
  * Body: { email, password } (validated by loginSchema)
  * 200 → data: { user, accessToken } + sets refresh cookie
+ *       (mobile: data also carries refreshToken, no cookie)
  * 400 validation / 401 bad credentials / 429 rate limited
  */
 export async function login(req, res) {
-  const { user, accessToken, refreshToken } = await authService.login({
+  const session = await authService.login({
     ...req.body,
     ip: req.ip,
   });
-  res.cookie(REFRESH_COOKIE, refreshToken, cookieOptions);
-  res.json(new ApiResponse('Logged in.', { user, accessToken }));
+  sendSession(req, res, 'Logged in.', session);
 }
 
 /**
  * POST /api/auth/refresh
- * Auth: refresh cookie only (no Bearer header — the access token may be dead)
+ * Auth: refresh cookie only (no Bearer header — the access token may be dead);
+ *       mobile: body { refreshToken } instead
  * 200 → data: { user, accessToken } + sets the NEXT refresh cookie (rotation)
  * 401 missing/expired/reused token
  * Returning `user` here lets the client restore a session after a page
  * reload with this single call.
  */
 export async function refresh(req, res) {
-  const { user, accessToken, refreshToken } = await authService.refresh({
-    refreshToken: req.cookies[REFRESH_COOKIE],
+  const session = await authService.refresh({
+    refreshToken: readRefreshToken(req),
     ip: req.ip,
   });
-  res.cookie(REFRESH_COOKIE, refreshToken, cookieOptions);
-  res.json(new ApiResponse('Session refreshed.', { user, accessToken }));
+  sendSession(req, res, 'Session refreshed.', session);
 }
 
 /**
  * POST /api/auth/logout
- * Auth: refresh cookie (idempotent — succeeds even if already logged out)
+ * Auth: refresh cookie (idempotent — succeeds even if already logged out);
+ *       mobile: body { refreshToken } instead
  * 200 → clears the cookie and deletes this device's session
  */
 export async function logout(req, res) {
-  await authService.logout({ refreshToken: req.cookies[REFRESH_COOKIE], ip: req.ip });
-  res.clearCookie(REFRESH_COOKIE, { ...cookieOptions, maxAge: undefined });
+  await authService.logout({ refreshToken: readRefreshToken(req), ip: req.ip });
+  if (!isMobileClient(req)) res.clearCookie(REFRESH_COOKIE, { ...cookieOptions, maxAge: undefined });
   res.json(new ApiResponse('Logged out.'));
 }
 

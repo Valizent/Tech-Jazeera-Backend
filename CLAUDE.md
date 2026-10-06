@@ -46,20 +46,29 @@ component libraries (Tailwind only). Post-Phase-3: `@capacitor/core` +
 `@capacitor/android` + `@capacitor/ios` + `@capacitor/geolocation` to wrap
 the existing web app as a real installable native app (see
 `docs/P-MOBILE-notes.md`) — reuses the same React code, not a rewrite.
+**Superseded 2026-10-06 by a real native app** (the user's explicit choice:
+full parity, Expo): `Mobile application/` is React Native on Expo SDK 57 +
+Expo Router, NativeWind (Tailwind for RN — the "Tailwind only" rule holds),
+the same TanStack Query / React Hook Form / Zod 4 / Axios / i18next, plus
+Expo modules for secure storage, GPS, files, images, the native date picker,
+and NetInfo. Every new feature now has to be built for the web AND the app.
+See `docs/MOBILE-RN-notes.md`.
 
 ## Architecture (decided — do not relitigate)
 
-- **Two separate repos, not a monorepo**: `server/` (GitHub: `Tech-Jazeera-Backend`) and
-  `client/` (GitHub: `Tech-Jazeera-Frontend`), each with its own remote, its own
-  `development`/`main` branches, and its own deploy pipeline (server: GitHub
-  Actions → the Oracle VM; client: Cloudflare Pages' own git integration, no
-  workflow file needed for it — see `docs/branching-staging-pipeline` context
-  in each repo's own history). Default new work to `development`, merge to
-  `main` to ship. `CLAUDE.md`/`docs/` live identically in BOTH repos (copied
-  2026-09-17, retiring the old single-repo `Tech-Jazeera` checkout this file
-  used to live in exclusively — see `docs/CHANGELOG.md`'s "Old root repo
-  retired" entry) — keep both copies in sync when either changes; there is no
-  longer a third canonical location.
+- **Three separate repos, not a monorepo**: `server/` (GitHub: `Tech-Jazeera-Backend`),
+  `client/` (GitHub: `Tech-Jazeera-Frontend`) and, since 2026-10-06,
+  `Mobile application/` (GitHub: `Valizent/Valizent-WMS-App`, the React Native
+  app), each with its own remote, its own `development`/`main` branches, and
+  its own deploy pipeline (server: GitHub Actions → the Oracle VM; client:
+  Cloudflare Pages' own git integration, no workflow file needed for it — see
+  `docs/branching-staging-pipeline` context in each repo's own history;
+  mobile: EAS Build). Default new work to `development`, merge to `main` to
+  ship. `CLAUDE.md`/`docs/` live identically in ALL THREE repos (copied
+  2026-09-17 into server/client, retiring the old single-repo `Tech-Jazeera`
+  checkout this file used to live in exclusively — see `docs/CHANGELOG.md`'s
+  "Old root repo retired" entry; mobile added 2026-10-06) — keep every copy
+  in sync when one changes.
 - **Layered backend**: routes → validation middleware (Zod) → controller →
   service → model. Controllers only translate HTTP; services hold business
   logic; models hold schemas. Business logic never in a controller.
@@ -78,7 +87,10 @@ the existing web app as a real installable native app (see
   rotating refresh token in an httpOnly, sameSite cookie with a 30s reuse-grace
   window (multi-tab safe) + theft detection; CORS with credentials + exact
   origin. File/export downloads fetch an authenticated Blob (a plain
-  `<a>`/`<img>` can't send the in-memory token).
+  `<a>`/`<img>` can't send the in-memory token). The native app sends
+  `X-Client: mobile` and gets the SAME rotating refresh token in the JSON
+  body instead of the cookie, kept in the phone's Keychain/Keystore — mobile
+  reads only the body, web only the cookie (`auth.controller.js`).
 
 ## Security requirements
 
