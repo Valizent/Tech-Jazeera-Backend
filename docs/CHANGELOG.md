@@ -2203,3 +2203,23 @@ when requested):**
   Expo account + `eas init`, a Firebase project for Android push
   (`GOOGLE_SERVICES_JSON` + the FCM V1 key in EAS), then a preview build to
   test push on a real phone. See `docs/MOBILE-RN-notes.md`.
+- **7 October 2026: native mobile app — milestone M3 COMPLETE (requests,
+  approvals, attendance).** No server change. The staff hub tabs arrive
+  (Workforce, Financial, Admin & Tools under More; an Executive gets a single
+  Requests tab), each with its "waiting on you" badge, showing only built
+  screens the user can open. New screens: Leave (review queue, self-submit,
+  holidays, Leave Types with sick-pay tiers), Financial Requests (advances with
+  repayments, reimbursements with receipts, self-submit), Exit Documents
+  (re-entry visas, certificates with their PDF, self-submit), the Timesheets
+  monthly report with Excel export, the Approval Log, Holidays & Ramadan, and
+  Attendance (a per-day records list replacing the web's month grid, sign
+  in/out, office location, summary with Excel/PDF). Verified on the Android
+  emulator as Admin, HR and Executive incl. dark mode and Arabic. Found and
+  fixed: the decision toast said "rejected" after approving a non-final
+  workflow step (the web has the same bug, flagged), an export that could spin
+  forever, no back button on a screen opened from a link, English dates split
+  inside Arabic sentences, plus smaller display gaps. Six web issues flagged
+  for a separate change (see the notes). **Incident**: approving test requests
+  through the real workflows sent 46 notifications to 12 real staff accounts
+  on the dev database; all deleted, but delivered Web Push can't be recalled.
+  See `docs/MOBILE-RN-notes.md`.
