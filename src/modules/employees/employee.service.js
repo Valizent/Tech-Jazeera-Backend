@@ -4,13 +4,12 @@
  */
 import Employee, { WORKFORCE_TYPES } from './employee.model.js';
 import User, { MANAGER_ELIGIBLE_ROLES } from '../auth/user.model.js';
-import RefreshToken from '../auth/refreshToken.model.js';
 import Attendance from '../attendance/attendance.model.js';
 import { activeMobilisationWorkerIds } from '../mobilisations/mobilisation.service.js';
 import ApprovalWorkflow from '../approvals/approvalWorkflow.model.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ApiError from '../../utils/ApiError.js';
-import { hashPassword, generateTempPassword } from '../auth/auth.service.js';
+import { hashPassword, generateTempPassword, revokeAllSessions } from '../auth/auth.service.js';
 import { logAudit } from '../audit/audit.service.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 
@@ -326,7 +325,7 @@ export async function updateEmployeeLoginRole(employeeId, role, actor) {
   const previousRole = login.role;
   login.role = role;
   await login.save();
-  await RefreshToken.deleteMany({ user: login._id });
+  await revokeAllSessions(login._id);
 
   await logAudit({
     user: actor.userId,
@@ -358,7 +357,7 @@ export async function resetEmployeeLoginPassword(employeeId, actor) {
   // user.model.js's tokenVersion doc comment (F8, 2026-09-15).
   login.tokenVersion = (login.tokenVersion ?? 0) + 1;
   await login.save();
-  await RefreshToken.deleteMany({ user: login._id });
+  await revokeAllSessions(login._id);
 
   await logAudit({
     user: actor.userId,
@@ -448,7 +447,7 @@ export async function deleteEmployee(id, actor) {
 
   const login = await User.findOne({ employee: id });
   if (login) {
-    await RefreshToken.deleteMany({ user: login._id });
+    await revokeAllSessions(login._id);
     await User.findByIdAndDelete(login._id);
   }
 

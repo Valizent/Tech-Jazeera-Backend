@@ -2177,3 +2177,29 @@ when requested):**
   Arabic). Also cleaned up test leave types/employee left in the dev DB by the
   6 October audit verification. **User action still needed**: an Expo account
   for the first installable build. See `docs/MOBILE-RN-notes.md`.
+- **6 October 2026: native mobile app — milestone M2 COMPLETE (phone push +
+  staff shell + Dashboard).** Server: real phone push through Expo's push
+  service — a `DevicePushToken` per app install (register after sign-in,
+  unregister before sign-out), sent by plain `fetch` inside the existing
+  bounded push queue next to Web Push, so every existing `notifyUser` caller
+  reaches phones unchanged; `DeviceNotRegistered` tokens are dropped. A new
+  `revokeAllSessions` replaced 7 bare refresh-token deletes (password
+  change/reset, role change, theft detection, deletions) and also signs that
+  user's phones out of push. App: push registration and tap-to-open, a staff
+  tab shell (Dashboard + More; the 4 hub tabs wait for their first real module
+  in M3, so no empty tab ships), the whole web Dashboard as one column (every
+  widget, server-driven visibility; Quick actions and Manage targets wait for
+  their screens), My details, and an "Open on the web" fallback for staff
+  screens not built yet. Verified: 47/47 server tests, 16/16 real-HTTP checks,
+  a real send to Expo's live service (dead token correctly deleted), and an
+  emulator click-through as Coordinator and Admin incl. dark mode and Arabic.
+  Found and fixed on the way: importing `expo-notifications` crashed Expo Go;
+  in Expo Go `I18nManager.isRTL` is always false, which made a spurious
+  "Reopen the app" alert show on every Arabic launch and was the real cause of
+  M1's Arabic → English bug; signed percentages flipping in Arabic; the
+  Dashboard blanking when the alert window changed. Also restored the app's
+  dependencies after an unrelated "safe commit test" commit had replaced them
+  with an incompatible set (expo 44 / RN 0.72). **User action still needed**:
+  Expo account + `eas init`, a Firebase project for Android push
+  (`GOOGLE_SERVICES_JSON` + the FCM V1 key in EAS), then a preview build to
+  test push on a real phone. See `docs/MOBILE-RN-notes.md`.

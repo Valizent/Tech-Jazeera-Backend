@@ -13,6 +13,8 @@ import {
   notificationIdParamSchema,
   subscribePushSchema,
   unsubscribePushSchema,
+  registerDeviceSchema,
+  unregisterDeviceSchema,
 } from './notification.validation.js';
 import * as notificationController from './notification.controller.js';
 
@@ -29,5 +31,9 @@ router.patch('/:id/read', validate({ params: notificationIdParamSchema }), async
 router.post('/read-all', asyncHandler(notificationController.markAllRead));
 router.post('/subscribe', validate({ body: subscribePushSchema }), asyncHandler(notificationController.subscribe));
 router.post('/unsubscribe', validate({ body: unsubscribePushSchema }), asyncHandler(notificationController.unsubscribe));
+// The native mobile app's Expo push token (2026-10-06, M2) — the phone's
+// equivalent of /subscribe + /unsubscribe above.
+router.post('/devices', validate({ body: registerDeviceSchema }), asyncHandler(notificationController.registerDevice));
+router.delete('/devices', validate({ body: unregisterDeviceSchema }), asyncHandler(notificationController.unregisterDevice));
 
 export default router;

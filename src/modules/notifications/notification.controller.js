@@ -38,3 +38,15 @@ export async function unsubscribe(req, res) {
   await notificationService.unsubscribeFromPush(req.user.id, req.body.endpoint);
   res.json(new ApiResponse('Unsubscribed from push notifications.'));
 }
+
+/** POST /api/notifications/devices — the mobile app's push token, after sign-in. */
+export async function registerDevice(req, res) {
+  await notificationService.registerDevice(req.user.id, req.body);
+  res.status(201).json(new ApiResponse('Device registered for push notifications.'));
+}
+
+/** DELETE /api/notifications/devices — the mobile app, just before signing out. */
+export async function unregisterDevice(req, res) {
+  await notificationService.unregisterDevice(req.user.id, req.body.token);
+  res.json(new ApiResponse('Device unregistered from push notifications.'));
+}

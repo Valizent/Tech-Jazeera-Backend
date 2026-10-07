@@ -21,6 +21,7 @@ import logger from '../../config/logger.js';
 import ApiError from '../../utils/ApiError.js';
 import User from './user.model.js';
 import RefreshToken from './refreshToken.model.js';
+import DevicePushToken from '../notifications/devicePushToken.model.js';
 import Employee from '../employees/employee.model.js';
 import { logAudit } from '../audit/audit.service.js';
 import { deleteAvatarMedia } from './avatar.upload.js';
@@ -39,6 +40,17 @@ export const REFRESH_TOKEN_TTL_DAYS = 7;
  * legitimate rotation.
  */
 const REFRESH_REUSE_GRACE_MS = 30 * 1000;
+
+/**
+ * End every session a user has, on every device: password change/reset, role
+ * change, refresh-token theft, account deletion. Also forgets their phones'
+ * push tokens — each of those phones is now signed out, and a signed-out phone
+ * must not keep showing this person's notifications on its lock screen. The
+ * app registers its token again on the next sign-in.
+ */
+export async function revokeAllSessions(userId) {
+  await Promise.all([RefreshToken.deleteMany({ user: userId }), DevicePushToken.deleteMany({ user: userId })]);
+}
 
 /** bcrypt cost factor: ~100ms per hash — slow for attackers, fine for users. */
 const BCRYPT_ROUNDS = 12;
@@ -183,7 +195,7 @@ export async function refresh({ refreshToken, ip }) {
   // long after its legitimate owner already exchanged it. Treat as theft:
   // kill every session this user has and make them log in again.
   if (stored.rotatedAt && Date.now() - stored.rotatedAt.getTime() > REFRESH_REUSE_GRACE_MS) {
-    await RefreshToken.deleteMany({ user: stored.user });
+    await revokeAllSessions(stored.user);
     await logAudit({ user: stored.user, action: 'auth.refresh.reuse_detected', ip });
     logger.warn(`Refresh token reuse detected for user ${stored.user} all sessions revoked.`);
     throw new ApiError(401, 'Session invalidated. Please log in again.');
@@ -242,7 +254,7 @@ export async function changePassword({ userId, currentPassword, newPassword }, i
   // user.model.js's tokenVersion doc comment (F8, 2026-09-15).
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
-  await RefreshToken.deleteMany({ user: user._id });
+  await revokeAllSessions(user._id);
 
   await logAudit({ user: user._id, action: 'auth.password.changed', ip });
   logger.info(`Password changed: ${user.email}`);

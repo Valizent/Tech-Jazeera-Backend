@@ -1,7 +1,9 @@
 /**
  * Notification service (P3-F) — the in-app list (the reliable channel) plus
- * best-effort Web Push delivery on top of it. See notification.model.js and
- * config/webPush.js for why push is additive, never the only copy.
+ * best-effort push on top of it: Web Push to browsers and, since the native
+ * mobile app (2026-10-06, M2), Expo push to phones (expoPush.service.js).
+ * See notification.model.js and config/webPush.js for why push is additive,
+ * never the only copy.
  */
 import { webpush, pushEnabled } from '../../config/webPush.js';
 import env from '../../config/env.js';
@@ -9,6 +11,8 @@ import logger from '../../config/logger.js';
 import User from '../auth/user.model.js';
 import Notification from './notification.model.js';
 import PushSubscription from './pushSubscription.model.js';
+import DevicePushToken from './devicePushToken.model.js';
+import { sendExpoPush } from './expoPush.service.js';
 import ApiError from '../../utils/ApiError.js';
 
 // A real Web Push send can hang or run long (a slow/unreachable push
@@ -24,14 +28,14 @@ function withTimeout(promise, ms) {
 }
 
 /**
- * Push the notification to every device this user has subscribed on.
+ * Push the notification to every browser this user has subscribed on.
  * Best-effort: a failed send never throws back to the caller — the
  * Notification record already exists regardless of whether push succeeds.
  * A 404/410 from the push service means that subscription is dead (the
  * browser un-registered it, or the device was reset) — standard Web Push
  * hygiene is to delete it so we stop wasting sends on it.
  */
-async function pushToUser(userId, notification) {
+async function sendWebPush(userId, notification) {
   if (!pushEnabled) return;
   const subscriptions = await PushSubscription.find({ user: userId }).lean();
   if (subscriptions.length === 0) return;
@@ -55,6 +59,15 @@ async function pushToUser(userId, notification) {
       }
     })
   );
+}
+
+/** Both channels, independently — a failing browser send never holds back
+ *  the phone, or the other way round. */
+async function pushToUser(userId, notification) {
+  const results = await Promise.allSettled([sendWebPush(userId, notification), sendExpoPush(userId, notification)]);
+  for (const result of results) {
+    if (result.status === 'rejected') logger.warn(`[notifications] push to ${userId} failed: ${result.reason?.message}`);
+  }
 }
 
 /**
@@ -227,4 +240,19 @@ export async function subscribeToPush(userId, { endpoint, keys, userAgent }) {
 
 export async function unsubscribeFromPush(userId, endpoint) {
   await PushSubscription.deleteOne({ endpoint, user: userId });
+}
+
+/** The mobile app registers its Expo push token after every sign-in. Keyed on
+ *  the token, so a phone that signs in as someone else moves to that user. */
+export async function registerDevice(userId, { token, platform, deviceName }) {
+  await DevicePushToken.findOneAndUpdate(
+    { token },
+    { user: userId, token, platform, deviceName },
+    { upsert: true, setDefaultsOnInsert: true }
+  );
+}
+
+/** Sign-out on the phone. Only the caller's own token — never another user's. */
+export async function unregisterDevice(userId, token) {
+  await DevicePushToken.deleteOne({ token, user: userId });
 }

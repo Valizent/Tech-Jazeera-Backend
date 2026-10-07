@@ -69,9 +69,10 @@ src/theme/          tokens.js (the web's light/dark palettes) + ThemeProvider
   `colorScheme` (its manual override never applied on the emulator). The app
   uses no `dark:` variants; colors are CSS variables set with `vars()`.
 - **Arabic RTL needs an app reload** (`I18nManager`). The app reloads itself
-  once; if the direction still hasn't applied (happened in Expo Go switching
-  Arabic → English), it asks the user to close and reopen the app instead of
-  reloading forever.
+  once; if the direction still hasn't applied, it asks the user to close and
+  reopen the app instead of reloading forever. *(Corrected in M2: the
+  Arabic → English problem seen here was really Expo Go reporting
+  `I18nManager.isRTL` as false all the time — see M2's gotchas.)*
 - **Phone numbers inside Arabic text** need `ltr()` (Unicode isolates), or
   "+966…" renders as "966…+".
 - **The Riyal sign (U+20C1) isn't in phone fonts yet** — it renders as an
@@ -125,3 +126,122 @@ src/theme/          tokens.js (the web's light/dark palettes) + ThemeProvider
   emulator has no real camera).
 - Found during M1 and cleaned up: two test leave types and a test employee
   ("Verify F04/F06…") left in the dev DB by the 6 October audit verification.
+
+## M2 — COMPLETE (2026-10-06): phone push + staff shell + Dashboard
+
+### Server change: native push (Expo)
+
+- `DevicePushToken` (`notifications/devicePushToken.model.js`): one row per
+  app install — `{ user, token (unique), platform, deviceName }`. Keyed on the
+  token, so a shared phone that signs in as someone else MOVES its token to
+  the new user instead of showing the previous person's notifications.
+- `POST /api/notifications/devices` (register, after every sign-in) and
+  `DELETE /api/notifications/devices` (just before sign-out — only the
+  caller's own token). Zod checks the Expo token format and platform.
+- `expoPush.service.js`: plain `fetch` to Expo's push endpoint (Node 22 has
+  it; no SDK dependency). Runs inside the EXISTING bounded push queue next to
+  Web Push (`Promise.allSettled`, so one channel failing never blocks the
+  other) — every one of the app's `notifyUser` callers pushes to phones with
+  no change of their own. `data` carries the notification's web `url` and its
+  id. A `DeviceNotRegistered` ticket deletes that token (the phone twin of a
+  dead Web Push subscription).
+- `auth.service.js` `revokeAllSessions(userId)` replaced 7 bare
+  `RefreshToken.deleteMany` calls (password change, admin password reset for
+  staff and employee logins, role change, refresh-token theft, user/employee
+  deletion). It also deletes that user's device tokens: a phone signed out by
+  a password reset must stop showing their notifications on its lock screen.
+  It registers again on the next sign-in.
+- Not built (deliberate): Expo's delayed push *receipts*. A token that dies
+  later is still dropped by the next send's ticket, on sign-out, or by the
+  next sign-in's re-registration.
+- Tests: `expoPush.service.test.js` (7). Suite 47/47.
+
+### App
+
+- **Push** (`src/lib/push.js`): registers after every sign-in/app start
+  (permission asked once; Android channel `default` created first, which
+  Android 13+ needs before it shows the prompt), unregisters on sign-out,
+  shows a banner while the app is open, and a tap opens the notification's
+  `url` (same paths as the web) and marks it read — also when the tap
+  launched the app from closed. A push arriving while open refreshes the bell.
+- **Staff tab shell** (`app/(app)/(staff)/`): Dashboard + More tabs, bell in
+  the header. More: My details (not Admin — no employee record, same as the
+  web), Notifications, Account. **The plan's 4 hub tabs are deferred to M3**:
+  no staff module screen exists yet, so a hub would be an empty tab (hard
+  rule 2). Each hub tab appears with its first real module.
+- **Dashboard** (`app/(app)/(staff)/(tabs)/index.jsx`,
+  `features/dashboard/components/`): every web widget, same order, one column
+  — Waiting on you, client-approval banner, active revenue + touch sparkline,
+  Actual performance, Directory stats, the Coordinator's target ring (+ the
+  hit-confetti, RN `Animated`) and monthly window, HR compliance, My
+  requirements, pipeline breakdown, daily attendance, standby analysis,
+  coordinator leaderboard (sort chips; a row opens the drill-down sheet),
+  expiring documents (alert window kept on the phone), API health + recent
+  activity. Visibility comes only from what `/dashboard` returns, exactly
+  like the web. Pull to refresh refetches every `['dashboard', ...]` query.
+  **Not ported, on purpose**: Quick actions and Manage targets (both open
+  screens that arrive in M4/M6).
+- **My details** (`app/(app)/(staff)/my-details.jsx`): the web's
+  MyDetailsModal as a screen, through `/api/profile`.
+- **Screens not built yet**: a notification or Dashboard link to a staff page
+  the app doesn't have lands on "Not in the app yet", which offers **Open on
+  the web** with the same path and query when `EXPO_PUBLIC_WEB_URL` is set
+  (optional; `.env.example`).
+
+### Decisions and gotchas (found on the emulator)
+
+- **Importing `expo-notifications` throws inside Expo Go on Android** (SDK
+  53+ removed remote push there). `src/lib/push.js` loads it only outside
+  Expo Go; in Expo Go push is simply off and everything else works.
+- **In Expo Go, `I18nManager.isRTL` always reports false**, even while the
+  layout is right-to-left (measured: `getConstants()` → `isRTL:false`,
+  `localeIdentifier:en_US`). That made M1's startup self-check show "Reopen
+  the app" on every Arabic launch, and was the real reason Arabic → English
+  didn't reload in M1. Fix: a language change reloads when the two
+  languages' directions differ (not based on `isRTL`), and the startup
+  self-check runs only in real builds. Both directions now switch in one
+  reload in Expo Go.
+- **Signed percentages inside Arabic text** need `ltr()` too ("-19%" rendered
+  "19%-").
+- Changing the expiring-documents window used to blank the whole Dashboard
+  to skeletons and jump to the top (new query key) — `keepPreviousData`.
+- `mobile` package.json had been replaced after M1 by an unrelated
+  "safe commit test" commit (expo 44 / RN 0.72 / NativeWind 2 / Tailwind 4 —
+  the app no longer bundled). Restored to the M1 versions (SDK 57) before M2.
+
+### Verified
+
+- Server: 47/47 tests, lint clean; 16/16 real-HTTP checks (device register
+  happy path + idempotent, no auth → 401, bad token/platform → 400, another
+  user's unregister has no effect, Coordinator dashboard/target/profile,
+  Admin `/profile` → 403, leaderboard, health); a real notification through
+  the queue to **Expo's live push service** with a fake token → Expo answered
+  `DeviceNotRegistered` → the token was deleted; a password change deleted
+  the user's device tokens and ended the old session.
+- App on the Android 15 emulator (Expo Go) with a throwaway Admin and a
+  Coordinator (linked employee + a target), all cleaned up afterwards: the
+  Coordinator's Dashboard (target ring, monthly window, own pipeline, team
+  expiring documents, alert window change + kept position), My details
+  (invalid phone refused inline + toast; valid save confirmed in the DB),
+  sign-out; the Admin's Dashboard over real dev data (revenue + sparkline
+  touch, Actual performance, attendance, directory, leaderboard sort both
+  ways + drill-down, global pipeline, health, recent activity), More without
+  My details, "Not in the app yet" → Open on the web with the exact path and
+  query; dark mode; Arabic RTL both ways; lint clean; Android bundle builds.
+
+### Not yet verified / USER ACTION
+
+- **Push on a real phone** — impossible in Expo Go. Needs, once:
+  1. the Expo account + `npx eas-cli@latest init` (M1's open item) — then
+     paste the project id it prints into `app.config.js` as
+     `extra.eas.projectId`;
+  2. a Firebase project (free) with an Android app for `com.aljazeera.crm`:
+     upload its `google-services.json` to EAS as a **file** environment
+     variable named `GOOGLE_SERVICES_JSON`, and its FCM V1 service-account
+     key under `eas credentials` → Android → Push notifications;
+  3. a `preview` build. iPhone push needs the Apple Developer account (M8).
+- On that build: push received with the app closed, the tap opening the
+  right screen, sign-out stopping push; and the RTL startup self-check (a
+  real build is expected to report `isRTL` correctly).
+- Set `EXPO_PUBLIC_WEB_URL` (the web app's address) in EAS env to enable
+  "Open on the web".

@@ -5,10 +5,9 @@
  * this module keeps the day-to-day admin actions on an EXISTING login.
  */
 import User from '../auth/user.model.js';
-import RefreshToken from '../auth/refreshToken.model.js';
 import Employee from '../employees/employee.model.js';
 import ApiError from '../../utils/ApiError.js';
-import { hashPassword, generateTempPassword } from '../auth/auth.service.js';
+import { hashPassword, generateTempPassword, revokeAllSessions } from '../auth/auth.service.js';
 import { logAudit } from '../audit/audit.service.js';
 
 const PUBLIC_FIELDS = 'name email role isActive employee createdAt';
@@ -82,7 +81,7 @@ export async function resetStaffPassword(id, actor) {
   // user.model.js's tokenVersion doc comment (F8, 2026-09-15).
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
-  await RefreshToken.deleteMany({ user: user._id });
+  await revokeAllSessions(user._id);
 
   await logAudit({
     user: actor.userId,
@@ -133,7 +132,7 @@ export async function deleteStaffUser(id, actor) {
   }
 
   await User.findByIdAndDelete(id);
-  await RefreshToken.deleteMany({ user: id });
+  await revokeAllSessions(id);
 
   await logAudit({
     user: actor.userId,
