@@ -366,3 +366,131 @@ No server change — every screen uses the web's existing endpoints.
   real account also rejected the test leave at its final step — its audit
   entries (login, the rejection, logout) were left as real history. Next
   time: a temporary workflow whose step pools contain only test users.
+
+## M4 — COMPLETE (2026-10-07): coordinator workflow
+
+No server change — every screen uses the web's existing endpoints.
+
+### Navigation
+
+- A new **Sales & Clients** tab: Mobilisations, Daily Updates, Requirements,
+  Lost Leads (same paths, section keys and badges as the web's sidebar).
+  Workforce gains **Targets**, Admin & Tools gains **Coordinator Activity**.
+- The Dashboard gains **Manage targets** and Quick actions (New mobilisation,
+  Attendance), each shown only with the matching write grant.
+- Write screens guard themselves too (`RequireSectionWrite`, with the
+  Office Secretary bypass the web's New Mobilisation route has).
+
+### Screens
+
+- **Daily Updates** — Tasks (assign/add with a due date, mark done, edit and
+  delete exactly as the row's server `permissions` allow) and Log (entries
+  with an optional link to a requirement card); team filter for whoever reads
+  the team; `?coordinator=`/`?tab=` deep links.
+- **Requirements** — the board as stage chips (one column at a time, counts on
+  each chip), filters (coordinator, client, subcontractor, older closed
+  cards), cards with stale flags; a card screen with its timeline, updates,
+  candidates and **Start mobilisation**; Manage stages (Admin); Excel export.
+  **Lost Leads** with search, coordinator filter and export.
+- **Mobilisations** — list (search, status, sort, export); New/Edit with the
+  full web form: Iqama autofill, the previous-worker picker, OT client-rate
+  autofill, job-title/location "+ Add new", the Employees picker loaded only
+  for "Own Employee"; detail with documents (pick files or take a photo, up to
+  10 × 10 MB, view, delete), coordinators (invite, shares, remove), the step-0
+  reviewer's Section 2, save-before-decide, the approval trail, "From
+  requirement" link and per-record export. **Worker data** (Admin): look up
+  by Iqama, archive/unarchive.
+- **Targets** (6 months per coordinator) and the **Manage targets** sheet
+  (monthly progress, semi-annual, set/edit/remove).
+- **Coordinator Activity** — clients and employees coordinators added
+  themselves, with the client approve/reject decision.
+- New shared pieces: `OptionSheet` (the list behind Select/SuggestInput, a
+  search box from 9 options), `SuggestInput`, `PillChecklist`, `Pager`,
+  `DateInput` min/max/clear, `Input` `trailing`, `QuickCreateSheet`,
+  `LabelWithAdd`, `DetailRows` ("⚠ Missing" for required gaps),
+  `RequireSectionWrite`; `ProgressBar` moved to `components/ui`.
+
+### Decisions
+
+- **No drag-and-drop board**: a multi-column Kanban doesn't fit a phone.
+  Cards move with a "Move to…" picker (the web's own touch fallback) —
+  optimistic, and a refusal rolls back only the moved card.
+- **Start mobilisation passes only the requirement and candidate ids**; the
+  form loads the card itself and uses a value only when it matches a real
+  picker option, same as the web.
+- **After a decision the reviewer often loses access** (a reviewer only sees a
+  record while it's at their step), so the screen goes back instead of
+  landing on "Mobilisation not found" — only on a 403/404 refetch, so a
+  reviewer who also holds the next step stays on the record.
+- Suggestions open in a sheet behind a list button, not under the field: the
+  keyboard hid an inline list.
+- Android is edge-to-edge (SDK 54+), so the window no longer resizes for the
+  keyboard: `Screen`, `Sheet` and login pad themselves (`KeyboardAvoidingView`
+  "padding" with the header height as the offset).
+- Directional icons mirror from the **language**, not `I18nManager.isRTL`
+  (false in Expo Go even while the layout is right-to-left — chevrons pointed
+  the wrong way there). The native stack header still doesn't mirror in Expo
+  Go; a real build does.
+
+### Found and fixed on the emulator
+
+- The keyboard covered the field being typed in (edge-to-edge, above).
+- Approving a non-final mobilisation step said "Mobilisation approved." — now
+  "Sent on to the next review step."
+- After the final decision the screen showed "Mobilisation not found" (above).
+- The approve sheet's optional note said "Explain what needs fixing…".
+- Hub chevrons pointed right in Arabic (above).
+- Two titles had lost their separator (the edit screen's "worker · client",
+  the attendance editor's "name · day") — joined on mobile.
+- Smaller: an undefined `accessibilityLabel` hid an input's label; duplicate
+  suggestions (two workers with one name) broke the list; the stale-card
+  border didn't apply through a conflicting class.
+
+### Web issues found (not fixed here — web code, for a separate change)
+
+- Client commit 60f1f4e ("fixed dashes") deleted the em dash from **101
+  English strings** without a replacement, so clauses now run together (e.g.
+  "…an active mobilisation or deployment demobilise or complete it first…").
+  The app shows the same text. Needs a pass putting a comma/colon/full stop
+  where each dash was.
+- The web's mobilisation step approval also says "approved" for a non-final
+  step, lands on "not found" after the final decision, and shows "Explain
+  what needs fixing…" as the approve note's placeholder.
+- The web Targets and Coordinator Activity pages are hard-coded English.
+- `staffNav` has no keys for Targets or Lost Leads (the web falls back to
+  hard-coded labels); the app's locale files add them.
+
+### Verified
+
+- Android 15 emulator (Expo Go) as a throwaway Coordinator, a second
+  Coordinator (reviewer) and an Admin, on the dev database, every approval
+  step on a temporary workflow whose pool held only test users: Daily Updates
+  (task add with due date, done, edit/delete, log add/delete, validation);
+  Sales hub badges; the board (own scope, move with toast and counts, card
+  timeline, `?open=` link); Start mobilisation pre-fill → Draft linked to the
+  card; job-title quick-create; OT rate autofill; no-documents submit warning;
+  document upload, PDF view, delete; joint coordinator invite, 60/40 shares,
+  remove; edit with nationality search; reviewer: step-0 Section 2 save then
+  approve ("Sent on…", stays on the record), final approve → Approved with an
+  Active Deployment in the DB, final reject → Rejected and the screen goes
+  back, empty-note reject refused; Admin: Quick actions, Manage targets (set
+  and remove a test coordinator's target, real targets untouched), Targets,
+  Coordinator Activity client approve (empty reject refused), Lost Leads +
+  Excel export, Worker data (archive refused while active), Manage stages
+  (view); dark mode; Arabic RTL. Lint clean, Android bundle builds, every
+  static translation key present in en + ar.
+- Not exercised on purpose: editing/reordering the real board stages, and a
+  real archive (only the refused case).
+- **Cleanup**: every fixture removed (users, roles, grants restored and
+  compared with the saved copy, clients, subcontractor, job title,
+  requirement, mobilisations, the deployment, daily updates, targets, the
+  temporary workflow, notifications, tokens, audit rows, counters) — zero
+  residue, no notification to anyone left since the start.
+  **Incident**: one test mobilisation was submitted through the API, which
+  picked the real "Mobilisation workflows" workflow and sent one in-app
+  "needs your review" notification to one real staff account (the reviewer
+  on its "Secretary verification" step). Deleted within minutes; that account
+  had no push subscription and the app sends no email, so nothing left the
+  database. The record was then moved onto the
+  test steps directly. Rule kept for next time: never submit a test
+  mobilisation — put it on test-only steps in the fixture.

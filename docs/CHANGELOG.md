@@ -2223,3 +2223,22 @@ when requested):**
   through the real workflows sent 46 notifications to 12 real staff accounts
   on the dev database; all deleted, but delivered Web Push can't be recalled.
   See `docs/MOBILE-RN-notes.md`.
+- **7 October 2026: native mobile app — milestone M4 COMPLETE (coordinator
+  workflow).** No server change. A new Sales & Clients tab with Mobilisations
+  (list, the full New/Edit form with Iqama autofill, the previous-worker
+  picker and OT-rate autofill, documents from files or the camera, joint
+  coordinators and shares, the reviewer's Section 2, decisions and the
+  approval trail, worker-data archive), Daily Updates (tasks and log),
+  the Requirements board (stage chips instead of drag-and-drop, card
+  timeline, candidates, Start mobilisation, stage manager, export) and Lost
+  Leads; Targets with a Manage targets sheet, and Coordinator Activity with
+  the client decision. Verified on the Android emulator as Coordinator,
+  reviewer and Admin incl. dark mode and Arabic. Found and fixed: the
+  keyboard covering fields (Android edge-to-edge), "Mobilisation approved."
+  after a non-final step, landing on "not found" after the final decision,
+  chevrons pointing the wrong way in Arabic, plus smaller display gaps. Web
+  issues flagged (see the notes), notably the "fixed dashes" commit leaving
+  101 English strings with run-together clauses. **Incident**: one test
+  mobilisation submitted through the real workflow sent one in-app
+  notification to a real staff account on the dev database; deleted within
+  minutes, no push or email went out. See `docs/MOBILE-RN-notes.md`.
