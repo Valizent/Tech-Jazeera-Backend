@@ -494,3 +494,153 @@ No server change — every screen uses the web's existing endpoints.
   database. The record was then moved onto the
   test steps directly. Rule kept for next time: never submit a test
   mobilisation — put it on test-only steps in the fixture.
+
+## M5 — COMPLETE (2026-10-08): deployments and financial
+
+No server change — every screen uses the web's existing endpoints.
+
+### Navigation
+
+- **Sales & Clients** gains Deployments and the Standby list
+  ('deploymentsRelease', like the web; an Office Secretary can open a
+  deployment by link — her server bypass — so `RequireSectionRead` gained the
+  web's `officeSecretaryBypass`).
+- **Financial** gains the six invoicing/payment queues (no section key, like
+  the web — the server scopes each one's data) and Expenses ('expenses').
+  **Workforce** gains End of Service ('eosb'). The Executive's short list gets
+  Expenses, as on the web.
+- Hours approval (`/deployments/hours-review`, 'deploymentsHoursDecide' write)
+  and payments approval (`/financial/payments-review`,
+  'deploymentsPaymentDecide' write) open from buttons with the number waiting.
+- The Dashboard's revenue/performance tiles open the Overview screen directly.
+
+### Screens
+
+- **Deployments** — list (status — Mobilised by default — client, site, sort,
+  export, a red count of months still missing hours); **detail** with the
+  placement, its expenses (add/edit with the deployment fixed), the monthly
+  ledger (add a month picked from the months still missing, correct one, the
+  subcontractor's hours as their own follow-up, the invoice copy, billing
+  progress, the old day-by-day breakdown on request), Edit (site, worker name,
+  contract hours, notes) and Demobilise (exit reasons only for an own employee;
+  an exit offers "Calculate EOSB now?").
+- **Standby list** — own employees and subcontractor/freelancer workers, each
+  searched and sorted on the phone; "Mobilise" opens a pre-filled new
+  mobilisation (shown only to whoever can create one).
+- **Hours approval queue** — the figures to decide each month, Approve/Reject
+  (reason required), net profit line by line.
+- **Overview** — every deployment and every export column, filtered on the
+  phone (status and worker type up top, every other column in a Filters sheet,
+  year + month), totals for whoever may see commercial figures, as cards (tap
+  for all columns) or a sideways-scrolling table.
+- **Financial** — Ready to Invoice / Sub invoices received (record the invoice
+  number, date — not before the month ends — and a copy; tap a month for its
+  breakdown), Payments Due / Sub Payments Due (per party: every invoice with
+  its live allocation, the payment history, record a payment), Received
+  invoices / Paid Sub Invoices (one card per payment, Paid/Partial filter),
+  Payments approval queue. The client and subcontractor versions of each step
+  share one screen (`features/deployments/financialSides.js`) — the web keeps
+  near-identical copies.
+- **Expenses** — Ledger (this month's totals by category, search, category and
+  date filters, receipts, add/edit/duplicate/delete; a reimbursement's expense
+  links to Financial Requests, which now opens on `?tab=`) and Deployment costs
+  (a worker's computed monthly costs).
+- **End of Service** — list, new (with the optional overrides; `?employee=&
+  exitDate=&exitReason=` pre-fill it) and the settlement with its PDF and delete.
+- New shared pieces: `BreakdownPanel` (+ `BreakdownRow`), `MonthlyHoursForm`,
+  `MonthEntryCard`, `DemobiliseSheet`, `ExpenseFormSheet`,
+  `deploymentMonths.js` (the month rules, each mirroring a server check).
+
+### Decisions
+
+- A month is **picked from the months still missing** (a list), not typed —
+  the web's month input allows months the server then refuses.
+- The Overview's **drag-to-reorder columns isn't ported**: it's a desktop
+  layout preference; on a phone the cards show every column.
+- **Subcontractor invoices**: the app sends the invoice number, date and copy
+  correctly (the web sends none — see below). No sub invoice copy can be opened
+  and no subcontractor payment can be approved, because the server has no
+  route for either; the app doesn't show those buttons.
+- Two links the server sends point to screens that don't exist
+  (`/deployments/payments-due` from the Dashboard's "Payments due soon" row and
+  the invoice-sent notification, `/financial/subcontractor-invoices` from the
+  sub-invoice notification). The app redirects them to Payments Due / Sub
+  Payments Due so they — and notifications already delivered — land right.
+- Plurals: Arabic needs zero/one/two/few/many/other forms; the locale files had
+  only one/other (and four English keys no `one`), so many counts showed the raw
+  key. The app's copies now have every form; new count strings avoid plurals.
+
+### Found and fixed on the emulator
+
+- The "impossible hours" limit was a day short (288 h instead of 306 h for a
+  15 July start): the placement days were counted in Riyadh time, the dates are
+  UTC midnights. Now counted in UTC, like the server. The web has the same
+  off-by-one.
+- The deployment Edit sheet never opened. Its form used React Hook Form's
+  `values` option with a new object on every render; it now takes
+  `defaultValues` and resets when the sheet opens, which fixed it.
+- The expense category filter was labelled "Category *" (the form's required
+  label); it has its own label now.
+- M4's teardown had left three "Zz M4" Outsourced-employee records, and an M3
+  test expense survived its deleted reimbursement claim; both removed now.
+
+### Web issues found (not fixed here — for a separate change)
+
+- **EOSB: a settlement computed with the override boxes blank is saved as
+  SAR 0.** The web form sends `overrideEosbGross: ''` etc., and the server's
+  `z.coerce.number()` reads `''` as 0. Shown through the API: blank → total
+  SAR 0.00; left out → SAR 10,500.00, same employee. The dev database's only
+  settlement isn't affected; production should be checked. Fix in either place
+  (the server should treat `''` as "not given").
+- **Sub invoices received**: the page passes a `FormData` to
+  `recordSubInvoice`, which expects a plain object, so the invoice number, date
+  and file are never sent — every subcontractor invoice is saved blank.
+- **Subcontractor payments can't be approved**: there's no pending-payments
+  route or screen for them, so they never allocate; Sub Payments Due's "Review
+  Pending Payments" opens the *client* queue.
+- Sub Payments Due shares the client page's query key (shows the other list's
+  cached rows for a moment); its invoice "download" calls the client invoice
+  route; its wording says "received from this subcontractor".
+- The server URLs above (`/deployments/payments-due`,
+  `/financial/subcontractor-invoices`, and the sub-payment notifications
+  pointing at the client Payments Due).
+- Sending a client invoice toasts "Sub Invoice recorded."; "CurrentEmployee"
+  has no exit-reason label or hint key (the hint shows the raw key); the
+  Financial hub description still mentions Payroll; Expenses and parts of the
+  invoice/breakdown pages are hard-coded English; the Arabic/English plural
+  gaps above.
+
+### Verified
+
+- Android 15 emulator (Expo Go), dev database, as a test Coordinator (hours
+  entry without money figures) and a test Admin: hours added (the impossible-
+  hours guard, then a real month), corrected, the subcontractor's hours added
+  later; rejected with a reason, resubmitted, approved; profit breakdown; an
+  invoice recorded with a PDF copy, then opened in the phone's viewer; a sub
+  invoice recorded (number and date stored); a client payment recorded,
+  approved, shown as Partial with the right balance; a sub payment recorded;
+  Overview filters, the July month columns and totals (checked by hand), table
+  view; deployment edited and demobilised, then on the Standby list, Mobilise
+  pre-filled; an expense with a receipt, validation, duplicate, delete with its
+  confirmation; Deployment costs; an EOSB settlement computed with blank
+  overrides (SAR 10,500.00), its PDF, delete; dark mode; Arabic. Lint clean,
+  the Android bundle builds, all 477 translation keys present in en + ar.
+- **Open, seen once**: after the emulator sat idle ~4 hours (during which the
+  dev server restarted dozens of times), the app was signed out: the server
+  logged "Refresh token reuse detected … all sessions revoked". Most likely Expo
+  Go reloading the app while a refresh was in flight (the new copy then sent
+  the already-rotated token) — a dev-only path, but worth re-checking on a real
+  build in M8 (leave the app idle, reopen).
+- Not exercised: an own-employee deployment (no real employee was put on a
+  test placement, so no exit → EOSB prompt), and the subcontractor-side
+  approval that doesn't exist.
+- **Notifications**: every deployment/payment notification goes to a
+  permission group's members, so for the test the six groups involved
+  (hours entry, hours decision, invoicing, mobilisation viewers, payment
+  decision, EOSB) pointed at test-only roles; their real roles were saved first
+  and restored identically. Zero notifications reached anyone but the test
+  users.
+- **Cleanup**: users, roles, client, subcontractor, employee, mobilisations,
+  deployments, payments, expenses, settlements, the two Cloudinary files,
+  notifications, tokens, audit rows, the mobilisation counter — and the M3/M4
+  leftovers. A scan of every collection finds no test document left.

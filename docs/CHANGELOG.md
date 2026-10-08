@@ -2242,3 +2242,20 @@ when requested):**
   mobilisation submitted through the real workflow sent one in-app
   notification to a real staff account on the dev database; deleted within
   minutes, no push or email went out. See `docs/MOBILE-RN-notes.md`.
+- **8 October 2026: native mobile app — milestone M5 COMPLETE (deployments
+  and financial).** No server change. Sales & Clients gains Deployments (list,
+  detail with the monthly hours ledger, expenses, Edit, Demobilise), the Standby
+  list and the Overview (cards or a table, every column filterable, totals);
+  hours and payments approval queues; Financial gains Ready to Invoice, Payments
+  Due and Received invoices for clients and subcontractors (one shared screen
+  per step), Expenses (ledger and deployment costs) and Workforce gains End of
+  Service with its PDF. Verified on the Android emulator as Coordinator and
+  Admin incl. dark mode and Arabic. Found and fixed: the impossible-hours limit
+  a day short (Riyadh vs UTC — the web too), the deployment Edit sheet not
+  opening, and missing Arabic/English plural forms that showed raw keys. Web
+  issues flagged (see the notes), notably: **an EOSB settlement computed on the
+  web with the override boxes blank is saved as SAR 0**, subcontractor invoices
+  are saved without their number/date/file, and subcontractor payments can
+  never be approved. No real person was notified (the notifying permission
+  groups pointed at test-only roles for the run, restored identically).
+  See `docs/MOBILE-RN-notes.md`.
