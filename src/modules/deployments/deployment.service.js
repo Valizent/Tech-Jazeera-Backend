@@ -837,7 +837,7 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
         type: 'RequestStatus',
         title: `Invoice ${data.invoiceNumber} sent for ${updated.workerName} (${updatedEntry.month})`,
         body: `${updated.clientName} payment due by ${updatedEntry.invoiceDueAt.toDateString()}.`,
-        url: `/deployments/payments-due`,
+        url: '/financial/payments-due',
       })
     )
   );
@@ -846,16 +846,19 @@ export async function sendInvoice(deploymentId, entryId, data, file, actor) {
 
 /** The uploaded invoice-copy file for one entry — a signed, time-limited
  *  download URL, same pattern as reimbursement.service.js's getReceiptFile. */
-export async function getInvoiceFile(deploymentId, entryId, actor) {
+/** `field` is 'invoiceFile' (the client invoice this company sent) or
+ *  'subcontractorInvoiceFile' (the invoice a subcontractor sent us). */
+export async function getInvoiceFile(deploymentId, entryId, actor, field) {
   const deployment = await Deployment.findById(deploymentId).lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
   await assertDeploymentVisibleToActor(deployment, actor);
   const entry = deployment.monthlyHours.find((m) => m._id.toString() === entryId);
-  if (!entry || !entry.invoiceFile) throw new ApiError(404, 'No invoice file for this month.');
+  const file = entry?.[field];
+  if (!file) throw new ApiError(404, 'No invoice file for this month.');
   return {
-    url: signedDownloadUrl(entry.invoiceFile.fileName, entry.invoiceFile.resourceType),
-    mimeType: entry.invoiceFile.mimeType,
-    originalName: entry.invoiceFile.originalName,
+    url: signedDownloadUrl(file.fileName, file.resourceType),
+    mimeType: file.mimeType,
+    originalName: file.originalName,
   };
 }
 

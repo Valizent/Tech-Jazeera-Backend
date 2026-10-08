@@ -266,7 +266,7 @@ async function getMyPendingActions(actor, mySectionAccess) {
     ...perModule,
     { label: 'Stale requirements', url: '/requirements', count: staleRequirements },
     { label: 'Open tasks', url: '/daily-updates?tab=tasks', count: openTasks },
-    { label: 'Payments due soon', url: '/deployments/payments-due', count: paymentsDueSoon },
+    { label: 'Payments due soon', url: '/financial/payments-due', count: paymentsDueSoon },
     { label: 'Ready to invoice', url: '/financial/ready-to-invoice', count: readyToInvoiceRes.length },
     { label: 'Missing timesheets', url: '/deployments', count: missingTimesheetsCount },
   ].filter((m) => m.count > 0);

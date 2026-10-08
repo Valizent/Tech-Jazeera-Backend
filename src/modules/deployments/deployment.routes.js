@@ -144,6 +144,8 @@ router.post(
   validate({ params: subcontractorIdParamSchema, body: recordSubcontractorPaymentSchema }),
   asyncHandler(deploymentController.recordSubcontractorPayment)
 );
+// The subcontractor-side mirror of /pending-payments above, same gate.
+router.get('/sub-pending-payments', canDecidePayment, asyncHandler(deploymentController.subPendingPaymentsQueue));
 router.patch(
   '/sub-payments/:paymentId/decide',
   validate({ params: subcontractorPaymentIdParamSchema, body: decideSubcontractorPaymentSchema }),
@@ -209,6 +211,14 @@ router.get(
   validate({ params: monthlyHoursEntryParamSchema }),
   asyncHandler(deploymentController.invoiceFile)
 );
+// The subcontractor's own invoice copy (recorded with sub-invoice above),
+// same gate as the client invoice copy.
+router.get(
+  '/:id/monthly-hours/:entryId/sub-invoice-file',
+  canReadDeployments,
+  validate({ params: monthlyHoursEntryParamSchema }),
+  asyncHandler(deploymentController.subInvoiceFile)
+);
 router.post(
   '/:id/demobilise',
   canRelease,
@@ -217,8 +227,8 @@ router.post(
 );
 
 /** Same orphaned-upload cleanup as financialRequests.routes.js/me.routes.js/
- *  document.routes.js — only the send-invoice POST above ever sets req.file
- *  on this router. */
+ *  document.routes.js — only the send-invoice and sub-invoice POSTs above
+ *  ever set req.file on this router. */
 router.use((err, req, res, next) => {
   if (req.file?.filename) {
     destroyDocumentFile(req.file.filename).catch((cleanupErr) =>

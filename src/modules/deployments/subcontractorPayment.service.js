@@ -186,8 +186,8 @@ export async function recordSubcontractorPayment(subcontractorId, data, actor) {
     await notifyUser(userId, {
       type: 'RequestStatus',
       title: `A payment for ${subcontractor.name} needs your approval`,
-      body: `SAR ${data.amount} recorded as received.`,
-      url: '/financial/payments-due',
+      body: `SAR ${data.amount} recorded as paid.`,
+      url: '/financial/sub-payments-review',
     });
   }
   return payment.toObject();
@@ -236,7 +236,7 @@ export async function decideSubcontractorPayment(paymentId, data, actor) {
         ? `Payment for ${subcontractor?.name ?? 'a subcontractor'} approved`
         : `Payment for ${subcontractor?.name ?? 'a subcontractor'} rejected`,
     body: data.note || undefined,
-    url: '/financial/payments-due',
+    url: '/financial/sub-payments-due',
   });
 
   if (data.decision === 'Approved') {
@@ -247,7 +247,7 @@ export async function decideSubcontractorPayment(paymentId, data, actor) {
         type: 'RequestStatus',
         title: `A payment for ${subcontractor?.name ?? 'a subcontractor'} was approved`,
         body: `SAR ${payment.amount} now credited against outstanding invoices.`,
-        url: '/financial/payments-due',
+        url: '/financial/sub-payments-due',
       });
     }
   }

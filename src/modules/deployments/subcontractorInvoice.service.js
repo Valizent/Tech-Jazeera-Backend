@@ -98,7 +98,7 @@ export async function recordSubInvoice(deploymentId, entryId, data, file, actor)
         type: 'RequestStatus',
         title: `Subcontractor Invoice ${data.invoiceNumber} received for ${updated.workerName} (${updatedEntry.month})`,
         body: `Payment due by ${updatedEntry.subcontractorInvoiceDueAt.toDateString()}.`,
-        url: `/financial/subcontractor-invoices`,
+        url: '/financial/sub-payments-due',
       })
     )
   );
@@ -276,15 +276,17 @@ export async function getPaidSubInvoices(actor) {
 export async function getSubcontractorPaymentDetail(subcontractorId, actor) {
   const canViewAll = await canAccessSection('mobilisationsViewer', actor, 'read');
   if (!canViewAll) {
-    // If not global read, verify they coordinate at least one of this sub's deployments
-    const hasMyDeployment = await Deployment.exists({
-      subcontractor: subcontractorId,
-      archived: { $ne: true },
-    }).populate({
-      path: 'mobilisation',
-      match: { 'coordinators.user': actor.userId },
-    });
-    if (!hasMyDeployment) throw new ApiError(403, 'You do not have permission to view this subcontractor.');
+    // Without global read, only someone coordinating at least one of this
+    // subcontractor's deployments — the same rule as getClientPaymentDetail.
+    // (Fixed 2026-10-08: this used Deployment.exists(...).populate(...), and
+    // exists() ignores populate's match, so ANY deployment at the
+    // subcontractor let any staff login see its whole ledger.)
+    const deployments = await Deployment.find({ subcontractor: subcontractorId, archived: { $ne: true } })
+      .select('mobilisation')
+      .populate('mobilisation', 'coordinators')
+      .lean();
+    const isMine = deployments.some((dep) => dep.mobilisation?.coordinators?.some((c) => c.user.toString() === actor.userId.toString()));
+    if (!isMine) throw new ApiError(403, 'You do not have permission to view this subcontractor.');
   }
 
   const subcontractor = await Subcontractor.findById(subcontractorId).select('name').lean();

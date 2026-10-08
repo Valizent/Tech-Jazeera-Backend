@@ -644,3 +644,82 @@ No server change — every screen uses the web's existing endpoints.
   deployments, payments, expenses, settlements, the two Cloudinary files,
   notifications, tokens, audit rows, the mobilisation counter — and the M3/M4
   leftovers. A scan of every collection finds no test document left.
+
+### M5 follow-up (2026-10-08): the web issues above, fixed
+
+Every item in "Web issues found" above is fixed (server + web), and the app
+gained what the server now offers.
+
+**Server**
+- **EOSB blank override → SAR 0**: `settlement.validation.js` treats a blank
+  override box as "not overridden" (`emptyToUndef` before `z.coerce.number`);
+  a real 0 is still an override. New `settlement.validation.test.js` (fails
+  without the fix). **Production settlements computed on the web with blank
+  boxes before this fix need checking** — they were saved as SAR 0.
+- **Subcontractor payment approval**: `GET /api/deployments/sub-pending-payments`
+  (`deploymentsPaymentDecide` write, like the client queue). The decide route
+  already existed; nothing ever listed what to decide.
+- **Sub invoice copy**: `GET /api/deployments/:id/monthly-hours/:entryId/sub-invoice-file`
+  (same gate as the client copy); `getInvoiceFile` takes which file to serve.
+- **Access bug found while doing this**: `getSubcontractorPaymentDetail`'s
+  "own deployments only" check used `Deployment.exists(...).populate(...)`;
+  `exists()` ignores populate's match, so any staff login could open any
+  subcontractor's whole ledger. Now the same check as the client side
+  (verified: another coordinator gets 403).
+- **Links**: the invoice-sent notification and the Dashboard's "Payments due
+  soon" row → `/financial/payments-due`; the sub-invoice notification →
+  `/financial/sub-payments-due`; sub-payment notifications → the sub queue /
+  Sub Payments Due (they pointed at the client page). A recorded sub payment
+  now reads "recorded as paid". The sub payment amount is capped at
+  10,000,000 like the client one.
+
+**Web**
+- The three client/subcontractor page pairs (Ready to Invoice / Sub invoices
+  received, Payments Due / Sub Payments Due, Received invoices / Paid Sub
+  Invoices) are now one page each, configured by
+  `features/deployments/financialSides.js` (the same design as the app). The
+  copies had drifted into the bugs: shared query keys, the sub invoice sent
+  without its number/date/file (a `FormData` passed where an object was
+  expected, with the wrong field names), the client download route, the
+  client review queue, and a sub invoice amount without the worker's OT.
+  `PaymentsReviewPage` takes the side too; new route
+  `/financial/sub-payments-review`. Ready for sub invoice now has the same
+  read guard as Ready to Invoice (the server's own rule).
+- The placement-day count is in UTC (the 288 h vs 306 h off-by-one).
+- Hard-coded English translated: Expenses (list, form, deployment costs —
+  the `staffExpenses` keys existed but were never used), the breakdown panel,
+  the financial table headers and counts. Arabic added for every
+  subcontractor-side string (they were English in `ar.json`), the keys the
+  web referenced but never defined (CurrentEmployee label + hint, paid
+  invoices, payments-due labels…), the plural forms, and descriptions that
+  still mentioned Payroll. Toasts: "Invoice recorded." / "Subcontractor
+  invoice recorded.".
+
+**App**
+- The subcontractor side gains the invoice-copy button (Sub Payments Due,
+  Paid Sub Invoices) and its approval queue (`/financial/sub-payments-review`,
+  shared `PaymentsReview` component); `financialSides.js` drops
+  `canOpenInvoiceFile`/`hasReviewQueue`. Ready for sub invoice gets the read
+  guard. The two redirect screens stay, for notifications already delivered.
+- The same Arabic subcontractor strings as the web.
+
+**Verified** (dev DB, throwaway "Zz FX" data, the notifying permission groups
+pointed at test-only roles and restored identically, 0 notifications to anyone
+else, 0 residue, the Cloudinary file deleted): API — the 307 h/306 h boundary,
+the other coordinator's 403, the queue gate, blank EOSB overrides → SAR
+10,500; web (browser) — a sub invoice recorded with number, date and PDF and
+confirmed stored, its copy downloaded, a sub payment recorded, shown in the
+new queue, approved, allocated (Paid Sub Invoices: Partial), a client invoice
+recorded, the EOSB form with blank boxes → SAR 10,500, the 306 h warning
+boundary in Riyadh time, Expenses in Arabic; app (emulator) — Sub Payments
+Due with the review count, the invoice copy opened in the phone's viewer, the
+sub queue, a rejection with a reason. Server lint + 51 tests, web lint +
+build, app lint, every new key in en + ar.
+
+**Still open (not changed — your call)**
+- The Dashboard's Standby-analysis widget (web and app) is shown only to
+  holders of the `payroll` Section Access key, which was deleted with Payroll
+  — so nobody sees it. It needs a real key chosen.
+- The Arabic files call a Deployment "عملية النشر" (the software sense of
+  "deployment") throughout both apps; "التعيين" would be the staffing sense.
+  A terminology change across ~40 strings.

@@ -205,7 +205,7 @@ export const subcontractorIdParamSchema = z.object({ subcontractorId: id });
 export const subcontractorPaymentIdParamSchema = z.object({ paymentId: id });
 
 export const recordSubcontractorPaymentSchema = z.object({
-  amount: z.coerce.number({ error: 'Enter the amount paid.' }).positive('Must be greater than zero.'),
+  amount: z.coerce.number({ error: 'Enter the amount paid.' }).positive('Must be greater than zero.').max(10_000_000, 'That looks too high check the figure.'),
   paymentReference: optionalStr(100),
   paymentDate: z.coerce.date({ error: 'Enter a valid payment date.' }).optional(),
 });

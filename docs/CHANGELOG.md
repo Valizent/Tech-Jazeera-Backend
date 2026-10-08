@@ -2259,3 +2259,17 @@ when requested):**
   never be approved. No real person was notified (the notifying permission
   groups pointed at test-only roles for the run, restored identically).
   See `docs/MOBILE-RN-notes.md`.
+- **8 October 2026: M5 web issues fixed (server, web, app).** The issues the
+  M5 app work flagged are fixed: an EOSB settlement computed on the web with
+  blank override boxes was saved as **SAR 0** (blank now means "not
+  overridden"; check production settlements made before this); subcontractor
+  invoices were saved without their number/date/file; subcontractor payments
+  could never be approved (new queue + route); the sub invoice copy had no
+  route; any staff login could open any subcontractor's ledger (an
+  `exists().populate()` check that never filtered); broken notification and
+  dashboard links; the web placement-day off-by-one; hard-coded English and
+  untranslated Arabic on the financial and Expenses pages. The web's three
+  client/subcontractor page pairs are now one page each driven by
+  `financialSides.js`, as in the app. Verified on the dev DB with throwaway
+  data (no real person notified, 0 residue). See `docs/MOBILE-RN-notes.md`
+  ("M5 follow-up").

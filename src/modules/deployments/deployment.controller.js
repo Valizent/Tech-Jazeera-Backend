@@ -111,7 +111,18 @@ export async function sendInvoice(req, res) {
 
 /** GET /api/deployments/:id/monthly-hours/:entryId/invoice-file — streams the invoice PDF */
 export async function invoiceFile(req, res) {
-  const fileData = await deploymentService.getInvoiceFile(req.params.id, req.params.entryId, actor(req));
+  const fileData = await deploymentService.getInvoiceFile(req.params.id, req.params.entryId, actor(req), 'invoiceFile');
+  await streamInvoiceFile(res, fileData);
+}
+
+/** GET /api/deployments/:id/monthly-hours/:entryId/sub-invoice-file — streams
+ *  the subcontractor's invoice copy */
+export async function subInvoiceFile(req, res) {
+  const fileData = await deploymentService.getInvoiceFile(req.params.id, req.params.entryId, actor(req), 'subcontractorInvoiceFile');
+  await streamInvoiceFile(res, fileData);
+}
+
+async function streamInvoiceFile(res, fileData) {
   res.setHeader('Content-Type', fileData.mimeType);
   res.setHeader('Content-Disposition', contentDisposition(fileData.originalName));
   const upstream = await fetch(fileData.url);
@@ -139,6 +150,12 @@ export async function decideClientPayment(req, res) {
 export async function pendingPaymentsQueue(req, res) {
   const data = await clientPaymentService.getPendingPaymentsQueue(actor(req));
   res.json(new ApiResponse('Pending payments queue.', data));
+}
+
+/** GET /api/deployments/sub-pending-payments — 200 → data: payment[] */
+export async function subPendingPaymentsQueue(req, res) {
+  const data = await subcontractorPaymentService.getPendingPaymentsQueue(actor(req));
+  res.json(new ApiResponse('Pending subcontractor payments queue.', data));
 }
 
 /** POST /api/deployments/:id/demobilise — 200 → data: null */
