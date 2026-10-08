@@ -941,21 +941,54 @@ Customers (`nfc`), Security Log (`auditLog`), Data Reconciliation
   (the full text was in the accessibility tree) — a Text-measure quirk specific
   to that string; the label is "New company".
 
-### Web issues found (not fixed here — for a separate change)
+### Web issues found in M7 — how they were settled (2026-10-08)
 
-- **Company Settings page still promises features that no longer exist** — "ZATCA
-  QR code is active on your invoice PDFs", bank details "shown as payment
-  instructions on an unpaid invoice", a logo hint listing invoices, quotations
-  and payslips. Only EOSB settlements and certificates (and the exported
-  timesheet) use the letterhead now; nothing prints the bank details.
-- Data Reconciliation's web label map still carries `payrollRunMismatch`
-  although the server no longer emits it.
-- Nav item "Approval Hierarchy" reads "التسلسل الاعتماد" in Arabic (the existing
-  key is ungrammatical); the weekly-off select on the employee form is English
-  only.
-- The employee pickers (Timesheet Processor, Assets, EOSB) list only the first
-  100 employees by name, so with more than 100 an employee near the end of the
-  alphabet cannot be chosen.
+- **Fixed:** the web's Data Reconciliation page no longer carries the
+  `payrollRunMismatch` label (the server stopped emitting that check when Payroll
+  went); every employee picker offered only the first 100 employees (the server
+  caps a page at 100). A new `listAllEmployees` in both `employees.api.js` files
+  pages through them all, and it replaces the capped queries on the web
+  (`useEmployeePicker`, Timesheets, Mobilisation form, Coordinator Activity) and in
+  the app (Assets, Documents, Attendance, EOSB, Timesheets, Timesheet Processor,
+  Mobilisation form, Coordinator Activity). Verified against the real server with
+  116 employees: the old picker returned 100, the new one all 116.
+- **Dashboard Standby widget** was gated on the `payroll` Section Access key
+  (deleted with the Payroll module), so nobody ever saw it, on the web or in the
+  app, although the server had already moved to `dashboardProfit` read
+  (2026-09-29). The web dashboard and the app now check `dashboardProfit` too —
+  whoever an Admin grants that on the Section Access page (Financial → Dashboard
+  profit) sees the widget. The grant's description says it covers both.
+- **Accepted as they are** (the current version is what ships; see the
+  improvements list below): the Company Settings page still describes ZATCA QR
+  codes, invoice payment instructions and payslip letterheads; the Arabic
+  Approval Hierarchy nav title; the English-only weekly-off dropdown.
+- **Arabic "Deployment" stays "النشر"** for now (decision 2026-10-08).
+- **Data Reconciliation on the dev database lists two findings** (MOB-0013
+  Approved and MOB-0042 Completed, neither with a Deployment). Both were created
+  on 8 and 12 September 2026, around when Deployments were redesigned to be born
+  from an approved mobilisation, so they look like leftover test data, not a code
+  bug — the report is doing its job. Worth running the same report once on the
+  production database.
+
+### Scope for future improvement
+
+Collected here (and in the root `holdoff.md`) so they are not lost; none blocks
+the current version.
+
+1. **Company Settings copy** — drop or rewrite the ZATCA, invoice-payment and
+   payslip wording on the web page, and the logo hint that lists invoices,
+   quotations and payslips; decide whether the bank details are still wanted at
+   all (nothing prints them today). If e-invoicing returns through ERPNext, the
+   VAT number and bank fields are where it would hook in.
+2. **Arabic polish** — the Approval Hierarchy nav title ("التسلسل الاعتماد"), the
+   weekly-off dropdown (English day names), and the staff panel pages that are
+   still English-only.
+3. **Employee pickers** — a searchable, server-side picker would scale better
+   than loading every employee (works today; each page is one request of 100).
+4. **Approval-step reordering** in the app is up/down buttons (the web drags).
+5. **Photo uploads for NFC people and companies** and the company logo were not
+   exercised on the emulator (same upload code as the avatar); worth one pass on
+   a real phone.
 
 ### Verified
 

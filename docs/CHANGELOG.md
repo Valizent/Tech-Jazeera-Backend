@@ -2316,3 +2316,17 @@ when requested):**
   payslip letterheads for modules that no longer exist**. Everything created was
   deleted and the settings restored; no real person was notified. See
   `docs/MOBILE-RN-notes.md`.
+- **8 October 2026: follow-ups after M7 (web, app and one server description).**
+  The dashboard's Standby widget was gated on the deleted `payroll` Section
+  Access key, so nobody saw it on the web or in the app; both now check
+  `dashboardProfit` (the key the server has used since 2026-09-29), and that
+  grant's description says it covers the widget. Every employee picker was
+  capped at the first 100 employees; a new `listAllEmployees` helper pages
+  through all of them on the web and in the app (verified with 116 employees on
+  the real server). The web's Reconciliation page lost a label for a payroll
+  check the server no longer runs. Decided to ship the current version as it is:
+  the Company Settings page's outdated ZATCA/invoice/payslip wording, a few
+  Arabic gaps and the Arabic "Deployment" term are recorded as scope for future
+  improvement in `docs/MOBILE-RN-notes.md` and `holdoff.md`. Two Data
+  Reconciliation findings on the dev database (8 and 12 September mobilisations
+  with no Deployment) look like leftover test data, not a bug.

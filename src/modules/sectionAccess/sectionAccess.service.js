@@ -95,7 +95,7 @@ const SECTION_DESCRIPTIONS = {
   timesheetRequests: 'Grants access to manage weekly timesheets. It exists so workers can submit their hours and managers can formally approve them.',
   exitDocuments: 'Grants access to exit visas and certificates. It is here to manage the paperwork needed when an employee officially leaves the company.',
   holidays: 'Grants access to the company holiday calendar. It exists to define public holidays so they are automatically accounted for in payroll and attendance.',
-  dashboardProfit: 'Grants access to the dashboard\'s true monthly profit figure. It is here so executives can see the company margin without needing raw access to every payslip and expense line.',
+  dashboardProfit: 'Grants access to the dashboard\'s true monthly profit figure and its standby idle-cost widget. It is here so executives can see the company margin and what idle workers cost without needing raw access to every payslip and expense line.',
   reconciliation: 'Grants access to the data integrity report. It exists to flag mismatched ledger totals, double-booked workers, or missing deployments.',
   dailyUpdatesOwn: 'Grants access to a coordinator\'s personal work log. It is here so they can track their own to-do list and report daily tasks.',
   dailyUpdatesTeam: 'Grants access to oversee every coordinator\'s daily log. It exists so management can assign tasks globally and monitor team productivity.',
