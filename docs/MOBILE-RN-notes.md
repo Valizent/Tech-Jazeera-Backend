@@ -723,3 +723,118 @@ build, app lint, every new key in en + ar.
 - The Arabic files call a Deployment "عملية النشر" (the software sense of
   "deployment") throughout both apps; "التعيين" would be the staffing sense.
   A terminology change across ~40 strings.
+
+## M6 — COMPLETE (2026-10-08): workforce records
+
+No server change — every screen uses the web's existing endpoints.
+
+### Navigation
+
+- **Workforce** gains Employees and Outsourced (both 'employeeCreate' Read,
+  like the web). **Sales & Clients** gains Clients ('clientsManage') and
+  Subcontractors ('subcontractorsManage'). **Admin & Tools** gains Documents
+  ('documentsManage') and Assets ('assetsManage'). The dashboard's Active
+  clients/subcontractors tiles and Expiring documents rows open these screens.
+
+### Screens
+
+- **Employees** — list (search name/ID/mobile, status, type, sort, "Expiring
+  documents", a Manager's "My team", pages; each card shows the worst
+  identity-document state), new (always an internal 'Own' record), edit (the
+  type picker stays for an existing Outsourced/Subcontracted record; a
+  Coordinator is never offered 'Own'), and the **profile**: overview, the login
+  card (Admin/HR, 'Own' only — create with a role, one-time temporary password
+  in a sheet that can be shared, reset password, change role), placements,
+  assigned assets, the five identity documents plus extra ones with expiry,
+  uploaded documents, emergency contact, notes; Calculate EOSB, Edit, Delete.
+- **Outsourced employees** — Freelancers and subcontractors' workers: list,
+  new, record (form; read-only without Write) with its documents (upload with a
+  title and optional expiry, open, delete). A full Iqama fills the worker in
+  from past mobilisations and shows their last billed/paid rates.
+- **Clients** — list (refreshes every 20 s; Review for a pending client the
+  viewer may decide), new, edit, and a profile with tabs: Overview (approval
+  banner with the reviewer's note, details, sites), Workers (active
+  placements, by worker type) and Documents.
+- **Subcontractors** — list with an add/edit sheet and delete.
+- **Documents** — company-wide list (search, owner type, category, "Expiring
+  soon", upload with the owner picked); tap one for its versions (each opens
+  in the phone's own viewer), upload a new version, delete. The same document
+  list sits on every employee and client profile with the owner fixed.
+- **Assets** — list (search, category, status); tap one for its history and
+  the actions its status allows (assign, return, maintenance, available, edit,
+  retire, delete), each with its own sheet.
+- New shared pieces: `InitialAvatar`, `DocumentItem`/`DocumentUploadSheet`/
+  `DocumentsCard`, `ClientApprovalBanner`, `formatFileSize`, an `asset` icon.
+
+### Decisions
+
+- Documents open in the phone's viewer rather than an inline preview (as for
+  every file since M3).
+- The employee list's photo avatar isn't ported: the server never sends
+  `photoUrl`, so the web's photo branch never shows (the initial letter does).
+- The client form includes **credit limit days** (the web's form loses it —
+  below). The employee profile shows an 'Own' employee's placements when they
+  have any (the web hides the panel for every 'Own' employee, though an Own
+  employee with a Worker login is mobilised like anyone else).
+- Edit on a client needs Write on 'clientsManage' (the server's own gate); a
+  Coordinator holding it edits only their own unapproved client.
+- The profile cards (placements, assets, documents) show only to whoever may
+  read them, instead of a permanent "Loading…" or an error.
+
+### Found and fixed on the emulator
+
+- The approval-workflow picker in the employee form crashed with "no queryFn":
+  the app's approvals API had no `listApprovalWorkflows`. Added.
+- A document with no expiry date read "No number · expires" with nothing after
+  it; the expiry is now shown only when set.
+- In Arabic, the Change role / Reset password buttons clipped their labels to
+  one word in a half-width button; they are stacked full width now.
+
+### Web issues found (not fixed here — for a separate change)
+
+- **Client form drops "Credit Limit Days"**: `clientFormSchema` has no
+  `creditLimitDays`, so Zod strips what's typed and a client's credit days can
+  never be set from the web (the server accepts it).
+- **Employee profile shows "Contract Start Date" twice** (a duplicated block
+  in `EmployeeProfilePage.jsx`).
+- **Edit button offered to a Coordinator without the grant**: `canEditClient`
+  ignores the Section Access the server's PATCH route requires — the save then
+  fails with a 403.
+- **Placements panel hidden for every 'Own' employee** even when an Own
+  employee with a Worker login has been mobilised.
+- **Assigned-assets panel shows "Loading…" forever** to someone without Read on
+  'assetsManage' (the request is refused and `data` stays undefined).
+- **Assets page is entirely hard-coded English** (no `staffAssets` keys at all);
+  the employee form's "Additional Documents" block, the Subcontractor modal's
+  "Company / Legal & Address" headings and the login panel are too.
+- Outsourced form: no client-side check of the Saudi phone format the server
+  enforces (the error only comes back from the server).
+- The employee list's `photoUrl` branch is dead (never sent).
+
+### Verified
+
+- Android 15 emulator (Expo Go), dev database, as a test Admin (and API checks
+  as a test Coordinator holding only 'clientsManage'): an employee created with
+  validation (a blank extra-document name stops it), a login created (one-time
+  password sheet) and its role sheet opened; a client rejected with a note, its
+  profile (banner, tabs), edited with a bad then good VAT number and a site; a
+  document opened in the phone's PDF viewer, with its versions sheet;
+  an asset assigned (employee picker with search), shown on the employee's
+  profile, returned; an outsourced freelancer created, its documents card;
+  subcontractor edit sheet pre-filled; the Workforce hub; Arabic/RTL on the
+  profile, Assets and the return sheet. API: a Coordinator's client starts
+  Pending; no grant → 403 on employees, assets, subcontractors; an invalid
+  subcontractor phone → 400; a duplicate asset tag → 409; clearing a field
+  really clears it. Lint clean, the Android bundle builds, all 1,788 keys used
+  exist in en + ar.
+- Not exercised: a Coordinator login on the phone (permissions checked through
+  the API), picking a file through Android's picker for a document upload
+  (the same attachment field and upload code as the M3/M5 receipts; the
+  document itself was uploaded through the API), the Iqama autofill (the same
+  lookup Mobilisation's form uses) and dark mode.
+- **Cleanup**: the test users, role, employee and its login, clients,
+  subcontractor, outsourced worker, asset and its assignment, the document and
+  its Cloudinary file, notifications, tokens, audit rows; the section grant I
+  added was removed (identical to the saved copy). No real person was
+  notified (the only notification, the client decision, went to the test
+  Coordinator).

@@ -2273,3 +2273,17 @@ when requested):**
   `financialSides.js`, as in the app. Verified on the dev DB with throwaway
   data (no real person notified, 0 residue). See `docs/MOBILE-RN-notes.md`
   ("M5 follow-up").
+- **8 October 2026: native mobile app — milestone M6 COMPLETE (workforce
+  records).** No server change. Workforce gains Employees (list, new, edit and
+  a full profile with the login card, placements, assets, documents) and
+  Outsourced employees (with their documents); Sales & Clients gains Clients
+  (profile tabs, approve/reject, edit) and Subcontractors; Admin & Tools gains
+  Documents (versions, open in the phone viewer) and Assets (assign/return,
+  history). Verified on the Android emulator as a test Admin, with API checks
+  as a Coordinator, incl. Arabic. Found and fixed in the app: the
+  approval-workflow picker crashed (missing API call), a document without an
+  expiry date read "expires" with nothing after it, and two Arabic buttons
+  clipped their labels. Web issues flagged (see the notes), notably **the
+  client form silently drops the typed "Credit Limit Days"** and the Assets
+  page is entirely untranslated. No real person was notified. See
+  `docs/MOBILE-RN-notes.md`.
