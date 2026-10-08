@@ -838,3 +838,143 @@ No server change — every screen uses the web's existing endpoints.
   added was removed (identical to the saved copy). No real person was
   notified (the only notification, the client decision, went to the test
   Coordinator).
+
+## M6 web-fix pass (2026-10-08)
+
+The web issues M6 flagged are fixed in `client/` (no server change):
+
+- **Client form kept dropping "Credit Limit Days"** — `clientFormSchema` had no
+  `creditLimitDays`, so Zod stripped it. The schema now keeps it (whole days,
+  blank leaves the server's default). Verified: typing 45 and saving stores 45.
+- `canEditClient` now needs Write on `clientsManage` (the route's own gate); a
+  Coordinator holding it still edits only their own unapproved client.
+- The duplicated "Contract Start Date" row on the employee profile is gone.
+- The placements panel shows for an internal ("Own") employee once they have
+  actually been placed (an Own employee with a Worker login is mobilised like
+  anyone else); it also shows nothing — not a false "not deployed" — to a viewer
+  the server refuses the list to.
+- The assigned-assets panel no longer says "Loading…" forever to someone
+  without Read on `assetsManage`.
+- The Assets page, the login panel, the employee form's "Additional Documents"
+  block and the Subcontractor modal's headings are translated (English and
+  Arabic, `staffAssets.*`, `staffEmployees.login.*`, …). The contract dates on
+  the profile are translated too.
+- The outsourced-employee form checks the Saudi mobile format before the round
+  trip (it reuses the Mobilisation form's `SAUDI_PHONE_REGEX`).
+- The employee list's dead `photoUrl` branch is removed.
+
+Verified in the browser as a throwaway Admin (credit days saved, one
+"Contract start date", no placements card for an unplaced Own employee, Assets
+page in Arabic, the Saudi-phone error). Lint and build clean.
+
+## M7 — COMPLETE (2026-10-08): admin tools
+
+No server change — every screen uses the web's existing endpoints.
+
+### Navigation
+
+Admin & Tools now lists everything the web's hub does, with the web's guards:
+Company Settings (no guard — the server decides), Section Access / Mobilisation
+Settings / Locations (Admin), Team (`team` Read), Approval Hierarchy
+(`approvalHierarchy` Read), Timesheet Processor (`timesheetProcessor`), NFC
+Customers (`nfc`), Security Log (`auditLog`), Data Reconciliation
+(`reconciliation`).
+
+### Screens
+
+- **Company Settings** — logo (gallery or camera, 2 MB; replace/remove), legal
+  identity, contact, bank, signatory; read-only without Write. The web's ZATCA /
+  invoice / payslip wording is not carried over (those modules are gone).
+- **Section Access** (Admin) — category → module → Read/Write cards, approval
+  roles as pills, per-card Save and "Save all changes (N)"; the phone's back
+  button steps up one level before leaving. Only edited cards hold local state,
+  so every other card shows the server's copy.
+- **Team** — every login with its role and status; search; Admin alone can
+  reset a password (one-time sheet, shared `TempPasswordSheet`, also used by the
+  employee login card), deactivate/reactivate or delete — never their own.
+- **Approval Hierarchy** — Roles and Workflows tabs; role sheet (name,
+  description, members, active) and workflow sheet (ordered steps, each a pool
+  of roles, default request types, active). Steps move with up/down buttons
+  instead of dragging. Read-only for anyone without Write.
+- **Mobilisation Settings** (Admin) — the stale-warning days (1–3650).
+- **Locations** (Admin) — the shared site list; delete.
+- **Security Log** — search by action, date range, pages; a compact card per
+  entry. **Data Reconciliation** — the standing integrity report; a finding
+  opens its record.
+- **Timesheet Processor** — employee, month/year, required hours, the
+  attendance file from the phone's files (.xls/.xlsx), a tappable holiday
+  calendar (Mark all Fridays), Process → summary + day cards, Export Excel
+  opens the workbook through the phone's share sheet.
+- **NFC** (5 screens) — companies (search, add), company page (details, people
+  with their card and 30-day taps, add/edit/remove a person with photo, assign
+  or change a card, export CSV), cards (search, status/company filters,
+  generate a batch and share its CSV), card (both QR codes shown and shareable,
+  public link share/open, chip UID, history, activity, lifecycle: unassign,
+  lost, return, disable, rotate token, delete), and Activity (7/30/90/365 days).
+- New shared pieces: `TempPasswordSheet`, `ImagePickerField`,
+  `InitialAvatar` (optional photo), `actionVariant` in `auditActions.js`, a
+  `mobile.admin.*` and `mobile.nfc.*` translation set (en + ar).
+
+### Decisions
+
+- The file POST download (`openAuthedPostFile`) now goes through the axios
+  client, not `fetch`: Expo's fetch cannot send a FormData holding a picked file
+  ("Unsupported FormDataPart implementation", found on the emulator), and axios
+  also refreshes an expired token and times out on its own. The monthly report
+  export (a JSON POST) was re-checked on the same path.
+- The URL of an NFC card is shared with the phone's share sheet (it includes
+  Copy) instead of adding a clipboard dependency.
+- `Sheet` pads the bottom of its scroll area: the last ~25 px of a long form
+  (its Save button) was cut off — this also fixes the M3–M6 sheets.
+- The Locations/Company logo screens never alter a logo that exists on the dev
+  database during tests (company logo is a real asset), so the logo upload
+  itself was not exercised.
+
+### Found and fixed on the emulator
+
+- The Approval Hierarchy intro read "Description": a duplicate translation key
+  (the form label overwrote the page text).
+- The Timesheet file hint showed a raw `{{maxMb}}`.
+- Timesheet export failed (the fetch/FormData issue above).
+- Long sheets cut off their last buttons (above).
+- A button labelled exactly "Add company" painted only "Add" on the emulator
+  (the full text was in the accessibility tree) — a Text-measure quirk specific
+  to that string; the label is "New company".
+
+### Web issues found (not fixed here — for a separate change)
+
+- **Company Settings page still promises features that no longer exist** — "ZATCA
+  QR code is active on your invoice PDFs", bank details "shown as payment
+  instructions on an unpaid invoice", a logo hint listing invoices, quotations
+  and payslips. Only EOSB settlements and certificates (and the exported
+  timesheet) use the letterhead now; nothing prints the bank details.
+- Data Reconciliation's web label map still carries `payrollRunMismatch`
+  although the server no longer emits it.
+- Nav item "Approval Hierarchy" reads "التسلسل الاعتماد" in Arabic (the existing
+  key is ungrammatical); the weekly-off select on the employee form is English
+  only.
+- The employee pickers (Timesheet Processor, Assets, EOSB) list only the first
+  100 employees by name, so with more than 100 an employee near the end of the
+  alphabet cannot be chosen.
+
+### Verified
+
+- Android 15 emulator (Expo Go), dev database, as a throwaway Admin and as a
+  throwaway Coordinator holding only a few Read grants: every screen opened;
+  Team reset password (one-time sheet) / deactivate / reactivate / delete on a
+  throwaway login; a role and an inactive workflow created; a section grant
+  added and saved (Ramadan Periods); a location deleted; the mobilisation
+  threshold validated and saved; an NFC company, person and 2-card batch created,
+  a card assigned, its two QR codes loaded, lost/rotate/unassign/delete run, the
+  batch CSV opened in the share sheet; a real .xlsx processed (holidays, summary,
+  day rows) and exported; Arabic/RTL on Approval Hierarchy, NFC activity and
+  Company Settings. The Coordinator saw exactly the tiles it holds, no add/
+  edit/manage buttons, a read-only Company Settings, and "no access" on the
+  Admin-only, Security Log and Timesheet screens. Lint clean, imports resolve,
+  every translation key exists in en + ar, the Android bundle builds.
+- Not exercised: picking a photo for an NFC person/company or the company logo
+  (same upload code as the avatar), a `.xls` (only `.xlsx`), dark mode.
+- **Cleanup**: test logins, roles, workflow, location, NFC company/person/batch/
+  cards, employee, notifications, tokens, audit rows; section grants identical to
+  the saved copy; mobilisation and company settings restored to the saved
+  documents; counters unchanged. No notification went to anyone (0).

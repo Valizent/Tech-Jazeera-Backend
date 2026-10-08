@@ -2287,3 +2287,32 @@ when requested):**
   client form silently drops the typed "Credit Limit Days"** and the Assets
   page is entirely untranslated. No real person was notified. See
   `docs/MOBILE-RN-notes.md`.
+- **8 October 2026: M6's flagged web issues fixed (web only).** The client form
+  now keeps a typed "Credit Limit Days" (its Zod schema had no such field, so it
+  was stripped and credit days could not be set from the web); Edit on a client
+  requires the `clientsManage` grant the server's route needs; the employee
+  profile no longer shows "Contract Start Date" twice; an internal employee's
+  placements show once they are placed; the assigned-assets panel no longer
+  loads forever without Read access; the Assets page, the login panel, the
+  Additional Documents block and the Subcontractor modal headings are
+  translated (English/Arabic); the outsourced form checks the Saudi mobile
+  format client-side; a dead `photoUrl` branch is gone. Verified in the browser
+  with throwaway data. See `docs/MOBILE-RN-notes.md` ("M6 web-fix pass").
+- **8 October 2026: native mobile app — milestone M7 COMPLETE (admin tools).**
+  No server change. Admin & Tools gains Company Settings (logo, identity, bank,
+  signatory), Section Access (category → module → Read/Write cards, save one or
+  all), Team (reset password with a one-time sheet, deactivate, delete),
+  Approval Hierarchy (roles and multi-step workflows), Mobilisation Settings,
+  Locations, Security Log, Data Reconciliation, Timesheet Processor (pick an
+  attendance file, holidays, preview, export) and NFC Customers (companies,
+  people with photos, cards, batches with CSV, both QR codes, lifecycle,
+  activity). Verified on the Android emulator as a throwaway Admin and
+  Coordinator, incl. Arabic, against the dev database. Found and fixed in the
+  app: a duplicate translation key hid a page intro, the Timesheet export failed
+  because Expo's fetch cannot send a picked file (the POST download now uses the
+  axios client), and long bottom sheets cut off their last buttons (also
+  fixes M3–M6 sheets). Web issues flagged (see the notes), notably **the Company
+  Settings page still promises ZATCA invoice QR codes, payment instructions and
+  payslip letterheads for modules that no longer exist**. Everything created was
+  deleted and the settings restored; no real person was notified. See
+  `docs/MOBILE-RN-notes.md`.
