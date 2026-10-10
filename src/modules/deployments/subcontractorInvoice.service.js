@@ -12,11 +12,6 @@ function money(n) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
-export async function decidersOfDeploymentsInvoicing() {
-  const settings = await getSectionAccess('deploymentsInvoicing');
-  return membersOfRoles(settings.writeApprovalRoles);
-}
-
 async function paymentTrackingAudience(mobilisation) {
   const mmSettings = await getSectionAccess('mobilisationsViewer');
   const coordinatorIds = (mobilisation?.coordinators ?? []).map((c) => c.user.toString());
@@ -210,11 +205,6 @@ export async function getSubcontractorsPaymentSummary(actor) {
     )
   ).filter(Boolean);
   return rows.sort((a, b) => (a.daysRemaining ?? Infinity) - (b.daysRemaining ?? Infinity));
-}
-
-export async function countSubPaymentsDueSoon(actor) {
-  const rows = await getSubcontractorsPaymentSummary(actor);
-  return rows.filter((r) => r.daysRemaining != null && r.daysRemaining <= 10).length;
 }
 
 export async function getPaidSubInvoices(actor) {

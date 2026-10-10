@@ -2330,3 +2330,18 @@ when requested):**
   improvement in `docs/MOBILE-RN-notes.md` and `holdoff.md`. Two Data
   Reconciliation findings on the dev database (8 and 12 September mobilisations
   with no Deployment) look like leftover test data, not a bug.
+- **10 October 2026: Modal focus fix, dead-code cleanup, colour-token fix.**
+  The shared `Modal` re-ran its focus effect on every render because callers pass an
+  inline `onClose`, so focus jumped to the Close button after each keystroke and a
+  field inside a dialog (e.g. the job-title quick-create) took one letter at a time.
+  The effect now depends on `open` only and keeps focus on an already-focused
+  `autoFocus` field; no other instance of the pattern exists in the web or mobile
+  code. Cleanup: the unused Semi-annual dashboard card (+ its API wrapper and
+  translations), `MONTH_NAMES`, `daysInMonth`, the retired Capacitor Android/iOS
+  projects and their packages, four dead server functions left over from Payroll
+  (`deductionsForEmployee(s)Month`, `countSubPaymentsDueSoon`, a duplicate
+  `decidersOfDeploymentsInvoicing`) and the one-time `migrate-*` scripts were
+  removed; scratch files moved out of the repos. Progress bars and the target-hit
+  card border used `var(--color-x)` where the tokens are RGB channels, so they
+  painted nothing — now `rgb(var(--color-x))`; the new Daily Updates filter
+  heading has its English/Arabic translation.

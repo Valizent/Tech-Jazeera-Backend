@@ -169,14 +169,9 @@ const monthlyHoursSchema = new mongoose.Schema(
     // the number, since she's the one typing it in from a real document in
     // front of her — hiding it from her afterward would hide nothing she
     // doesn't already know. Subtracted from this entry's own computed
-    // profit (see computeMonthlyProfit) and, for a real Employee whose
-    // Employee.type is 'Outsourced' (the only kind this company actually
-    // pays), automatically seeded into that month's PayrollRun line as an
-    // `otherDeductions` entry — see payroll.service.js's createPayrollRun
-    // and deployment.service.js's deductionsForEmployeeMonth. Only an
-    // APPROVED entry's deduction is ever picked up by Payroll — an
-    // unapproved (possibly disputed) figure must never silently reduce a
-    // real paycheck.
+    // profit (see computeMonthlyProfit). It also used to feed that month's
+    // PayrollRun as an `otherDeductions` line; Payroll was removed
+    // (2026-09-28), so today it only affects profit.
     deductionAmount: { type: Number, default: 0, min: 0 },
     // The SUPPLIER-side counterpart to `deductionAmount` above (2026-09-30,
     // the user's own ask) — an adjustment subtracted from what this company

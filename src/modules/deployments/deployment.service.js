@@ -1812,63 +1812,6 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
 }
 
 /**
- * Every client-timesheet deduction (see deployment.model.js's own doc
- * comment on `deductionAmount`) a real Employee had for one calendar month,
- * across every Deployment they've ever had — for Payroll to fold into that
- * employee's PayrollRun line as an `otherDeductions` entry (see
- * payroll.service.js's createPayrollRun). Only an Approved entry counts —
- * an unapproved (possibly disputed) figure must never reach a real
- * paycheck. Payroll depends on THIS module's model, one level removed from
- * its service, the same one-directional pattern this file itself uses for
- * Mobilisation — no circularity risk, Deployment has no reason to ever call
- * into Payroll.
- *
- * Deliberately snapshot-at-read, same as every other Payroll figure this
- * app computes at PayrollRun creation time (approvedHours, overtimeHours,
- * sickLeaveDeduction) — a deduction entered or approved AFTER that month's
- * run already exists is NOT retroactively pulled in; HR/Accounts can still
- * add it by hand via the run's own existing otherDeductions editing, same
- * fallback GOSI already relies on, but only while the run is still Draft.
- */
-export async function deductionsForEmployeeMonth(employeeId, monthStr) {
-  const byEmployee = await deductionsForEmployeesMonth([employeeId], monthStr);
-  return byEmployee.get(String(employeeId)) ?? [];
-}
-
-/**
- * The batched form of deductionsForEmployeeMonth above — every eligible
- * employee's deductions for one month in ONE query instead of one query per
- * employee (2026-09-22, a real QA-audit finding — P4: reproduced at 494ms/10
- * employees and 4.7s/100 employees, entirely from three per-employee reads,
- * including this one, run sequentially). payroll.service.js's
- * createPayrollRun is the real caller — deductionsForEmployeeMonth above
- * stays as the single-employee convenience form (a $in of one id costs
- * nothing extra), kept for any future single-employee use.
- * Returns a Map keyed by employee id (string) → that employee's deduction
- * list (possibly empty — never a missing key, so a caller can `.get(id) ??
- * []` without a fallback check).
- */
-export async function deductionsForEmployeesMonth(employeeIds, monthStr) {
-  const deployments = await Deployment.find({
-    worker: { $in: employeeIds },
-    monthlyHours: { $elemMatch: { month: monthStr, deductionAmount: { $gt: 0 }, status: 'Approved' } },
-  })
-    .select('worker clientName monthlyHours')
-    .lean();
-
-  const byEmployee = new Map(employeeIds.map((id) => [String(id), []]));
-  for (const deployment of deployments) {
-    const entry = deployment.monthlyHours.find(
-      (m) => m.month === monthStr && m.deductionAmount > 0 && m.status === 'Approved'
-    );
-    if (entry) {
-      byEmployee.get(String(deployment.worker))?.push({ label: `Client deduction ${deployment.clientName} (${monthStr})`, amount: entry.deductionAmount });
-    }
-  }
-  return byEmployee;
-}
-
-/**
  * Strip `otAmount` from every monthlyHours entry for a non-decider — the
  * same redaction getDeployment already applied on read, now shared with
  * addMonthlyHours/updateMonthlyHours (fixed 2026-09-14, a real QA-audit
