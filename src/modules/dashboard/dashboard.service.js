@@ -28,6 +28,7 @@ import Document from '../documents/document.model.js';
 import AuditLog from '../audit/audit.model.js';
 import Attendance from '../attendance/attendance.model.js';
 import LeaveRequest from '../leave/leaveRequest.model.js';
+import AnnualVacationRequest from '../annualVacation/annualVacation.model.js';
 import Timesheet from '../timesheets/timesheet.model.js';
 import SalaryAdvance from '../financialRequests/advance.model.js';
 import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
@@ -188,6 +189,7 @@ const PENDING_ACTION_MODULES = [
   // legacyAllowedRoles includes 'Coordinator' — see the doc comment on its
   // use below for the real bug this closes.
   { label: 'Leave requests', url: '/leave', Model: LeaveRequest, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin', 'Manager', 'HR', 'Coordinator'], sectionKey: 'leaveRequests', scopeToCoordinatorTeam: true },
+  { label: 'Annual vacation', url: '/annual-vacation', Model: AnnualVacationRequest, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'annualVacation' },
   { label: 'Timesheets', url: '/timesheets', Model: Timesheet, pendingStatus: 'Submitted', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'timesheetRequests' },
   { label: 'Salary advances', url: '/financial-requests', Model: SalaryAdvance, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'financialRequests' },
   { label: 'Reimbursements', url: '/financial-requests', Model: ReimbursementClaim, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'financialRequests' },

@@ -176,6 +176,24 @@ export async function cancelExitReentry(req, res) {
   res.json(new ApiResponse('Request cancelled.', request));
 }
 
+/** POST /api/me/annual-vacation — 201 → data: request (PendingReview) */
+export async function submitAnnualVacation(req, res) {
+  const request = await meService.submitMyAnnualVacation(myEmployeeId(req), req.body, actor(req));
+  res.status(201).json(new ApiResponse('Annual vacation request submitted.', request));
+}
+
+/** GET /api/me/annual-vacation — 200 → data: { items, total, page, pages } */
+export async function listAnnualVacation(req, res) {
+  const data = await meService.listMyAnnualVacation(myEmployeeId(req), req.query);
+  res.json(new ApiResponse('Your annual vacation requests.', data));
+}
+
+/** PATCH /api/me/annual-vacation/:id/cancel — 200 → data: request */
+export async function cancelAnnualVacation(req, res) {
+  const request = await meService.cancelMyAnnualVacation(myEmployeeId(req), req.params.id, actor(req));
+  res.json(new ApiResponse('Request cancelled.', request));
+}
+
 /** POST /api/me/certificates — 201 → data: request (Pending) */
 export async function submitCertificate(req, res) {
   const request = await meService.submitMyCertificate(myEmployeeId(req), req.body, actor(req));

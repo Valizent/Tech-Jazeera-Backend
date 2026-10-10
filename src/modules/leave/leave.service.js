@@ -399,6 +399,23 @@ export async function submitLeaveRequest(employeeId, { leaveType: leaveTypeId, s
     );
   }
 
+  // A request that crosses the joining anniversary belongs to two leave years, but the
+  // allowance is counted per leave year by `startDate` (evaluateAnnual/evaluateSick) —
+  // so the days after the anniversary would be charged to the old year and never to
+  // the new one (2026-10-10, QA audit V2-F06: three days in 2027 auto-approved against a
+  // two-day yearly allowance). Make the employee file one request per leave year.
+  if (
+    (leaveType.recurrence === 'Annual' || leaveType.recurrence === 'Sick') &&
+    employee.joiningDate &&
+    currentLeaveYearStart(employee.joiningDate, startDate).getTime() !== currentLeaveYearStart(employee.joiningDate, endDate).getTime()
+  ) {
+    const nextYearStart = leaveYearEnd(currentLeaveYearStart(employee.joiningDate, startDate));
+    throw new ApiError(
+      400,
+      `These dates cross your leave-year start (${nextYearStart.toDateString()}). Submit one request up to the day before it and another from it.`
+    );
+  }
+
   // Fixed 2026-09-15, a real QA-audit-found gap — F3: the overlap check and
   // the entitlement evaluation below (and the create that follows) used to
   // run as plain, unserialized reads-then-write — two concurrent

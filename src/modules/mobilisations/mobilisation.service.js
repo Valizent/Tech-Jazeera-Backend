@@ -1564,6 +1564,42 @@ async function approveMobilisation(id, decisionNote, actor) {
       await Promise.all(memberIds.map((userId) => notifyUser(userId, notification)));
     },
     buildStepNotification: buildMobilisationStepNotification,
+    // Final approval — the worker is now actually placed and working. Create the
+    // Deployment this mobilisation drives from here on (monthly client hours/OT,
+    // Release) — see deployment.service.js's createDeploymentFromMobilisation. Run
+    // by the engine BEFORE it tells the coordinators "approved" (2026-10-10, QA
+    // audit V2-F07: the notification used to go first, and survived a failure
+    // below that reverted the approval).
+    onApproved: async (doc) => {
+      try {
+        await createDeploymentFromMobilisation(doc, actor);
+      } catch {
+        // Compensate, don't leave it stuck (fixed 2026-09-14, a real QA-audit-
+        // found gap — F3): the engine already persisted 'Approved' before this
+        // ran, so a deployment-creation failure used to leave a permanently
+        // Approved mobilisation with no Deployment and no normal retry path
+        // (re-decide correctly refuses a non-PendingReview request). A single
+        // transaction spanning the shared engine (reused by 6 other request
+        // types with no Deployment concept at all) would be a much larger,
+        // riskier change for this one caller; reverting back to PendingReview
+        // at the same step — trail entry popped, decision fields cleared —
+        // restores the exact pre-decision state instead, so the same real
+        // reviewer can simply approve again once whatever broke deployment
+        // creation is fixed.
+        await Mobilisation.updateOne(
+          { _id: id, status: 'Approved' },
+          {
+            $set: { status: 'PendingReview', currentStep: doc.currentStep },
+            $pop: { approvalTrail: 1 },
+            $unset: { decidedBy: '', decidedAt: '', decisionNote: '' },
+          }
+        );
+        throw new ApiError(
+          500,
+          'Approval could not be completed because creating the deployment record failed. The approval was reverted please try again.'
+        );
+      }
+    },
   });
 
   // Approving a non-last step leaves status PendingReview and advances
@@ -1578,39 +1614,7 @@ async function approveMobilisation(id, decisionNote, actor) {
       { $set: { currentStepEnteredAt: new Date() } }
     );
   }
-  // Final approval — the worker is now actually placed and working. Create
-  // the Deployment this mobilisation drives from here on (monthly client
-  // hours/OT, Release) — see deployment.service.js's
-  // createDeploymentFromMobilisation.
   if (result.status === 'Approved') {
-    try {
-      await createDeploymentFromMobilisation(result, actor);
-    } catch {
-      // Compensate, don't leave it stuck (fixed 2026-09-14, a real QA-audit-
-      // found gap — F3): decideApprovalStep above already persisted
-      // 'Approved' before this ran, so a deployment-creation failure used to
-      // leave a permanently Approved mobilisation with no Deployment and no
-      // normal retry path (re-decide correctly refuses a non-PendingReview
-      // request). A single transaction spanning the shared decideApprovalStep
-      // engine (reused by 6 other request types with no Deployment concept at
-      // all) would be a much larger, riskier change for this one caller;
-      // reverting back to PendingReview at the same step — trail entry
-      // popped, decision fields cleared — restores the exact pre-decision
-      // state instead, so the same real reviewer can simply approve again
-      // once whatever broke deployment creation is fixed.
-      await Mobilisation.updateOne(
-        { _id: id, status: 'Approved' },
-        {
-          $set: { status: 'PendingReview', currentStep: result.currentStep },
-          $pop: { approvalTrail: 1 },
-          $unset: { decidedBy: '', decidedAt: '', decisionNote: '' },
-        }
-      );
-      throw new ApiError(
-        500,
-        'Approval could not be completed because creating the deployment record failed. The approval was reverted please try again.'
-      );
-    }
     // A mobilisation started from a Requirements card: mark that candidate
     // Mobilised, and move the card once every worker it asked for is. Deliberately
     // AFTER the deployment exists and best-effort — this is bookkeeping on a

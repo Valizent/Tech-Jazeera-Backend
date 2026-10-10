@@ -46,11 +46,3 @@ export const listMyAdvancesSchema = z.object({
 });
 
 export const advanceIdParamSchema = z.object({ id });
-
-export const submitAnnualVacationSchema = z.object({
-  requestedDays: z.coerce.number().min(1, 'Must request at least 1 day').max(90, 'Max 90 days'),
-  reason: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().trim().max(1000).optional()
-  ),
-});

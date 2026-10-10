@@ -33,6 +33,11 @@ import {
   exitReentryIdParamSchema,
 } from '../exitDocuments/exitReentry.validation.js';
 import {
+  submitOwnAnnualVacationSchema,
+  listMyAnnualVacationSchema,
+  annualVacationIdParamSchema,
+} from '../annualVacation/annualVacation.validation.js';
+import {
   submitCertificateSchema,
   listMyCertificatesSchema,
   certificateIdParamSchema,
@@ -142,6 +147,22 @@ router.patch(
   '/exit-reentry/:id/cancel',
   validate({ params: exitReentryIdParamSchema }),
   asyncHandler(meController.cancelExitReentry)
+);
+
+router.get(
+  '/annual-vacation',
+  validate({ query: listMyAnnualVacationSchema }),
+  asyncHandler(meController.listAnnualVacation)
+);
+router.post(
+  '/annual-vacation',
+  validate({ body: submitOwnAnnualVacationSchema }),
+  asyncHandler(meController.submitAnnualVacation)
+);
+router.patch(
+  '/annual-vacation/:id/cancel',
+  validate({ params: annualVacationIdParamSchema }),
+  asyncHandler(meController.cancelAnnualVacation)
 );
 
 router.get(

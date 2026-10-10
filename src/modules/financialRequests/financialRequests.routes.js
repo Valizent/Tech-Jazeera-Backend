@@ -34,7 +34,6 @@
  * deliberately NOT folded into 'financialRequests'.
  */
 import { Router } from 'express';
-import { z } from 'zod';
 import asyncHandler from '../../utils/asyncHandler.js';
 import logger from '../../config/logger.js';
 import { requireAuth } from '../../middleware/auth.js';
@@ -43,7 +42,7 @@ import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.
 import { validate } from '../../middleware/validate.js';
 import { uploadSingle, destroyDocumentFile } from '../../middleware/upload.js';
 import {
-  submitAdvanceSchema, submitAnnualVacationSchema,
+  submitAdvanceSchema,
   decideAdvanceSchema,
   addRepaymentSchema,
   listAdvancesSchema,
@@ -138,12 +137,5 @@ router.use((err, req, res, next) => {
   next(err);
 });
 
-
-router.post(
-  '/annual-vacation',
-  requireStaffOrExecutive,
-  validate({ body: submitAnnualVacationSchema.extend({ employee: z.string().regex(/^[a-f0-9]{24}$/i) }) }),
-  asyncHandler(advanceController.submitAnnualVacation)
-);
 
 export default router;

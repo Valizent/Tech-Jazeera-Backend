@@ -40,9 +40,3 @@ export async function addRepayment(req, res) {
   const advance = await advanceService.addRepayment(req.params.id, req.body, actor(req));
   res.status(201).json(new ApiResponse('Repayment recorded.', advance));
 }
-
-import * as annualVacationService from './annualVacation.service.js';
-export async function submitAnnualVacation(req, res) {
-  const data = await annualVacationService.submitAnnualVacation(req.body.employee, req.body, req.user);
-  res.status(201).json(data);
-}

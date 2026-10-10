@@ -40,5 +40,10 @@ const requirementStageSchema = new mongoose.Schema(
 requirementStageSchema.index({ order: 1 });
 // Case-insensitive uniqueness: "Sourcing" and "sourcing" are the same column.
 requirementStageSchema.index({ name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });
+// At most ONE stage is the "fully mobilised" destination. The service un-flags the others
+// before flagging a stage, but two admins doing that at once could both pass the un-flag
+// step and then both flag theirs (2026-10-10, QA audit V2-F08) — this index is the real
+// backstop; the loser gets a 409 instead of a second flagged stage.
+requirementStageSchema.index({ isMobilisedStage: 1 }, { unique: true, partialFilterExpression: { isMobilisedStage: true } });
 
 export default mongoose.model('RequirementStage', requirementStageSchema);

@@ -219,6 +219,7 @@ export async function notifySubmission(doc, buildStepNotification, legacyAllowed
  * @param {string} auditAction          dot-namespaced prefix, e.g. 'leave.request'
  * @param {(doc:object) => {type:string,title:string,body?:string,url?:string}} buildFinalNotification  sent to the requester once the request reaches a terminal state (Approved/Rejected)
  * @param {(doc:object, stepIndex:number) => {type:string,title:string,body?:string,url?:string}} [buildStepNotification]  sent to every member of the NEXT step's role pool
+ * @param {(doc:object) => Promise<void>} [onApproved]  awaited right after a request becomes Approved and BEFORE the requester is told — for a request type whose approval must do more work to take effect (Mobilisation creates its Deployment). If it throws, the error propagates and nobody is notified, so a success message is never left behind for an approval that did not complete (2026-10-10, QA audit V2-F07). The hook owns any compensation of its own.
  * @param {(doc:object, notification:object) => Promise<void>} [notifyFinal]  how to deliver buildFinalNotification's result — defaults to notifyEmployeeUser(doc.employee, ...), the shape every existing caller (Leave/SalaryAdvance/Reimbursement/Timesheet) uses. Override for a request type whose "who submitted this" isn't an Employee login — e.g. Mobilisation, whose `coordinators[]` are Users directly, not an Employee to resolve through.
  */
 export async function decideApprovalStep({
@@ -234,6 +235,7 @@ export async function decideApprovalStep({
   auditAction,
   buildFinalNotification,
   buildStepNotification,
+  onApproved,
   notifyFinal = (doc, notification) => notifyEmployeeUser(doc.employee, notification),
 }) {
   const doc = await Model.findById(id);
@@ -293,6 +295,7 @@ export async function decideApprovalStep({
       meta: { decisionNote: note },
       ip: actor.ip,
     });
+    if (decision === 'Approved' && onApproved) await onApproved(updated);
     await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated)));
     return updated;
   }
@@ -390,6 +393,7 @@ export async function decideApprovalStep({
     meta: { decisionNote: note, step: stepIndex, viaAdminOverride },
     ip: actor.ip,
   });
+  if (onApproved) await onApproved(updated);
   await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated)));
   return updated;
 }

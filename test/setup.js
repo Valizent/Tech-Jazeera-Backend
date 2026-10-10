@@ -6,13 +6,15 @@
  * in the test suite ever imports server.js/config/db.js, so the real
  * Atlas dev database is never touched.
  */
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 
 let mongod;
 
 beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
+  // A one-node replica set, like production: multi-document transactions (asset
+  // assign/return, settlements) only exist on a replica set member.
+  mongod = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
   await mongoose.connect(mongod.getUri());
 });
 

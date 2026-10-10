@@ -14,6 +14,7 @@ import * as attendanceService from '../attendance/attendance.service.js';
 import * as advanceService from '../financialRequests/advance.service.js';
 import * as reimbursementService from '../financialRequests/reimbursement.service.js';
 import * as exitReentryService from '../exitDocuments/exitReentry.service.js';
+import * as annualVacationService from '../annualVacation/annualVacation.service.js';
 import * as certificateService from '../exitDocuments/certificate.service.js';
 import * as assetService from '../assets/asset.service.js';
 import * as timesheetService from '../timesheets/timesheet.service.js';
@@ -144,6 +145,18 @@ export async function listMyExitReentry(employeeId, query) {
 
 export async function cancelMyExitReentry(employeeId, id, actor) {
   return exitReentryService.cancelExitReentry(employeeId, id, actor);
+}
+
+export async function submitMyAnnualVacation(employeeId, body, actor) {
+  return annualVacationService.submitOwnAnnualVacation(employeeId, body, actor);
+}
+
+export async function listMyAnnualVacation(employeeId, query) {
+  return annualVacationService.listOwnAnnualVacation(employeeId, query);
+}
+
+export async function cancelMyAnnualVacation(employeeId, id, actor) {
+  return annualVacationService.cancelAnnualVacation(employeeId, id, actor);
 }
 
 export async function submitMyCertificate(employeeId, body, actor) {

@@ -57,11 +57,27 @@ async function clearMobilisedFlagElsewhere(exceptId) {
   await RequirementStage.updateMany({ ...(exceptId && { _id: { $ne: exceptId } }), isMobilisedStage: true }, { $set: { isMobilisedStage: false } });
 }
 
+/** A duplicate-key error from the unique indexes means a concurrent request won the race. */
+function asRaceConflict(err) {
+  if (err?.code !== 11000) return err;
+  return new ApiError(
+    409,
+    err.keyPattern?.isMobilisedStage
+      ? 'Another stage was just set as the fully-mobilised destination. Refresh and try again.'
+      : 'A stage with that name was just created. Refresh and try again.'
+  );
+}
+
 export async function createStage(data, actor) {
   await assertNameFree(data.name);
   const last = await RequirementStage.findOne({}).sort({ order: -1 }).select('order').lean();
   if (data.isMobilisedStage) await clearMobilisedFlagElsewhere(null);
-  const stage = await RequirementStage.create({ ...normalise(data), order: (last?.order ?? -1) + 1 });
+  let stage;
+  try {
+    stage = await RequirementStage.create({ ...normalise(data), order: (last?.order ?? -1) + 1 });
+  } catch (err) {
+    throw asRaceConflict(err);
+  }
   await audit('requirementStage.create', stage, actor);
   return stage.toObject();
 }
@@ -76,7 +92,11 @@ export async function updateStage(id, data, actor) {
     if (data[key] !== undefined) stage[key] = data[key];
   }
   if (stage.isTerminal) stage.staleAfterDays = null;
-  await stage.save();
+  try {
+    await stage.save();
+  } catch (err) {
+    throw asRaceConflict(err);
+  }
   await audit('requirementStage.update', stage, actor, { fields: Object.keys(data) });
   return stage.toObject();
 }

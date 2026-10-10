@@ -10,6 +10,7 @@ import ApprovalWorkflow from './approvalWorkflow.model.js';
 import User from '../auth/user.model.js';
 import LeaveRequest from '../leave/leaveRequest.model.js';
 import ExitReentryRequest from '../exitDocuments/exitReentry.model.js';
+import AnnualVacationRequest from '../annualVacation/annualVacation.model.js';
 import CertificateRequest from '../exitDocuments/certificate.model.js';
 import Timesheet from '../timesheets/timesheet.model.js';
 import SalaryAdvance from '../financialRequests/advance.model.js';
@@ -200,6 +201,7 @@ export async function resolveApprovalWorkflow(employee, requestType) {
 const LOG_SOURCES = {
   Leave: { Model: LeaveRequest, typeNameField: 'leaveTypeName', pendingStatus: 'PendingReview' },
   ExitReentry: { Model: ExitReentryRequest, typeNameField: 'visaType', pendingStatus: 'Pending' },
+  AnnualVacation: { Model: AnnualVacationRequest, typeNameField: null, pendingStatus: 'PendingReview' },
   Certificate: { Model: CertificateRequest, typeNameField: 'type', pendingStatus: 'Pending' },
   // No natural short "sub-type" label exists on these two — typeName
   // resolves to undefined for them (item[null] is a safe no-op, not a

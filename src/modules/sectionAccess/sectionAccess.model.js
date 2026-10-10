@@ -67,6 +67,10 @@ export const SECTION_KEYS = [
   'leaveRequests',
   'timesheetRequests',
   'exitDocuments',
+  // Added 2026-10-10 — Annual Vacation: Read = the staff review queue; Write = file a
+  // request for another employee and decide requests. An employee's own requests
+  // need no grant (ESS, or a staff login with a linked employee).
+  'annualVacation',
   'holidays',
   // Added 2026-09-15, the user's own ask (a Coordinator/Manager/HR
   // cost-and-profit view): gates the Dashboard's real "Actual Performance"

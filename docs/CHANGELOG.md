@@ -2345,3 +2345,23 @@ when requested):**
   card border used `var(--color-x)` where the tokens are RGB channels, so they
   painted nothing — now `rgb(var(--color-x))`; the new Daily Updates filter
   heading has its English/Arabic translation.
+- **10 October 2026: audit V2 fixes + Annual Vacation built (web, server, phone app).**
+  Findings from the 6 October "Production Readiness Audit V2" that were still real:
+  O01 the server deploy workflow's test job had no environment values, so the suite
+  exited at startup on a clean runner and the deploy job could never start (now has
+  the same placeholder block the suite needs; the whole suite passes in a clean
+  environment); F04 payment amounts now reject fractions of a halala on both
+  ledgers (plus the existing 10,000,000 cap); F05 an asset return is compare-and-set
+  inside its transaction, so a stale return can no longer free a re-assigned asset;
+  F06 leave that crosses the joining anniversary is refused with "submit one request
+  per leave year"; F07 the approval engine's new `onApproved` hook runs Mobilisation's
+  Deployment creation BEFORE the "approved" notification, so a failure that reverts
+  the approval no longer leaves a success message behind; F08 a partial unique index
+  guarantees at most one "fully mobilised" requirement stage; D02 README and route
+  comments no longer describe removed Payroll/Invoice modules; P01 the MCP bridge has
+  a 30-second request deadline. The test database is now a one-node replica set so
+  transactional code paths are covered; regression tests in
+  `qaAuditV2.regressions.test.js`. V2-S01/F09 (the Annual Vacation endpoint whose
+  ownership check never fired and which had no review flow) is replaced by a real
+  module — see `docs/ANNUAL-VACATION-notes.md`. User action: tick the new "Annual
+  Vacation" roles on Section Access (staging and production).

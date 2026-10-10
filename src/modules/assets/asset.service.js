@@ -176,12 +176,21 @@ export async function returnAsset(assetId, data, actor) {
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      await AssetAssignment.updateOne(
-        { _id: active._id },
+      // Compare-and-set against what was read above (2026-10-10, QA audit V2-F05):
+      // those reads happen outside the transaction, so a return that sat waiting
+      // while another return AND a new assignment completed would otherwise end the
+      // old assignment a second time and mark the NEW holder's asset Available.
+      const ended = await AssetAssignment.updateOne(
+        { _id: active._id, status: 'Active' },
         { status: 'Ended', returnedAt: new Date(), conditionNote: data.conditionNote, notes: data.notes ?? active.notes },
         { session }
       );
-      await Asset.updateOne({ _id: assetId }, { status: 'Available', currentEmployee: null }, { session });
+      const freed =
+        ended.modifiedCount === 1 &&
+        (await Asset.updateOne({ _id: assetId, currentEmployee: active.employee }, { status: 'Available', currentEmployee: null }, { session }));
+      if (!freed || freed.modifiedCount !== 1) {
+        throw new ApiError(409, 'This asset was just returned or reassigned refresh and try again.');
+      }
     });
     await logAudit({
       user: actor.userId,

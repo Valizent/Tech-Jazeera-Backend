@@ -2,11 +2,10 @@
  * Document routes.
  *
  * Roles: read/preview/download is Section Access key 'documentsManage' at
- * the 'read' level (default mirrors write). Upload/versioning/delete is the
- * same key at 'write', default ['Manager','HR'] — matches today's
- * Admin/Manager/HR circle exactly (there was never a stricter delete-only
- * tier here to preserve separately, so delete folds into the same key
- * rather than staying hardcoded — same reasoning as EOSB/Subcontractors).
+ * the 'read' level, upload/versioning/delete the same key at 'write'. Both
+ * are Admin-only until an admin grants an ApprovalRole on the Section Access
+ * page (login-role defaults were removed 2026-09-13). There is no separate
+ * delete tier — delete folds into 'write', like EOSB/Subcontractors.
  *
  * Upload flow order: uploadSingle (Multer streams the file to Cloudinary) →
  * validate the multipart text fields → controller. If validation or the

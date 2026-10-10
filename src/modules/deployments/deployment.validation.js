@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { DEPLOYMENT_STATUSES, DEMOBILISATION_REASONS } from './deployment.model.js';
+import { money2dp } from '../../utils/money2dp.js';
 
 const DECISIONS = ['Approved', 'Rejected'];
 
@@ -166,8 +167,14 @@ export const clientPaymentIdParamSchema = z.object({ paymentId: id });
 /** Record one bulk payment a client made (2026-09-27 redesign — a client
  *  pays in bulk for everyone placed there, never per worker; see
  *  clientPayment.service.js). */
+/** A payment amount: at least one halala, no finer than a halala (a 0.011 would be
+ *  rounded differently by the stored record and the running ledger), and capped. */
+const paymentAmount = money2dp('Amount cannot have more than 2 decimal places.').refine((n) => n <= 10_000_000, {
+  message: 'That looks too high check the figure.',
+});
+
 export const recordClientPaymentSchema = z.object({
-  amount: z.coerce.number({ error: 'Enter the amount received.' }).positive('Must be greater than zero.').max(10_000_000, 'That looks too high check the figure.'),
+  amount: paymentAmount,
   paymentReference: optionalStr(100),
   paymentDate: z.coerce.date({ error: 'Enter a valid payment date.' }).optional(),
 });
@@ -195,9 +202,11 @@ export const demobiliseDeploymentSchema = z.object({
   releaseNote: optionalStr(1000),
 });
 
+// Number and date are required, exactly like the client-side sendInvoiceSchema: an entry
+// marked "invoiced" with neither could never be corrected (2026-10-10, QA audit V2-F01).
 export const recordSubInvoiceSchema = z.object({
-  invoiceNumber: optionalStr(100),
-  invoiceDate: z.coerce.date({ error: 'Enter a valid date.' }).optional(),
+  invoiceNumber: z.string().trim().min(1, 'Enter the subcontractor invoice number.').max(100),
+  invoiceDate: z.coerce.date({ error: 'Enter a valid invoice date.' }),
 });
 
 export const subcontractorIdParamSchema = z.object({ subcontractorId: id });
@@ -205,7 +214,7 @@ export const subcontractorIdParamSchema = z.object({ subcontractorId: id });
 export const subcontractorPaymentIdParamSchema = z.object({ paymentId: id });
 
 export const recordSubcontractorPaymentSchema = z.object({
-  amount: z.coerce.number({ error: 'Enter the amount paid.' }).positive('Must be greater than zero.').max(10_000_000, 'That looks too high check the figure.'),
+  amount: paymentAmount,
   paymentReference: optionalStr(100),
   paymentDate: z.coerce.date({ error: 'Enter a valid payment date.' }).optional(),
 });
