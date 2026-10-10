@@ -17,6 +17,7 @@ import SalaryAdvance from '../financialRequests/advance.model.js';
 import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
+import { SELF_SERVICE_ROLE_NAMES } from '../sectionAccess/selfService.constants.js';
 
 // Not STAFF_ROLES (rbac.js) — that constant also excludes Executive, who is
 // still a legitimate ApprovalRole member (in fact it's their ONLY route into
@@ -34,13 +35,38 @@ export async function listApprovalRoles() {
   return ApprovalRole.find().sort({ name: 1 }).populate('members', 'name email role').lean();
 }
 
-/** Every member must be a real, non-self-service User account. */
-async function assertValidMembers(memberIds = []) {
+/**
+ * Every member must be a real User account — and not a self-service (Worker/
+ * Staff) one, except in a reserved role (`allowsSelfService`: "Worker" and
+ * "Staff"), which exists precisely to hold those individual logins.
+ */
+async function assertValidMembers(memberIds = [], { allowsSelfService = false } = {}) {
   if (memberIds.length === 0) return;
   const uniqueIds = [...new Set(memberIds.map(String))];
-  const count = await User.countDocuments({ _id: { $in: uniqueIds }, role: { $nin: SELF_SERVICE_ROLES } });
+  const filter = { _id: { $in: uniqueIds }, ...(allowsSelfService ? {} : { role: { $nin: SELF_SERVICE_ROLES } }) };
+  const count = await User.countDocuments(filter);
   if (count !== uniqueIds.length) {
-    throw new ApiError(400, 'One or more selected members are not valid staff accounts.');
+    throw new ApiError(
+      400,
+      allowsSelfService
+        ? 'One or more selected members are not valid accounts.'
+        : 'One or more selected members are not valid staff accounts. Worker and Staff logins can only join the "Worker" and "Staff" roles.'
+    );
+  }
+}
+
+/**
+ * Create the two reserved roles if they are missing, and make sure an
+ * existing role of the same name carries the flag (an Admin may already have
+ * created "Staff" by hand). Idempotent — called at every server start.
+ */
+export async function ensureSelfServiceRoles() {
+  for (const name of SELF_SERVICE_ROLE_NAMES) {
+    await ApprovalRole.updateOne(
+      { name },
+      { $set: { allowsSelfService: true }, $setOnInsert: { name, description: `Logins of type ${name}: grant this role access on the Section Access page.`, isActive: true, members: [] } },
+      { upsert: true }
+    );
   }
 }
 
@@ -61,7 +87,11 @@ export async function createApprovalRole(data, actor) {
 }
 
 export async function updateApprovalRole(id, data, actor) {
-  if (data.members) await assertValidMembers(data.members);
+  if (data.members) {
+    const existing = await ApprovalRole.findById(id).select('allowsSelfService').lean();
+    if (!existing) throw new ApiError(404, 'Approval role not found.');
+    await assertValidMembers(data.members, { allowsSelfService: Boolean(existing.allowsSelfService) });
+  }
   const role = await ApprovalRole.findByIdAndUpdate(id, data, { new: true, runValidators: true })
     .populate('members', 'name email role')
     .lean();

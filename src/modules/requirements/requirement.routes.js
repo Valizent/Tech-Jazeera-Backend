@@ -14,8 +14,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff } from '../../middleware/rbac.js';
-import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
+import { requireSectionAccess, requireStaffOrSelfServiceGrant } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
   createRequirementSchema,
@@ -36,7 +35,7 @@ import * as controller from './requirement.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaff);
+router.use(requireStaffOrSelfServiceGrant('requirementsOwn', 'requirementsTeam'));
 
 const canManageStages = requireSectionAccess('requirementStages', 'write');
 

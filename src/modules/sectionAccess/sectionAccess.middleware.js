@@ -12,7 +12,28 @@
  */
 import ApiError from '../../utils/ApiError.js';
 import asyncHandler from '../../utils/asyncHandler.js';
+import { requireStaff } from '../../middleware/rbac.js';
 import { canAccessSection } from './sectionAccess.service.js';
+import { SELF_SERVICE_LOGIN_ROLES } from './selfService.constants.js';
+
+/**
+ * requireStaff, plus a Worker/Staff login that holds at least Read on one of
+ * `sectionKeys` (2026-10-10 — the reserved "Worker"/"Staff" approval roles, see
+ * selfService.constants.js). Staff roles pass exactly as before; a self-service
+ * login passes only for the modules whose key it was granted, and each route's
+ * own requireSectionAccess still decides what it may actually do there.
+ */
+export function requireStaffOrSelfServiceGrant(...sectionKeys) {
+  return asyncHandler(async (req, res, next) => {
+    if (!req.user) throw new ApiError(500, 'Something went wrong. Please try again.');
+    if (!SELF_SERVICE_LOGIN_ROLES.includes(req.user.role)) return requireStaff(req, res, next);
+    const actor = { userId: req.user.id, role: req.user.role };
+    for (const key of sectionKeys) {
+      if (await canAccessSection(key, actor, 'read')) return next();
+    }
+    throw new ApiError(403, 'You do not have permission to perform this action.');
+  });
+}
 
 export function requireSectionAccess(sectionKey, level = 'write') {
   return asyncHandler(async (req, res, next) => {

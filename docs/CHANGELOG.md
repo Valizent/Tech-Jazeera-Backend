@@ -2365,3 +2365,19 @@ when requested):**
   ownership check never fired and which had no review flow) is replaced by a real
   module — see `docs/ANNUAL-VACATION-notes.md`. User action: tick the new "Annual
   Vacation" roles on Section Access (staging and production).
+- **10 October 2026: Data Reconciliation covers more, and Worker/Staff roles in Section Access.**
+  Reconciliation gained four detectors (`reconciliation.integrityChecks.js`): an asset whose status
+  or holder disagrees with its Active assignment (or held by two people, or marked assigned with
+  nobody holding it); more than one "fully mobilised" requirement stage, or a requirement in a
+  stage that no longer exists; client and subcontractor payments with a fraction of a halala, an
+  amount over the cap or a party that no longer exists; and subcontractor invoices marked received
+  with no invoice number or date. Labels added on the web and phone (English and Arabic); the
+  report still writes nothing. Section Access now has two reserved roles, "Worker" and "Staff",
+  created automatically and filled by picking individual logins on the Approval Hierarchy page;
+  they can be granted Read/Write on a safe list only (Holidays, Assets, Documents, Attendance
+  sign-in/out, Leave, Timesheets, Daily Updates, Requirements) — enforced when a grant is saved
+  and on every access check, so money, employee records and admin sections stay out of reach
+  whatever is ticked. A granted login keeps the portal as its home and opens only the modules it
+  holds, in the staff shell on the web and from More on the phone. See
+  `docs/SELF-SERVICE-ROLES-notes.md`. User action: choose the members of "Worker" and "Staff" and
+  grant them sections (staging and production too).

@@ -20,6 +20,10 @@ const approvalRoleSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true, unique: true },
     description: { type: String, trim: true, maxlength: 300 },
     members: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    // Reserved roles ("Worker", "Staff" — see sectionAccess/selfService.constants.js) are the
+    // ONLY roles whose members may be Worker/Staff self-service logins. Set by the system
+    // (ensureSelfServiceRoles), never by the API: createApprovalRoleSchema does not carry it.
+    allowsSelfService: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

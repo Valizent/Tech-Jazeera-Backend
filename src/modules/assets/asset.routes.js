@@ -12,8 +12,8 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireRoles, requireStaff } from '../../middleware/rbac.js';
-import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
+import { requireRoles } from '../../middleware/rbac.js';
+import { requireSectionAccess, requireStaffOrSelfServiceGrant } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
   createAssetSchema,
@@ -30,7 +30,7 @@ import * as assetController from './asset.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaff);
+router.use(requireStaffOrSelfServiceGrant('assetsManage'));
 
 const canRead = requireSectionAccess('assetsManage', 'read');
 const canWrite = requireSectionAccess('assetsManage', 'write');

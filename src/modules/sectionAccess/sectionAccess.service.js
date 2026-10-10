@@ -9,6 +9,7 @@ import SectionAccess, { SECTION_KEYS } from './sectionAccess.model.js';
 import ApprovalRole from '../approvals/approvalRole.model.js';
 import { isMemberOfAnyRole } from '../approvals/approvals.service.js';
 import { STAFF_ROLES } from '../../middleware/rbac.js';
+import { SELF_SERVICE_LOGIN_ROLES, SELF_SERVICE_GRANTABLE_KEYS } from './selfService.constants.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 
@@ -132,11 +133,14 @@ export async function listSectionAccess() {
 }
 
 /**
- * Worker/Staff are excluded outright by this first line, regardless of
- * configuration — the same floor requireStaff enforces everywhere else
- * (Executive is separately allow-listed right after, matching
- * requireStaffOrExecutive's own shape); this mechanism only ever ADDS
- * access on top of it, never bypasses it. Office Secretary passes this
+ * Worker/Staff logins are excluded by the first line EXCEPT for the safe list
+ * in selfService.constants.js (SELF_SERVICE_GRANTABLE_KEYS): since 2026-10-10 an
+ * Admin may put individual self-service logins into the reserved "Worker" and
+ * "Staff" roles and grant those roles Read/Write on exactly those sections —
+ * every other section stays unreachable for them whatever is ticked. This
+ * mechanism only ever ADDS access on top of the staff floor, never bypasses it
+ * (Executive is separately allow-listed, matching requireStaffOrExecutive's
+ * own shape). Office Secretary passes this
  * floor like any other staff role since 2026-09-13 (see rbac.js's own doc
  * comment on STAFF_ROLES) — a real Approval Role grant now genuinely works
  * for her, same as for Coordinator/HR/Manager/Accounts; she's just as
@@ -152,7 +156,9 @@ export async function listSectionAccess() {
  * one place.
  */
 export async function canAccessSection(sectionKey, actor, level = 'write') {
-  if (!STAFF_ROLES.includes(actor.role) && actor.role !== 'Executive') return false;
+  const selfService = SELF_SERVICE_LOGIN_ROLES.includes(actor.role);
+  if (!STAFF_ROLES.includes(actor.role) && actor.role !== 'Executive' && !selfService) return false;
+  if (selfService && !SELF_SERVICE_GRANTABLE_KEYS.includes(sectionKey)) return false;
   if (actor.role === 'Admin') return true;
   const settings = await getSectionAccess(sectionKey);
 
@@ -183,7 +189,8 @@ export async function canAccessSection(sectionKey, actor, level = 'write') {
  * still takes effect on that user's very next request, unchanged.
  */
 export async function getMySectionAccess(actor) {
-  if (!STAFF_ROLES.includes(actor.role) && actor.role !== 'Executive') return { read: [], write: [] };
+  const selfService = SELF_SERVICE_LOGIN_ROLES.includes(actor.role);
+  if (!STAFF_ROLES.includes(actor.role) && actor.role !== 'Executive' && !selfService) return { read: [], write: [] };
   if (actor.role === 'Admin') return { read: [...SECTION_KEYS], write: [...SECTION_KEYS] };
 
   const docs = await SectionAccess.find({}).lean();
@@ -204,7 +211,9 @@ export async function getMySectionAccess(actor) {
 
   const read = [];
   const write = [];
-  for (const key of SECTION_KEYS) {
+  // A self-service login is only ever evaluated against the safe list.
+  const evaluatedKeys = selfService ? SECTION_KEYS.filter((k) => SELF_SERVICE_GRANTABLE_KEYS.includes(k)) : SECTION_KEYS;
+  for (const key of evaluatedKeys) {
     const settings = bySectionKey.get(key) ?? defaultFor(key);
     const hasWrite = settings.writeApprovalRoles.some((id) => myRoleIds.has(id.toString()));
     if (hasWrite) {
@@ -235,11 +244,20 @@ export async function resolveOwnTeamAccess(actor, ownKey, teamKey) {
   };
 }
 
-async function assertValidApprovalRoles(roleIds) {
+async function assertValidApprovalRoles(roleIds, sectionKey) {
   if (!roleIds?.length) return;
-  const count = await ApprovalRole.countDocuments({ _id: { $in: roleIds }, isActive: true });
-  if (count !== new Set(roleIds.map(String)).size) {
+  const roles = await ApprovalRole.find({ _id: { $in: roleIds }, isActive: true }).select('name allowsSelfService').lean();
+  if (roles.length !== new Set(roleIds.map(String)).size) {
     throw new ApiError(400, 'One or more selected approval roles are invalid or inactive.');
+  }
+  // The reserved Worker/Staff roles may only be granted the safe list (also re-checked on every
+  // access evaluation — this is the early, explained refusal).
+  const blocked = roles.filter((r) => r.allowsSelfService);
+  if (blocked.length && !SELF_SERVICE_GRANTABLE_KEYS.includes(sectionKey)) {
+    throw new ApiError(
+      400,
+      `${blocked.map((r) => r.name).join(' and ')} cannot be granted this section. Worker and Staff roles can only be granted: ${SELF_SERVICE_GRANTABLE_KEYS.map((k) => SECTION_LABELS[k]).join(', ')}.`
+    );
   }
 }
 
@@ -247,8 +265,8 @@ async function assertValidApprovalRoles(roleIds) {
  *  section is not itself delegable to whoever that grant creates. */
 export async function updateSectionAccess(sectionKey, { readApprovalRoles, writeApprovalRoles }, actor) {
   if (!SECTION_KEYS.includes(sectionKey)) throw new ApiError(404, 'Unknown section.');
-  await assertValidApprovalRoles(readApprovalRoles);
-  await assertValidApprovalRoles(writeApprovalRoles);
+  await assertValidApprovalRoles(readApprovalRoles, sectionKey);
+  await assertValidApprovalRoles(writeApprovalRoles, sectionKey);
 
   const settings = await SectionAccess.findOneAndUpdate(
     { sectionKey },

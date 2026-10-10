@@ -22,6 +22,12 @@
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import SalaryAdvance from '../financialRequests/advance.model.js';
+import {
+  assetHolderInconsistencies,
+  requirementStageProblems,
+  paymentLedgerProblems,
+  subcontractorInvoicesMissingDetails,
+} from './reconciliation.integrityChecks.js';
 
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -137,6 +143,10 @@ export async function runReconciliation() {
     orphanedMobilisations(),
     doubleBookedWorkers(),
     salaryAdvanceLedgerMismatches(),
+    assetHolderInconsistencies(),
+    requirementStageProblems(),
+    paymentLedgerProblems(),
+    subcontractorInvoicesMissingDetails(),
   ]);
   const findings = results.flat();
   const severityRank = { high: 0, medium: 1, low: 2 };

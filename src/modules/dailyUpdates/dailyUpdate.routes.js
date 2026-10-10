@@ -14,7 +14,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff } from '../../middleware/rbac.js';
+import { requireStaffOrSelfServiceGrant } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
   createDailyUpdateSchema,
@@ -28,7 +28,7 @@ import * as dailyUpdateController from './dailyUpdate.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaff);
+router.use(requireStaffOrSelfServiceGrant('dailyUpdatesOwn', 'dailyUpdatesTeam'));
 
 // Before the /:id routes, or "coordinators" is read as an entry id.
 router.get('/coordinators', asyncHandler(dailyUpdateController.coordinators));

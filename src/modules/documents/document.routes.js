@@ -16,8 +16,7 @@ import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import logger from '../../config/logger.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff } from '../../middleware/rbac.js';
-import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
+import { requireSectionAccess, requireStaffOrSelfServiceGrant } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import { uploadSingle, destroyDocumentFile } from '../../middleware/upload.js';
 import {
@@ -31,7 +30,7 @@ import * as documentController from './document.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaff); // staff-only module; Workers use the ESS portal (P2-M2)
+router.use(requireStaffOrSelfServiceGrant('documentsManage'));
 
 const canRead = requireSectionAccess('documentsManage', 'read');
 const canWrite = requireSectionAccess('documentsManage', 'write');
