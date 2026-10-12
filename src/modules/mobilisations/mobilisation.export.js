@@ -13,7 +13,7 @@ import ExcelJS from 'exceljs';
 
 const WORKER_COLUMNS = [
   { header: 'Serial', key: 'serialNumber', width: 12 },
-  { header: 'Worker name', key: 'workerName', width: 24 },
+  { header: 'Employee name', key: 'workerName', width: 24 },
   { header: 'Worker type', key: 'workerType', width: 16 },
   { header: 'Iqama number', key: 'iqamaNumber', width: 16 },
   { header: 'Nationality', key: 'nationality', width: 14 },

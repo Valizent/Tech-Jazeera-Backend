@@ -7,6 +7,7 @@
  * rule as Client.
  */
 import mongoose from 'mongoose';
+import { companyProfileFields } from '../companyProfile/companyProfile.model.js';
 
 export const SUBCONTRACTOR_STATUSES = ['Active', 'Inactive'];
 
@@ -22,7 +23,13 @@ const subcontractorSchema = new mongoose.Schema(
     vatNumber: { type: String, trim: true },
     crNumber: { type: String, trim: true },
     address: { type: String, trim: true },
+    // Arabic name, CR expiry, National Address, Finance person, Owner and the
+    // company's coordinators (2026-10-12) - shared with Client.
+    ...companyProfileFields,
     notes: { type: String, trim: true, maxlength: 2000 },
+    // Who added it (2026-10-12): the first missing-details reminder goes to them.
+    // Null for subcontractors that predate this field.
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   },
   { timestamps: true }
 );

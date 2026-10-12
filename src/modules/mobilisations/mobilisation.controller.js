@@ -23,14 +23,14 @@ export async function listCoordinatorCandidates(req, res) {
 /** GET /api/mobilisations/lookup-by-iqama?iqamaNumber=... — 200 → data: worker snapshot | null */
 export async function lookupByIqama(req, res) {
   const worker = await mobilisationService.lookupWorkerByIqama(req.query.iqamaNumber);
-  res.json(new ApiResponse(worker ? 'Worker found.' : 'No previous mobilisation for this Iqama.', worker));
+  res.json(new ApiResponse(worker ? 'Employee found.' : 'No previous mobilisation for this Iqama.', worker));
 }
 
 /** GET /api/mobilisations/previous-workers?workerType=&subcontractor=... —
  *  200 → data: worker[] */
 export async function previousWorkers(req, res) {
   const workers = await mobilisationService.listPreviousWorkers(req.query.workerType, req.query.subcontractor);
-  res.json(new ApiResponse('Previous workers.', workers));
+  res.json(new ApiResponse('Previous employees.', workers));
 }
 
 /** GET /api/mobilisations/worker-history?iqamaNumber=... — 200 → data:
@@ -38,19 +38,25 @@ export async function previousWorkers(req, res) {
  *  a normal, expected search result, not an error). */
 export async function getWorkerHistory(req, res) {
   const history = await mobilisationService.getWorkerHistory(req.query.iqamaNumber);
-  res.json(new ApiResponse(history ? 'Worker history.' : 'No mobilisations found for this Iqama.', history));
+  res.json(new ApiResponse(history ? 'Employee history.' : 'No mobilisations found for this Iqama.', history));
 }
 
 /** POST /api/mobilisations/worker-history/archive — 200 → data: null */
 export async function archiveWorker(req, res) {
   await mobilisationService.archiveWorkerData(req.body.iqamaNumber, actor(req));
-  res.json(new ApiResponse('Worker data archived.'));
+  res.json(new ApiResponse('Employee data archived.'));
 }
 
 /** POST /api/mobilisations/worker-history/unarchive — 200 → data: null */
 export async function unarchiveWorker(req, res) {
   await mobilisationService.unarchiveWorkerData(req.body.iqamaNumber, actor(req));
-  res.json(new ApiResponse('Worker data restored.'));
+  res.json(new ApiResponse('Employee data restored.'));
+}
+
+/** POST /api/mobilisations/company-coordinators — 201 → data: the new coordinator */
+export async function addCompanyCoordinator(req, res) {
+  const coordinator = await mobilisationService.addCompanyCoordinator(req.body, actor(req));
+  res.status(201).json(new ApiResponse('Coordinator added.', coordinator));
 }
 
 /** GET /api/mobilisations — 200 → data: { items, total, page, pages } */

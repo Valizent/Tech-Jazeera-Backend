@@ -7,6 +7,7 @@ import fs from 'node:fs/promises';
 import Document from './document.model.js';
 import Employee from '../employees/employee.model.js';
 import Client from '../clients/client.model.js';
+import Subcontractor from '../subcontractors/subcontractor.model.js';
 import env from '../../config/env.js';
 import logger from '../../config/logger.js';
 import ApiError from '../../utils/ApiError.js';
@@ -24,7 +25,7 @@ export const EXPIRY_WARNING_DAYS = 30;
 
 /** Refuse to attach a document to an owner that doesn't exist. */
 async function assertOwnerExists(ownerType, owner) {
-  const Model = ownerType === 'Employee' ? Employee : Client;
+  const Model = { Employee, Client, Subcontractor }[ownerType];
   const exists = await Model.exists({ _id: owner });
   if (!exists) throw new ApiError(404, `${ownerType} not found.`);
 }
@@ -163,7 +164,7 @@ export async function listDocuments({ page, limit, ownerType, owner, category, s
   }
   if (actor?.role === 'Coordinator') {
     const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
-    conditions.push({ $or: [{ ownerType: 'Client' }, { ownerType: 'Employee', owner: { $in: teamIds } }] });
+    conditions.push({ $or: [{ ownerType: { $in: ['Client', 'Subcontractor'] } }, { ownerType: 'Employee', owner: { $in: teamIds } }] });
   }
   const filter = conditions.length > 0 ? { $and: conditions } : {};
 
@@ -172,7 +173,7 @@ export async function listDocuments({ page, limit, ownerType, owner, category, s
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
-      .populate('owner', 'fullName employeeId companyName')
+      .populate('owner', 'fullName employeeId companyName name')
       .lean(),
     Document.countDocuments(filter),
   ]);
@@ -181,7 +182,7 @@ export async function listDocuments({ page, limit, ownerType, owner, category, s
 
 export async function getDocument(id, actor) {
   const document = await Document.findById(id)
-    .populate('owner', 'fullName employeeId companyName')
+    .populate('owner', 'fullName employeeId companyName name')
     .populate('versions.uploadedBy', 'name')
     .lean();
   if (!document) throw new ApiError(404, 'Document not found.');

@@ -32,6 +32,7 @@ import {
   mobilisationPreviousWorkersQuerySchema,
   workerHistoryQuerySchema,
   workerIqamaBodySchema,
+  addCompanyCoordinatorSchema,
 } from './mobilisation.validation.js';
 import * as mobilisationController from './mobilisation.controller.js';
 
@@ -87,6 +88,11 @@ router.get(
   asyncHandler(mobilisationController.exportOne)
 );
 router.post('/', validate({ body: createMobilisationSchema }), asyncHandler(mobilisationController.create));
+router.post(
+  '/company-coordinators',
+  validate({ body: addCompanyCoordinatorSchema }),
+  asyncHandler(mobilisationController.addCompanyCoordinator)
+);
 router.patch(
   '/:id',
   validate({ params: mobilisationIdParamSchema, body: updateMobilisationSchema }),

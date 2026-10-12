@@ -15,6 +15,7 @@
  *    list screen filters on it. It is not speculative.
  */
 import mongoose from 'mongoose';
+import { companyProfileFields } from '../companyProfile/companyProfile.model.js';
 
 /** Single source of truth for status values — validation and UI import it. */
 export const CLIENT_STATUSES = ['Active', 'Inactive'];
@@ -48,6 +49,9 @@ const clientSchema = new mongoose.Schema(
     crNumber: { type: String, trim: true }, // Commercial Registration, 10 digits
     industry: { type: String, trim: true },
     sites: { type: [siteSchema], default: [] },
+    // Arabic name, CR expiry, National Address, Finance person, Owner and the
+    // company's coordinators (2026-10-12) - shared with Subcontractor.
+    ...companyProfileFields,
     status: { type: String, enum: CLIENT_STATUSES, default: 'Active' },
     creditLimitDays: { type: Number, default: 50, min: 0 },
     notes: { type: String, trim: true, maxlength: 2000 },

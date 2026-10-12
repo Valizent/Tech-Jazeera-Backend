@@ -32,7 +32,7 @@ export async function markBulk({ date, records }, actor) {
   const ids = [...new Set(records.map((r) => r.employee))];
   const existing = await Employee.countDocuments({ _id: { $in: ids } });
   if (existing !== ids.length) {
-    throw new ApiError(400, 'One or more selected workers no longer exist.');
+    throw new ApiError(400, 'One or more selected employees no longer exist.');
   }
   await assertEmployeesInCoordinatorTeam(ids, actor);
 

@@ -6,6 +6,7 @@ import Mobilisation from '../mobilisations/mobilisation.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { withMissingDetails } from '../companyProfile/companyProfile.service.js';
 
 export async function listSubcontractors({ page, limit, search, status, sortBy, sortOrder }) {
   const conditions = [];
@@ -23,17 +24,18 @@ export async function listSubcontractors({ page, limit, search, status, sortBy, 
     Subcontractor.find(filter).sort(sort).skip((page - 1) * limit).limit(limit).lean(),
     Subcontractor.countDocuments(filter),
   ]);
-  return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+  return { items: await withMissingDetails('Subcontractor', items), total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
 export async function getSubcontractor(id) {
   const subcontractor = await Subcontractor.findById(id).lean();
   if (!subcontractor) throw new ApiError(404, 'Subcontractor not found.');
-  return subcontractor;
+  return withMissingDetails('Subcontractor', subcontractor);
 }
 
 export async function createSubcontractor(data, actor) {
-  const subcontractor = await Subcontractor.create(data);
+  // Incomplete by definition (no documents yet): the missing-details clock starts now.
+  const subcontractor = await Subcontractor.create({ ...data, createdBy: actor.userId, missingDetailsSince: new Date() });
   await logAudit({
     user: actor.userId,
     action: 'subcontractor.create',

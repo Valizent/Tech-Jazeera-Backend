@@ -45,7 +45,7 @@ const clearableStr = (max) => z.preprocess(emptyToNull, z.string().trim().max(ma
 
 const clientName = z.string().trim().min(2, 'Enter the client company name.').max(150);
 const jobTitle = z.string().trim().min(2, 'Enter the job title.').max(150);
-const headcount = z.coerce.number().int('Headcount must be a whole number.').min(1, 'At least 1 worker.').max(500);
+const headcount = z.coerce.number().int('Headcount must be a whole number.').min(1, 'At least 1 employee.').max(500);
 const coordinators = z.array(objectId).min(1, 'Pick at least one coordinator.').max(20);
 
 export const createRequirementSchema = z.object({
@@ -128,7 +128,7 @@ const phone = z.string().trim().regex(/^\+?[0-9][0-9 -]{5,18}$/, 'Enter a valid 
 export const createCandidateSchema = z
   .object({
     workerType: z.enum(CANDIDATE_WORKER_TYPES),
-    workerName: z.string().trim().min(2, 'Enter the worker name.').max(150),
+    workerName: z.string().trim().min(2, 'Enter the employee name.').max(150),
     iqamaNumber: z.preprocess(emptyToUndef, iqama.optional()),
     nationality: optionalStr(80),
     phone: z.preprocess(emptyToUndef, phone.optional()),
@@ -138,7 +138,7 @@ export const createCandidateSchema = z
   })
   .superRefine((v, ctx) => {
     if (v.workerType === 'SupplierEmployee' && !v.subcontractor) {
-      ctx.addIssue({ code: 'custom', path: ['subcontractor'], message: 'Select the subcontractor this worker comes from.' });
+      ctx.addIssue({ code: 'custom', path: ['subcontractor'], message: 'Select the subcontractor this employee comes from.' });
     }
     if (v.workerType === 'Freelancer' && v.subcontractor) {
       ctx.addIssue({ code: 'custom', path: ['subcontractor'], message: 'A freelancer has no subcontractor.' });
@@ -149,7 +149,7 @@ export const createCandidateSchema = z
  *  it isn't accepted here. '' clears an optional field. */
 export const updateCandidateSchema = z
   .object({
-    workerName: z.string().trim().min(2, 'Enter the worker name.').max(150).optional(),
+    workerName: z.string().trim().min(2, 'Enter the employee name.').max(150).optional(),
     iqamaNumber: z.preprocess(emptyToNull, iqama.nullable().optional()),
     nationality: clearableStr(80),
     phone: z.preprocess(emptyToNull, phone.nullable().optional()),

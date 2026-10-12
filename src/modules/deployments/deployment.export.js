@@ -23,7 +23,7 @@
 import ExcelJS from 'exceljs';
 
 const DEPLOYMENT_COLUMNS = [
-  { header: 'Worker', key: 'workerName', width: 24 },
+  { header: 'Employee', key: 'workerName', width: 24 },
   { header: 'Worker type', key: 'workerType', width: 16 },
   { header: 'Client', key: 'clientName', width: 26 },
   { header: 'Site', key: 'site', width: 18 },

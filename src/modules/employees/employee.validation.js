@@ -176,7 +176,7 @@ export const createEmployeeSchema = employeeObjectSchema.superRefine((data, ctx)
     ctx.addIssue({ code: 'custom', path: ['salary'], message: 'Salary is required.' });
   }
   if (data.type === 'Subcontracted' && !data.subcontractor) {
-    ctx.addIssue({ code: 'custom', path: ['subcontractor'], message: 'Select who supplied this worker.' });
+    ctx.addIssue({ code: 'custom', path: ['subcontractor'], message: 'Select who supplied this employee.' });
   }
 });
 

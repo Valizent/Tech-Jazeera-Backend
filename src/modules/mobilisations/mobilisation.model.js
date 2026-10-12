@@ -129,6 +129,21 @@ const coordinatorSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/** A person at the client or subcontractor, snapshotted onto the mobilisation
+ *  (2026-10-12) so a later edit to the company's own list never rewrites an
+ *  already-submitted one. `coordinatorId` points at the company's own
+ *  `coordinators[]._id`. Not our staff: those are `coordinators` below. */
+const companyContactSchema = new mongoose.Schema(
+  {
+    coordinatorId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    name: { type: String, required: true, trim: true },
+    designation: { type: String, trim: true },
+    phone: { type: String, trim: true },
+    email: { type: String, trim: true },
+  },
+  { _id: false }
+);
+
 const mobilisationSchema = new mongoose.Schema(
   {
     // --- Section 1: worker & job ---
@@ -204,7 +219,15 @@ const mobilisationSchema = new mongoose.Schema(
     // (`otEmployeeRate`) — the same for Employee, SupplierEmployee, and
     // Freelancer alike.
     otClientRate: { type: Number, default: null, min: 0 },
+    // From 2026-10-12 a new mobilisation bills OT at its client rate: the form no
+    // longer asks for an OT client rate, the server sets it equal to clientRate
+    // and keeps it equal on every save. Older records keep their own typed OT
+    // rate (this flag is false for them), as the user decided ("new ones only").
+    otClientRateFollowsClient: { type: Boolean, default: false },
     otEmployeeRate: { type: Number, default: null, min: 0 },
+    // Freelancer only (2026-10-12): what this company pays the freelancer per
+    // hour. Their OT is paid at this same rate (otEmployeeRate is set to it).
+    employeeRate: { type: Number, default: 0, min: 0 },
     otProfitPerHour: { type: Number, default: null }, // computed
 
     // --- stale-mobilisation warning support ---
@@ -229,6 +252,14 @@ const mobilisationSchema = new mongoose.Schema(
         message: 'A mobilisation needs at least one coordinator.',
       },
     },
+    // People at the client / subcontractor involved in this placement, and who
+    // each side's commission goes to (2026-10-12). A recipient is required once
+    // that side's commission is 1 or more, and always comes from the same
+    // company's own coordinators.
+    clientCoordinators: { type: [companyContactSchema], default: [] },
+    subcontractorCoordinators: { type: [companyContactSchema], default: [] },
+    clientCommissionCoordinator: { type: companyContactSchema, default: null },
+    subcontractorCommissionCoordinator: { type: companyContactSchema, default: null },
     documents: { type: [mobilisationDocumentSchema], default: [] },
     remark: { type: String, trim: true, maxlength: 1000 },
 

@@ -8,6 +8,7 @@ import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { notifyUser } from '../notifications/notification.service.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { withMissingDetails } from '../companyProfile/companyProfile.service.js';
 
 /**
  * Paginated, searchable, sortable listing.
@@ -46,7 +47,7 @@ export async function listClients({ page, limit, search, status, approvalStatus,
       .lean(),
     Client.countDocuments(filter),
   ]);
-  return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+  return { items: await withMissingDetails('Client', items), total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
 export async function getClient(id) {
@@ -55,7 +56,7 @@ export async function getClient(id) {
     .populate('decidedBy', 'name')
     .lean();
   if (!client) throw new ApiError(404, 'Client not found.');
-  return client;
+  return withMissingDetails('Client', client);
 }
 
 /**
@@ -65,7 +66,9 @@ export async function getClient(id) {
  * (not even in the Zod schema; this is the one place it's assigned).
  */
 export async function createClient(data, actor) {
-  const payload = { ...data, createdBy: actor.userId };
+  // A new client is incomplete by definition (it has no documents yet), so the
+  // missing-details clock starts now (see notifications/companyDetails.job.js).
+  const payload = { ...data, createdBy: actor.userId, missingDetailsSince: new Date() };
   if (actor.role === 'Coordinator') payload.approvalStatus = 'Pending';
   const client = await Client.create(payload);
   await logAudit({
@@ -191,7 +194,7 @@ export async function deleteClient(id, actor) {
   if (assigned > 0) {
     throw new ApiError(
       409,
-      `This client has ${assigned} assigned worker(s). Reassign or unassign them first.`
+      `This client has ${assigned} assigned employee(s). Reassign or unassign them first.`
     );
   }
 

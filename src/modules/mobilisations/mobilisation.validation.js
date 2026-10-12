@@ -9,6 +9,7 @@
  */
 import { z } from 'zod';
 import { REJECTION_TARGETS, FTA_TYPES } from './mobilisation.model.js';
+import { newCompanyCoordinatorSchema } from '../companyProfile/companyProfile.validation.js';
 
 const emptyToUndef = (value) =>
   typeof value === 'string' && value.trim() === '' ? undefined : value;
@@ -83,13 +84,14 @@ const mobilisationFields = {
   // reviewer's later Section 2 pass (see commercialDetailsSchema below,
   // which no longer carries these two).
   requiredTimesheetHours: optionalNonNegNumber,
-  // otClientRate = billed to the client per OT hour; otEmployeeRate = paid
-  // out per OT hour to whoever actually worked it (Employee, SupplierEmployee,
-  // or Freelancer alike — 2026-09-14 correction, replacing a client-
-  // commission/subcontractor-rate split that doesn't reflect how OT is
-  // actually billed/paid in practice, see mobilisation.model.js).
-  otClientRate: optionalNonNegNumber,
+  // otEmployeeRate = paid out per OT hour to the employee (Own and subcontractor
+  // employees; a freelancer's OT follows their own hourly rate, below). The OT
+  // CLIENT rate is no longer typed: the server sets it equal to clientRate
+  // (2026-10-12, see otClientRateFollowsClient in mobilisation.model.js), so it
+  // is deliberately not in this schema.
   otEmployeeRate: optionalNonNegNumber,
+  // Freelancer only: what this company pays the freelancer per hour.
+  employeeRate: optionalNonNegNumber,
 
   client: id('client'),
   site: optionalStr(150),
@@ -110,6 +112,18 @@ const mobilisationFields = {
   subcontractor: z.preprocess(emptyToUndef, id('subcontractor').optional()),
   subcontractorRate: optionalNonNegNumber,
   subcontractorCommission: optionalNonNegNumber,
+
+  // People at the client / subcontractor (their own coordinators, by id) and
+  // who each commission goes to (2026-10-12). Resolved against the company's
+  // own list in the service; required there once a commission is 1 or more.
+  // The answer to "in our records he is with another subcontractor - change
+  // him to this one?" (2026-10-12). True raises a transfer request for the
+  // Marketing Manager; the final approval of this mobilisation then waits for it.
+  requestSubcontractorTransfer: z.boolean().optional(),
+  clientCoordinatorIds: z.array(id('client coordinator')).max(20).optional(),
+  subcontractorCoordinatorIds: z.array(id('subcontractor coordinator')).max(20).optional(),
+  clientCommissionCoordinatorId: z.preprocess(emptyToUndef, id('client coordinator').optional()),
+  subcontractorCommissionCoordinatorId: z.preprocess(emptyToUndef, id('subcontractor coordinator').optional()),
   // No otSubcontractorRate/otSubcontractorCommission here (removed
   // 2026-09-14) — OT no longer has a subcontractor-side rate split at all,
   // see otEmployeeRate above.
@@ -151,13 +165,18 @@ const mobilisationFields = {
 function withWorkerTypeRefine(schema) {
   return schema.superRefine((data, ctx) => {
     if (data.workerType === 'Employee' && !data.worker) {
-      ctx.addIssue({ code: 'custom', path: ['worker'], message: 'Select a worker.' });
+      ctx.addIssue({ code: 'custom', path: ['worker'], message: 'Select an employee.' });
     }
     if (data.workerType && data.workerType !== 'Employee' && !data.workerName) {
-      ctx.addIssue({ code: 'custom', path: ['workerName'], message: 'Worker name is required.' });
+      ctx.addIssue({ code: 'custom', path: ['workerName'], message: 'Employee name is required.' });
     }
     if (data.workerType === 'SupplierEmployee' && !data.subcontractor) {
       ctx.addIssue({ code: 'custom', path: ['subcontractor'], message: 'Select a subcontractor.' });
+    }
+    // A freelancer is paid by the hour: the rate is required (2026-10-12), and
+    // their OT is paid at it, so there is no separate OT field for them.
+    if (data.workerType === 'Freelancer' && !(Number(data.employeeRate) > 0)) {
+      ctx.addIssue({ code: 'custom', path: ['employeeRate'], message: 'Employee rate per hour is required for a freelancer.' });
     }
   });
 }
@@ -212,9 +231,18 @@ export const listMobilisationsSchema = z.object({
   // `coordinators`, not just primary — same "any coordinator counts" rule
   // mobilisationTarget.service.js's own sumProgress already uses).
   coordinator: z.preprocess(emptyToUndef, id('coordinator').optional()),
+  // 2026-10-12 - the dashboard's "Shared employees" tile: only mobilisations
+  // handled by more than one of our coordinators.
+  shared: z.preprocess(emptyToUndef, z.enum(['true']).optional()),
   search: optionalStr(100),
   sortBy: z.enum(['mobilisationDate', 'createdAt', 'workerName', 'clientName', 'status']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
+});
+
+/** POST /mobilisations/company-coordinators - add a coordinator to a client or subcontractor's own list while filling the form. */
+export const addCompanyCoordinatorSchema = newCompanyCoordinatorSchema.extend({
+  ownerType: z.enum(['Client', 'Subcontractor']),
+  company: id('company'),
 });
 
 export const mobilisationIdParamSchema = z.object({
@@ -229,6 +257,9 @@ export const exportMobilisationsSchema = z.object({
   client: z.preprocess(emptyToUndef, id('client').optional()),
   worker: z.preprocess(emptyToUndef, id('worker').optional()),
   coordinator: z.preprocess(emptyToUndef, id('coordinator').optional()),
+  // 2026-10-12 - the dashboard's "Shared employees" tile: only mobilisations
+  // handled by more than one of our coordinators.
+  shared: z.preprocess(emptyToUndef, z.enum(['true']).optional()),
   search: optionalStr(100),
   sortBy: z.enum(['mobilisationDate', 'createdAt', 'workerName', 'clientName', 'status']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),

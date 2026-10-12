@@ -63,6 +63,7 @@ import staffAttendanceRoutes from './modules/staffAttendance/staffAttendance.rou
 import approvalsRoutes from './modules/approvals/approvals.routes.js';
 import companySettingsRoutes from './modules/companySettings/companySettings.routes.js';
 import subcontractorRoutes from './modules/subcontractors/subcontractor.routes.js';
+import subcontractorTransferRoutes from './modules/subcontractorTransfers/subcontractorTransfer.routes.js';
 import jobTitleRoutes from './modules/jobTitles/jobTitle.routes.js';
 import locationRoutes from './modules/locations/location.routes.js';
 import mobilisationRoutes from './modules/mobilisations/mobilisation.routes.js';
@@ -147,6 +148,7 @@ app.use('/api/profile', profileRoutes);
 app.use('/api/staff-attendance', staffAttendanceRoutes);
 app.use('/api/approvals', approvalsRoutes);
 app.use('/api/subcontractors', subcontractorRoutes);
+app.use('/api/subcontractor-transfers', subcontractorTransferRoutes);
 app.use('/api/job-titles', jobTitleRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/mobilisations', mobilisationRoutes);

@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { CLIENT_STATUSES, CLIENT_APPROVAL_STATUSES } from './client.model.js';
+import { companyProfileShape } from '../companyProfile/companyProfile.validation.js';
 
 const emptyToUndef = (value) =>
   typeof value === 'string' && value.trim() === '' ? undefined : value;
@@ -46,6 +47,7 @@ export const createClientSchema = z.object({
     z.string().trim().regex(/^\d{10}$/, 'Commercial Registration is 10 digits.').optional()
   ),
   industry: optionalStr(80),
+  ...companyProfileShape,
   sites: z.array(siteSchema).max(50).optional(),
   creditLimitDays: z.preprocess(emptyToUndef, z.coerce.number().int().min(0).optional()),
   status: z.enum(CLIENT_STATUSES).default('Active'),

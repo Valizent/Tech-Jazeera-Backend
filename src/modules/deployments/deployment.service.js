@@ -873,7 +873,7 @@ export async function getInvoiceFile(deploymentId, entryId, actor, field) {
 async function gatherClientInvoicedItems(clientId) {
   const deployments = await Deployment.find({ client: clientId, archived: { $ne: true } })
     .select('workerName subcontractorName monthlyHours mobilisation workerType worker')
-    .populate('mobilisation', 'coordinators clientRate clientCommission subcontractorRate subcontractorCommission fta allowance mobilisationCost otClientRate otEmployeeRate workerType')
+    .populate('mobilisation', 'coordinators clientRate clientCommission subcontractorRate subcontractorCommission fta allowance mobilisationCost otClientRate otEmployeeRate employeeRate workerType')
     .populate('worker', 'salary')
     .lean();
 
@@ -1293,7 +1293,7 @@ export async function getReadyToInvoice(actor) {
     monthlyHours: { $elemMatch: { status: 'Approved', invoiceSentAt: null } },
   })
     .select('workerName clientName mobilisation monthlyHours workerType worker')
-    .populate('mobilisation', 'serialNumber clientRate clientCommission subcontractorRate subcontractorCommission fta allowance mobilisationCost otClientRate otEmployeeRate workerType')
+    .populate('mobilisation', 'serialNumber clientRate clientCommission subcontractorRate subcontractorCommission fta allowance mobilisationCost otClientRate otEmployeeRate employeeRate workerType')
     .populate('worker', 'salary')
     .lean();
 
@@ -1378,7 +1378,7 @@ export async function demobiliseDeployment(deploymentId, data, actor) {
 
   const isEmployeeOnlyReason = EMPLOYEE_ONLY_DEMOBILISATION_REASONS.includes(data.reason);
   if (isEmployeeOnlyReason && deployment.workerType !== 'Employee') {
-    throw new ApiError(400, 'This reason only applies to a real Employee this worker has no employment relationship with the company to end.');
+    throw new ApiError(400, 'This reason only applies to a real Employee this employee has no employment relationship with the company to end.');
   }
   const isExitOutcome =
     deployment.workerType === 'Employee' &&
@@ -1541,7 +1541,7 @@ export async function getStandbyWorkforce() {
 const MOBILISATION_OVERVIEW_FIELDS =
   'serialNumber jobTitle iqamaNumber nationality phone checkoutDate fta ftaType allowance allowanceRemark ' +
   'clientRate clientCommission mobilisationCost subcontractorRate subcontractorCommission ' +
-  'otClientRate otEmployeeRate profitPerHour profitPerMonth otProfitPerHour';
+  'otClientRate otEmployeeRate employeeRate profitPerHour profitPerMonth otProfitPerHour';
 
 // The commercial subset of the above — stripped from the populated
 // `mobilisation` sub-object for anyone without 'deploymentsHoursDecide' read
@@ -1556,6 +1556,7 @@ const MOBILISATION_COMMERCIAL_KEYS = [
   'subcontractorCommission',
   'otClientRate',
   'otEmployeeRate',
+  'employeeRate',
   'profitPerHour',
   'profitPerMonth',
   'otProfitPerHour',
@@ -1760,6 +1761,8 @@ function firstApprovedEntryId(entries) {
  *              netted as a real cost (2026-10-03, the user's own follow-up,
  *              superseding the original "pay is fixed by contract, never
  *              netted" rule below)
+ *            + (Freelancer only) employeeRate × the regular (non-OT) hours — their
+ *              hourly pay (2026-10-12); their OT is the otEmployeeRate line above
  *            + (Employee only) entry.employeeAdditionalAmount — a manually
  *              entered one-off amount for that month (e.g. a bonus), same
  *              posture as entry.deductionAmount above
@@ -1844,6 +1847,11 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
   
   const expenseEmployeeSalary = isEmployee ? money(worker?.salary ?? 0) : 0;
   const expenseEmployeeAdditional = isEmployee ? money(entry.employeeAdditionalAmount ?? 0) : 0;
+  // A freelancer is paid by the hour (2026-10-12): their regular hours at
+  // employeeRate. Their OT is already otCalculations above, at otEmployeeRate
+  // (set equal to employeeRate). 0 for a freelancer that predates employeeRate.
+  const expenseFreelancerPay =
+    mobilisation.workerType === 'Freelancer' ? money((mobilisation.employeeRate ?? 0) * regularClientHours) : 0;
 
   const expenses = money(
     expenseClientCommission +
@@ -1855,7 +1863,8 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
       expenseDeduction +
       mobilisationCostDeduction +
       expenseEmployeeSalary +
-      expenseEmployeeAdditional
+      expenseEmployeeAdditional +
+      expenseFreelancerPay
   );
 
   const breakdown = {
@@ -1872,6 +1881,7 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
     expenseMobilisationCost: mobilisationCostDeduction,
     expenseEmployeeSalary,
     expenseEmployeeAdditional,
+    expenseFreelancerPay,
   };
 
   return { revenue, expenses, profit: money(revenue - expenses), breakdown };
@@ -1896,7 +1906,7 @@ function stripCommercialMonthlyHours(deployment, canSeeCommercial) {
 
 export const PROFIT_RATE_FIELDS =
   'serialNumber workerType clientRate clientCommission subcontractorRate subcontractorCommission ' +
-  'otClientRate otEmployeeRate fta allowance mobilisationCost';
+  'otClientRate otEmployeeRate employeeRate fta allowance mobilisationCost';
 
 export async function getDeployment(id, actor) {
   const deployment = await Deployment.findById(id)

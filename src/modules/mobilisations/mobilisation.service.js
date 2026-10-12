@@ -36,6 +36,13 @@ import MobilisationSubmissionLock from './mobilisationSubmissionLock.model.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import logger from '../../config/logger.js';
 import { assertCanStartFromRequirement, attachMobilisation, onMobilisationApproved } from '../requirements/requirement.service.js';
+import {
+  assertNoPendingTransfer,
+  cancelPendingTransfers,
+  knownSubcontractorFor,
+  syncTransferRequest,
+  transferSummaryFor,
+} from '../subcontractorTransfers/subcontractorTransfer.service.js';
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -44,7 +51,8 @@ const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
  * value, always recompute from the current rate/commission/hours fields.
  * Formula given directly by the business owner (not inferred):
  *   profitPerHour = SupplierEmployee: (clientRate - clientCommission) - (subcontractorRate + subcontractorCommission)
- *                   Employee/Freelancer: clientRate - clientCommission
+ *                   Freelancer: (clientRate - clientCommission) - employeeRate   (2026-10-12)
+ *                   Employee: clientRate - clientCommission
  *   otProfitPerHour = otClientRate - otEmployeeRate — deliberately NOT the
  *             same commission/subcontractor-rate split as profitPerHour
  *             above (2026-09-14 correction: that split doesn't exist for
@@ -66,7 +74,14 @@ const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 function computeProfitFields(m) {
   const isSupplier = m.workerType === 'SupplierEmployee';
   const clientSide = (m.clientRate ?? 0) - (m.clientCommission ?? 0);
-  const subSide = isSupplier ? (m.subcontractorRate ?? 0) + (m.subcontractorCommission ?? 0) : 0;
+  // What the other side costs per hour: the subcontractor (rate + commission)
+  // for a subcontractor employee, the freelancer's own hourly rate for a
+  // freelancer (2026-10-12), nothing for an Own employee (salary-based).
+  const subSide = isSupplier
+    ? (m.subcontractorRate ?? 0) + (m.subcontractorCommission ?? 0)
+    : m.workerType === 'Freelancer'
+      ? (m.employeeRate ?? 0)
+      : 0;
   const profitPerHour = money(clientSide - subSide);
 
   const otProfitPerHour = money((m.otClientRate ?? 0) - (m.otEmployeeRate ?? 0));
@@ -75,6 +90,111 @@ function computeProfitFields(m) {
     m.requiredTimesheetHours == null ? null : money(profitPerHour * m.requiredTimesheetHours - (m.fta ?? 0) - (m.allowance ?? 0));
 
   return { profitPerHour, otProfitPerHour, profitPerMonth };
+}
+
+/**
+ * Rate rules that make two form fields redundant (2026-10-12). A new
+ * mobilisation bills OT at its client rate, and a freelancer's OT is paid at
+ * their own hourly rate, so neither is typed. Run before every save; a record
+ * that predates this keeps its own typed rates (its flag is false, and a
+ * legacy freelancer has no employeeRate).
+ */
+function applyRateRules(target) {
+  if (target.otClientRateFollowsClient) target.otClientRate = target.clientRate;
+  if (target.workerType === 'Freelancer') {
+    if ((target.employeeRate ?? 0) > 0) target.otEmployeeRate = target.employeeRate;
+  } else {
+    target.employeeRate = 0;
+  }
+  return target;
+}
+
+/** The company-coordinator snapshot of one person (see companyContactSchema). */
+const contactSnapshot = (c) => ({
+  coordinatorId: c._id,
+  name: c.name,
+  designation: c.designation,
+  phone: c.phone,
+  email: c.email,
+});
+
+/** Picked coordinator ids -> snapshots, each of which must be in THIS company's own list. */
+function pickContacts(company, ids, companyLabel) {
+  const byId = new Map((company?.coordinators ?? []).map((c) => [String(c._id), c]));
+  const seen = new Set();
+  const picked = [];
+  for (const rawId of ids) {
+    const key = String(rawId);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const contact = byId.get(key);
+    if (!contact) throw new ApiError(400, `Pick ${companyLabel} coordinators from that company's own list.`);
+    picked.push(contactSnapshot(contact));
+  }
+  return picked;
+}
+
+const COMMISSION_RECIPIENT_FROM = 1; // a commission of 1 or more needs a recipient
+
+/**
+ * The people-at-the-company part of a mobilisation (2026-10-12): which of the
+ * client's / subcontractor's own coordinators this placement involves, and who
+ * each commission goes to. Runs once the final client, subcontractor and
+ * commission values are known, on both create and update.
+ *
+ * `input` carries only what the caller sent (undefined = leave as it is).
+ * Switching company clears that side's picks (they belonged to the old one). A
+ * commission of 1 or more needs a recipient from the same company, checked
+ * when the commission or its recipient is part of this save; below 1 the
+ * recipient is cleared.
+ */
+async function applyCompanyContacts(target, input, { commissionTouched }) {
+  const isSupplier = target.workerType === 'SupplierEmployee';
+  const [clientDoc, subDoc] = await Promise.all([
+    Client.findById(target.client).select('coordinators').lean(),
+    isSupplier && target.subcontractor ? Subcontractor.findById(target.subcontractor).select('coordinators').lean() : null,
+  ]);
+
+  // client side
+  if (input.clientCoordinatorIds !== undefined) {
+    target.clientCoordinators = pickContacts(clientDoc, input.clientCoordinatorIds, 'client');
+  } else if (input.companyChanged?.client) {
+    target.clientCoordinators = [];
+  }
+  const clientNeedsRecipient = Number(target.clientCommission ?? 0) >= COMMISSION_RECIPIENT_FROM;
+  if (!clientNeedsRecipient) {
+    target.clientCommissionCoordinator = null;
+  } else if (input.clientCommissionCoordinatorId !== undefined) {
+    target.clientCommissionCoordinator = pickContacts(clientDoc, [input.clientCommissionCoordinatorId], 'client')[0];
+  } else if (input.companyChanged?.client) {
+    target.clientCommissionCoordinator = null;
+  }
+  if (clientNeedsRecipient && commissionTouched && !target.clientCommissionCoordinator) {
+    throw new ApiError(400, 'Choose which client coordinator the client commission goes to.');
+  }
+
+  // subcontractor side (a subcontractor employee only)
+  if (!isSupplier) {
+    target.subcontractorCoordinators = [];
+    target.subcontractorCommissionCoordinator = null;
+    return;
+  }
+  if (input.subcontractorCoordinatorIds !== undefined) {
+    target.subcontractorCoordinators = pickContacts(subDoc, input.subcontractorCoordinatorIds, 'subcontractor');
+  } else if (input.companyChanged?.subcontractor) {
+    target.subcontractorCoordinators = [];
+  }
+  const subNeedsRecipient = Number(target.subcontractorCommission ?? 0) >= COMMISSION_RECIPIENT_FROM;
+  if (!subNeedsRecipient) {
+    target.subcontractorCommissionCoordinator = null;
+  } else if (input.subcontractorCommissionCoordinatorId !== undefined) {
+    target.subcontractorCommissionCoordinator = pickContacts(subDoc, [input.subcontractorCommissionCoordinatorId], 'subcontractor')[0];
+  } else if (input.companyChanged?.subcontractor) {
+    target.subcontractorCommissionCoordinator = null;
+  }
+  if (subNeedsRecipient && commissionTouched && !target.subcontractorCommissionCoordinator) {
+    throw new ApiError(400, 'Choose which subcontractor coordinator the subcontractor commission goes to.');
+  }
 }
 
 /** Applied right before every `.save()` (create/update/commercial-details)
@@ -122,6 +242,9 @@ const COMMERCIAL_FIELDS = [
   // Rejected, stripped only once Approved).
   'otClientRate',
   'otEmployeeRate',
+  'employeeRate',
+  'clientCommissionCoordinator',
+  'subcontractorCommissionCoordinator',
   'profitPerHour',
   'profitPerMonth',
   'otProfitPerHour',
@@ -217,6 +340,34 @@ async function resolveSubcontractorSnapshot(workerType, subcontractorId) {
   return { hasSubcontractor: true, subcontractor: subcontractorId, subcontractorName: subcontractorDoc.name };
 }
 
+/**
+ * Add a coordinator to a client's or subcontractor's own list while filling a
+ * mobilisation (2026-10-12) - the form's inline "add new". It is stored on the
+ * company itself, the same list its profile edits, so it is available
+ * everywhere and shows up there. Same gate as creating a mobilisation.
+ */
+export async function addCompanyCoordinator({ ownerType, company, name, designation, phone, email }, actor) {
+  const allowed = actor.role === 'Office Secretary' || (await canAccessSection('mobilisationsSelfMobilise', actor));
+  if (!allowed) throw new ApiError(403, 'You do not have permission to add a coordinator here.');
+
+  const Model = ownerType === 'Client' ? Client : Subcontractor;
+  const doc = await Model.findById(company);
+  if (!doc) throw new ApiError(404, `${ownerType} not found.`);
+  doc.coordinators.push({ name, designation, phone, email });
+  await doc.save({ validateModifiedOnly: true });
+  const added = doc.coordinators[doc.coordinators.length - 1];
+
+  await logAudit({
+    user: actor.userId,
+    action: 'company.coordinator.add',
+    targetType: ownerType,
+    targetId: doc._id,
+    meta: { coordinator: name },
+    ip: actor.ip,
+  });
+  return { _id: added._id, name: added.name, designation: added.designation, phone: added.phone, email: added.email };
+}
+
 /** Sequential 'MOB-0001' display number — same atomic-counter mechanism
  *  Invoices ('INV-') and Quotations ('QT-') already use, reused unchanged. */
 async function newMobilisationSerial() {
@@ -273,16 +424,37 @@ export async function listCoordinatorCandidates() {
  * mobilisation's own identity snapshot IS their current known details —
  * deliberately not a separate "known workers" collection to keep in sync:
  * Mobilisation's own history already holds this, and a later edit/decision
- * naturally becomes the new "most recent" via createdAt. Returns null when
- * nobody by this Iqama has ever been mobilised.
+ * naturally becomes the new "most recent" via createdAt. Falls back to the
+ * outsourced register; returns null when nobody by this Iqama is in either.
  */
 export async function lookupWorkerByIqama(iqamaNumber) {
   const found = await Mobilisation.findOne({ iqamaNumber, workerType: { $ne: 'Employee' }, archived: { $ne: true } })
     .sort({ createdAt: -1 })
     .select('workerName nationality phone workerType subcontractor subcontractorName clientRate subcontractorRate')
     .lean();
-  if (!found) return null;
+  if (!found) {
+    // Never mobilised, but someone may have added him to the outsourced
+    // register (the Outsourced page): his own details still fill in, and the
+    // subcontractor on record is what the transfer prompt compares against.
+    const listed = await OutsourcedEmployee.findOne({ iqamaNumber }).populate('subcontractor', 'name').lean();
+    if (!listed) return null;
+    return {
+      registeredSubcontractor: listed.subcontractor ? { id: String(listed.subcontractor._id), name: listed.subcontractor.name } : null,
+      workerName: listed.name,
+      nationality: listed.nationality,
+      phone: listed.phone,
+      workerType: listed.workerType,
+      subcontractor: listed.subcontractor?._id,
+      subcontractorName: listed.subcontractor?.name,
+      clientRate: null,
+      subcontractorRate: listed.agreedRate ?? null,
+    };
+  }
+  const registered = await knownSubcontractorFor(iqamaNumber);
   return {
+    // The subcontractor our records hold him with (the outsourced register),
+    // which is what the form compares the chosen subcontractor against.
+    registeredSubcontractor: registered,
     workerName: found.workerName,
     nationality: found.nationality,
     phone: found.phone,
@@ -395,7 +567,7 @@ async function assertNoActivePlacement(workerId) {
   const primary = existing.coordinators.find((c) => c.isPrimary);
   throw new ApiError(
     409,
-    `This worker already has an active mobilisation (${existing.status}${primary ? `, coordinated by ${primary.user.name}` : ''}).`
+    `This employee already has an active mobilisation (${existing.status}${primary ? `, coordinated by ${primary.user.name}` : ''}).`
   );
 }
 
@@ -421,7 +593,7 @@ async function assertNoActiveNonEmployeePlacement(iqamaNumber) {
   const primary = existing.coordinators.find((c) => c.isPrimary);
   throw new ApiError(
     409,
-    `This worker already has an active mobilisation (${existing.status}${primary ? `, coordinated by ${primary.user.name}` : ''}).`
+    `This employee already has an active mobilisation (${existing.status}${primary ? `, coordinated by ${primary.user.name}` : ''}).`
   );
 }
 
@@ -507,7 +679,7 @@ async function assertNoDateOverlap(workerType, identity, proposedStartDate, prop
       const rangeLabel = periodEnd ? `${startLabel} to ${new Date(period.endDate).toLocaleDateString('en-GB')}` : `${startLabel} (still active)`;
       throw new ApiError(
         409,
-        `This worker was already deployed at ${period.clientName} from ${rangeLabel} choose dates outside that period.`
+        `This employee was already deployed at ${period.clientName} from ${rangeLabel} choose dates outside that period.`
       );
     }
   }
@@ -545,7 +717,7 @@ export async function createMobilisation(data, actor) {
       await MobilisationSubmissionLock.create({ key: lockKey });
     } catch (err) {
       if (err?.code === 11000) {
-        throw new ApiError(409, 'Another mobilisation for this worker is already being processed try again in a moment.');
+        throw new ApiError(409, 'Another mobilisation for this employee is already being processed try again in a moment.');
       }
       throw err;
     }
@@ -609,17 +781,19 @@ export async function createMobilisation(data, actor) {
       coordinatorEntry = { user: data.onBehalfOf, isPrimary: true, confirmed: false, confirmedAt: null };
     }
 
-    mobilisation = await Mobilisation.create(
-      applyProfitFields({
-        ...data,
-        ...workerSnapshot,
-        serialNumber: await newMobilisationSerial(),
-        clientName: clientDoc.companyName,
-        ...subcontractorSnapshot,
-        coordinators: [coordinatorEntry],
-        createdBy: actor.userId,
-      })
-    );
+    const draft = {
+      ...data,
+      ...workerSnapshot,
+      serialNumber: await newMobilisationSerial(),
+      clientName: clientDoc.companyName,
+      ...subcontractorSnapshot,
+      coordinators: [coordinatorEntry],
+      createdBy: actor.userId,
+      otClientRateFollowsClient: true,
+    };
+    applyRateRules(draft);
+    await applyCompanyContacts(draft, data, { commissionTouched: true });
+    mobilisation = await Mobilisation.create(applyProfitFields(draft));
   } finally {
     if (lockKey) await MobilisationSubmissionLock.deleteOne({ key: lockKey });
   }
@@ -636,6 +810,17 @@ export async function createMobilisation(data, actor) {
   const primaryIsCoordinator = isOfficeSecretary || actor.role === 'Coordinator';
   if (primaryIsCoordinator && data.workerType === 'Employee') {
     await Employee.findByIdAndUpdate(data.worker, { coordinator: primaryCoordinatorId });
+  }
+
+  // "Change him to this subcontractor?" answered yes: raise the request for
+  // the Marketing Manager. Best-effort like the other follow-ups here - the
+  // mobilisation exists and is valid either way.
+  if (data.workerType === 'SupplierEmployee') {
+    try {
+      await syncTransferRequest(mobilisation, data.requestSubcontractorTransfer === true, actor);
+    } catch (err) {
+      logger.warn(`[mobilisations] raising the subcontractor transfer for ${mobilisation.serialNumber} failed: ${err.message}`);
+    }
   }
 
   await logAudit({
@@ -727,9 +912,10 @@ export async function createMobilisation(data, actor) {
  * `skip`/`limit` omitted means "no pagination, fetch everything matching".
  */
 async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
-  const { status, client, worker, coordinator, search, sortBy, sortOrder } = query;
+  const { status, client, worker, coordinator, shared, search, sortBy, sortOrder } = query;
   const conditions = [{ archived: { $ne: true } }];
   if (status) conditions.push({ status });
+  if (shared === 'true') conditions.push({ 'coordinators.1': { $exists: true } });
   if (client) conditions.push({ client });
   if (worker) conditions.push({ worker });
   if (coordinator) conditions.push({ 'coordinators.user': coordinator });
@@ -940,6 +1126,8 @@ export async function getMobilisation(id, actor) {
     const deployment = await Deployment.findOne({ mobilisation: id }).select('_id status').lean();
     annotated.deployment = deployment ?? null;
   }
+  // Where a subcontractor transfer request on this mobilisation stands (2026-10-12).
+  annotated.subcontractorTransfer = await transferSummaryFor(id);
   return annotated;
 }
 
@@ -957,9 +1145,10 @@ const DIRECT_FIELDS = [
   'subcontractorRate',
   'subcontractorCommission',
   // Moved to Section 1 2026-09-13 — see mobilisation.validation.js's
-  // mobilisationFields and COMMERCIAL_FIELDS above.
-  'otClientRate',
+  // mobilisationFields and COMMERCIAL_FIELDS above. otClientRate is not here
+  // any more (2026-10-12): it follows clientRate, see applyRateRules.
   'otEmployeeRate',
+  'employeeRate',
   'mobilisationDate',
   'checkoutDate',
   'remark',
@@ -1020,6 +1209,8 @@ export async function updateMobilisation(id, data, actor) {
   const originalIqama = mobilisation.iqamaNumber;
   const originalMobilisationDate = mobilisation.mobilisationDate;
   const originalCheckoutDate = mobilisation.checkoutDate;
+  const originalClient = String(mobilisation.client ?? '');
+  const originalSubcontractor = String(mobilisation.subcontractor ?? '');
 
   // workerType changing (or being resent) re-resolves worker identity in
   // full — same "only touch it if the caller sent it" discipline as
@@ -1120,6 +1311,24 @@ export async function updateMobilisation(id, data, actor) {
     }
   }
 
+  // Rate rules and the client/subcontractor people (2026-10-12). A recipient
+  // is only demanded when this save touches a commission, a recipient or a
+  // company, so editing an older record's remark never trips on a commission
+  // it was saved with before recipients existed.
+  const companyChanged = {
+    client: String(mobilisation.client ?? '') !== originalClient,
+    subcontractor: String(mobilisation.subcontractor ?? '') !== originalSubcontractor,
+  };
+  const commissionTouched =
+    'clientCommission' in data ||
+    'subcontractorCommission' in data ||
+    'clientCommissionCoordinatorId' in data ||
+    'subcontractorCommissionCoordinatorId' in data ||
+    companyChanged.client ||
+    companyChanged.subcontractor;
+  applyRateRules(mobilisation);
+  await applyCompanyContacts(mobilisation, { ...data, companyChanged }, { commissionTouched });
+
   applyProfitFields(mobilisation);
   await mobilisation.save();
   await logAudit({
@@ -1130,6 +1339,15 @@ export async function updateMobilisation(id, data, actor) {
     meta: { fields: Object.keys(data) },
     ip: actor.ip,
   });
+
+  // Subcontractor transfer request (2026-10-12). The form always sends its
+  // answer; a plain edit that sends none leaves a live request alone, unless
+  // the subcontractor or the person changed (then it no longer describes this).
+  if ('requestSubcontractorTransfer' in data) {
+    await syncTransferRequest(mobilisation, data.requestSubcontractorTransfer === true, actor);
+  } else if (companyChanged.subcontractor || mobilisation.iqamaNumber !== originalIqama) {
+    await cancelPendingTransfers(mobilisation._id);
+  }
   return mobilisation.toObject();
 }
 
@@ -1535,8 +1753,14 @@ export async function saveCommercialDetails(id, data, actor) {
  * ones already passed once.
  */
 async function approveMobilisation(id, decisionNote, actor) {
-  const pending = await Mobilisation.findById(id).select('workerType worker iqamaNumber mobilisationDate checkoutDate').lean();
+  const pending = await Mobilisation.findById(id)
+    .select('workerType worker iqamaNumber mobilisationDate checkoutDate steps currentStep')
+    .lean();
   if (pending) {
+    // The FINAL approval waits for a pending subcontractor transfer (2026-10-12);
+    // an earlier step (Office Secretary) can still pass it on.
+    const totalSteps = pending.steps?.length ?? 0;
+    if (totalSteps === 0 || pending.currentStep >= totalSteps - 1) await assertNoPendingTransfer(id);
     if (pending.workerType === 'Employee') {
       await assertNoDateOverlap('Employee', { workerId: pending.worker }, pending.mobilisationDate, pending.checkoutDate);
     } else {
@@ -1892,7 +2116,7 @@ export async function archiveWorkerData(iqamaNumber, actor) {
       if (hasActiveMobilisation || activeDeploymentCount > 0) {
         throw new ApiError(
           409,
-          'This worker still has an active mobilisation or deployment demobilise/complete it first.'
+          'This employee still has an active mobilisation or deployment demobilise/complete it first.'
         );
       }
 

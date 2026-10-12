@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { SUBCONTRACTOR_STATUSES } from './subcontractor.model.js';
+import { companyProfileShape } from '../companyProfile/companyProfile.validation.js';
 
 const emptyToUndef = (value) =>
   typeof value === 'string' && value.trim() === '' ? undefined : value;
@@ -32,6 +33,7 @@ export const createSubcontractorSchema = z.object({
   vatNumber: optionalStr(15),
   crNumber: optionalStr(10),
   address: optionalStr(500),
+  ...companyProfileShape,
   status: z.enum(SUBCONTRACTOR_STATUSES).default('Active'),
   notes: optionalStr(2000),
 });

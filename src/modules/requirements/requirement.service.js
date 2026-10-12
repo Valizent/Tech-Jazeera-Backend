@@ -670,7 +670,7 @@ export async function updateCandidate(id, candidateId, data, actor) {
     throw new ApiError(409, `${candidate.workerName} is already mobilised their status can't be changed.`);
   }
   if (data.subcontractor !== undefined) {
-    if (candidate.workerType !== 'SupplierEmployee') throw new ApiError(400, "Only a subcontractor's worker has a subcontractor.");
+    if (candidate.workerType !== 'SupplierEmployee') throw new ApiError(400, "Only a subcontractor's employee has a subcontractor.");
     Object.assign(candidate, await subcontractorSnapshot(data.subcontractor));
   }
   for (const key of ['workerName', 'iqamaNumber', 'nationality', 'phone', 'status', 'docsNote']) {
@@ -722,7 +722,7 @@ export async function assertCanStartFromRequirement({ requirement: requirementId
     throw new ApiError(409, `${candidate.workerName} already has a mobilisation${existing ? ` (${existing.serialNumber})` : ''}.`);
   }
   if (candidate.workerType !== workerType) {
-    throw new ApiError(400, "This mobilisation's worker type doesn't match the candidate it was started from.");
+    throw new ApiError(400, "This mobilisation's employee type doesn't match the candidate it was started from.");
   }
 }
 
@@ -798,7 +798,7 @@ export async function onMobilisationApproved(mobilisation) {
     for (const id of await membersOfRoles([...team.readApprovalRoles, ...team.writeApprovalRoles])) recipients.add(id);
   }
   recipients.delete(moverId);
-  const title = advancedTo ? `All workers mobilised moved to "${advancedTo.name}"` : `${candidate.workerName} approved for mobilisation`;
+  const title = advancedTo ? `All employees mobilised moved to "${advancedTo.name}"` : `${candidate.workerName} approved for mobilisation`;
   for (const userId of recipients) {
     await notifyUserSafely(userId, {
       type: 'Requirement',

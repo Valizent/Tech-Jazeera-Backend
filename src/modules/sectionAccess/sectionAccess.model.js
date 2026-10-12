@@ -116,6 +116,12 @@ export const SECTION_KEYS = [
   // allowed (ungated); this key governs the write path (set/edit/remove)
   // AND the management overview (all coordinators' progress).
   'mobilisationTargets',
+  // Added 2026-10-12 - who is reminded when a client or subcontractor is
+  // still missing company details (see notifications/companyDetails.job.js).
+  // Recipient lists, not permissions: the members of the roles ticked under
+  // Write are notified (BDM at day 40, Marketing Manager from day 45).
+  'companyDetailsBdm',
+  'companyDetailsManager',
 ];
 
 const sectionAccessSchema = new mongoose.Schema(

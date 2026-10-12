@@ -37,7 +37,7 @@ export async function runExpiryAlertCheck() {
       .select('fullName employeeId passport visa iqama medical drivingLicense')
       .lean(),
     Document.find({ expiryDate: { $ne: null, $lte: threshold } })
-      .populate('owner', 'fullName companyName')
+      .populate('owner', 'fullName companyName name')
       .limit(200)
       .lean(),
     User.find({ role: { $in: ['Admin', 'Manager', 'HR'] }, isActive: true }).select('_id').lean(),
@@ -60,7 +60,7 @@ export async function runExpiryAlertCheck() {
   }
   for (const d of expiringDocs) {
     items.push({
-      ownerName: d.owner?.fullName ?? d.owner?.companyName ?? 'Unknown',
+      ownerName: d.owner?.fullName ?? d.owner?.companyName ?? d.owner?.name ?? 'Unknown',
       ref: d.category,
       label: d.title,
       expiry: d.expiryDate,

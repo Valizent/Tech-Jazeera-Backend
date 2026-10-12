@@ -16,7 +16,7 @@
  */
 import mongoose from 'mongoose';
 
-export const DOCUMENT_OWNER_TYPES = ['Employee', 'Client'];
+export const DOCUMENT_OWNER_TYPES = ['Employee', 'Client', 'Subcontractor'];
 export const DOCUMENT_CATEGORIES = [
   'Passport',
   'Visa',
@@ -28,6 +28,8 @@ export const DOCUMENT_CATEGORIES = [
   'Commercial Registration',
   'VAT Certificate',
   'Agreement',
+  'National Address',
+  'Letterhead',
   'Invoice',
   'Other',
 ];

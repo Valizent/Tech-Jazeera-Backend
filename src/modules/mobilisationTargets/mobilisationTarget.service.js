@@ -145,7 +145,7 @@ async function fetchDeploymentsForMonths(months) {
     .populate({
       path: 'mobilisation',
       select:
-        'coordinators workerType clientRate clientCommission otClientRate otEmployeeRate subcontractorRate subcontractorCommission fta allowance mobilisationCost',
+        'coordinators workerType clientRate clientCommission otClientRate otEmployeeRate employeeRate subcontractorRate subcontractorCommission fta allowance mobilisationCost',
     })
     .lean();
 }

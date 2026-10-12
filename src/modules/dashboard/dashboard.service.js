@@ -44,6 +44,7 @@ import ExitReentry from '../exitDocuments/exitReentry.model.js';
 import { getStandbyWorkforce, getActualPerformanceSummary, countPaymentsDueSoon, getReadyToInvoice, countDeploymentsMissingTimesheets } from '../deployments/deployment.service.js';
 import User from '../auth/user.model.js';
 import { monthBounds, NON_OWN_EMPLOYEE_FILTER, realRevenueByCoordinator } from '../mobilisationTargets/mobilisationTarget.service.js';
+import { countPendingTransfersFor } from '../subcontractorTransfers/subcontractorTransfer.service.js';
 import MobilisationTarget from '../mobilisationTargets/mobilisationTarget.model.js';
 import ApiError from '../../utils/ApiError.js';
 
@@ -87,6 +88,35 @@ async function computeActiveMobilisationRevenue(actor, isCoordinator) {
   if (mobIds.length === 0) return 0;
   const activeMobs = await Mobilisation.find({ _id: { $in: mobIds } }).select('profitPerHour').lean();
   return activeMobs.reduce((sum, mob) => sum + (mob.profitPerHour || 0), 0);
+}
+
+/**
+ * "Currently deployed" tile (2026-10-12): placements that are Active right now.
+ * Scoped the way every other Coordinator figure on this page is, through the
+ * mobilisations they sit on (`coordinators.user`), NOT through
+ * Employee.coordinator: a Subcontractor employee or Freelancer has no Employee
+ * record (worker: null), so the old worker-based scope silently left them
+ * out of a Coordinator's count.
+ */
+async function countCurrentlyDeployed(actor, isCoordinator) {
+  const filter = { status: 'Active', archived: { $ne: true } };
+  if (isCoordinator) {
+    const myMobIds = await Mobilisation.find({ 'coordinators.user': actor.userId }).distinct('_id');
+    filter.mobilisation = { $in: myMobIds };
+  }
+  return Deployment.countDocuments(filter);
+}
+
+/**
+ * "Shared employees" tile (2026-10-12): employees currently placed on an
+ * Approved mobilisation that more than one of OUR coordinators handle. A
+ * Coordinator sees the ones they are on; Office Secretary and Accounts see
+ * the company total. One mobilisation = one placement, so this counts people.
+ */
+async function countSharedEmployees(actor, isCoordinator) {
+  const filter = { status: 'Approved', archived: { $ne: true }, 'coordinators.1': { $exists: true } };
+  if (isCoordinator) filter['coordinators.user'] = actor.userId;
+  return Mobilisation.countDocuments(filter);
 }
 
 const ACTIVE_REVENUE_TREND_MONTHS = 6;
@@ -225,12 +255,13 @@ async function getMyPendingActions(actor, mySectionAccess) {
     actor.role === 'Coordinator'
       ? new Set((await Employee.find({ coordinator: actor.userId }).distinct('_id')).map((id) => id.toString()))
       : null;
-  const [staleRequirements, openTasks, paymentsDueSoon, readyToInvoiceRes, missingTimesheetsCount, itemsByModule] = await Promise.all([
+  const [staleRequirements, openTasks, paymentsDueSoon, readyToInvoiceRes, missingTimesheetsCount, pendingTransfers, itemsByModule] = await Promise.all([
     countStaleRequirements(actor),
     countOpenTasks(actor),
     countPaymentsDueSoon(actor),
     getReadyToInvoice(actor),
     countDeploymentsMissingTimesheets(actor),
+    countPendingTransfersFor(actor),
     Promise.all(
       PENDING_ACTION_MODULES.map(({ Model, pendingStatus }) =>
         Model.find({ status: pendingStatus }).select('workflow currentStep steps status employee').lean()
@@ -271,6 +302,7 @@ async function getMyPendingActions(actor, mySectionAccess) {
     { label: 'Payments due soon', url: '/financial/payments-due', count: paymentsDueSoon },
     { label: 'Ready to invoice', url: '/financial/ready-to-invoice', count: readyToInvoiceRes.length },
     { label: 'Missing timesheets', url: '/deployments', count: missingTimesheetsCount },
+    { label: 'Subcontractor transfers', url: '/subcontractor-transfers', count: pendingTransfers },
   ].filter((m) => m.count > 0);
 }
 
@@ -319,6 +351,10 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
   // shares the same scope. Unrelated to the read-access checks below — see
   // this function's own doc comment (SCOPING vs. VISIBILITY).
   const isCoordinator = actor?.role === 'Coordinator';
+  // The stat row differs by audience (the user's own layout, 2026-10-12):
+  // Coordinator, Office Secretary and Accounts get "Shared employees";
+  // everyone else gets "Active employees" and the Attendance tile instead.
+  const showsSharedEmployees = isCoordinator || actor?.role === 'Office Secretary' || actor?.role === 'Accounts';
   const teamIds = isCoordinator
     ? await Employee.find({ coordinator: actor.userId, type: { $in: WORKFORCE_TYPES } }).distinct('_id')
     : null;
@@ -370,9 +406,6 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
   const documentExpiryFilter = { expiryDate: { $ne: null, $lte: threshold } };
   if (teamIds) Object.assign(documentExpiryFilter, { ownerType: 'Employee', owner: { $in: teamIds } });
 
-  const deploymentFilter = { status: 'Active' };
-  if (teamIds) deploymentFilter.worker = { $in: teamIds };
-
   // "Active Workers"/"Workforce by status" mean the supplied workforce —
   // both Outsourced (our own, supplied to clients) and Subcontracted (sourced
   // from an outside subcontractor) count here; only Own-type internal staff
@@ -400,9 +433,13 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
     activeMobilisationRevenue,
     activeMobilisationRevenueTrend,
     actualPerformance,
-    myRequirementsSummary
+    myRequirementsSummary,
+    activeEmployees,
+    sharedEmployees
   ] = await Promise.all([
-    canReadDeployments ? Deployment.countDocuments(deploymentFilter) : Promise.resolve(0),
+    // A Coordinator's own placements are their own work and stay ungated, like
+    // their own mobilisation totals below; everyone else needs the grant.
+    canReadDeployments || isCoordinator ? countCurrentlyDeployed(actor, isCoordinator) : Promise.resolve(0),
     canReadEmployees
       ? Employee.aggregate([{ $match: employeeStatusFilter }, { $group: { _id: '$status', count: { $sum: 1 } } }])
       : Promise.resolve([]),
@@ -428,7 +465,7 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
           .lean()
       : Promise.resolve([]),
     canReadDocuments
-      ? Document.find(documentExpiryFilter).populate('owner', 'fullName companyName').limit(50).lean()
+      ? Document.find(documentExpiryFilter).populate('owner', 'fullName companyName name').limit(50).lean()
       : Promise.resolve([]),
     canReadAuditLog
       ? AuditLog.find({}).sort({ createdAt: -1 }).limit(8).populate('user', 'name').lean()
@@ -490,7 +527,12 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
     // ask) — the "My Requirements" dashboard widget. Coordinator-only (this is
     // "MY requirements", not a company view) and still gated on requirementsOwn
     // read, same discipline as every other field here.
-    isCoordinator && canReadRequirementsOwn ? getMyRequirementsSummary(actor) : Promise.resolve(null)
+    isCoordinator && canReadRequirementsOwn ? getMyRequirementsSummary(actor) : Promise.resolve(null),
+    // Everyone with status Active, office staff included (not the supplied-
+    // workforce-only `activeWorkers` below). Not computed for the audience
+    // that gets "Shared employees" instead.
+    canReadEmployees && !showsSharedEmployees ? Employee.countDocuments({ status: 'Active' }) : Promise.resolve(null),
+    showsSharedEmployees ? countSharedEmployees(actor, isCoordinator) : Promise.resolve(null)
   ]);
 
   // Workforce by status
@@ -520,7 +562,7 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
     expiringDocuments.push({
       source: 'Document',
       ownerId: d.owner?._id ?? null,
-      ownerName: d.owner?.fullName ?? d.owner?.companyName ?? 'Unknown',
+      ownerName: d.owner?.fullName ?? d.owner?.companyName ?? d.owner?.name ?? 'Unknown',
       ref: d.category,
       label: d.title,
       expiry: d.expiryDate,
@@ -531,8 +573,10 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
 
   return {
     stats: {
-      deployedActive: canReadDeployments ? deployedActive : null,
+      deployedActive: canReadDeployments || isCoordinator ? deployedActive : null,
       activeWorkers: canReadEmployees ? workforceByStatus.Active : null,
+      activeEmployees,
+      sharedEmployees,
       onLeave: canReadEmployees ? workforceByStatus['On Leave'] : null,
       totalWorkers: canReadEmployees ? totalWorkers : null,
       activeClients: canReadClients ? activeClients : null,
