@@ -21,7 +21,6 @@ import Timesheet from '../timesheets/timesheet.model.js';
 import SalaryAdvance from '../financialRequests/advance.model.js';
 import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
-import Deployment from '../deployments/deployment.model.js';
 import Expense from '../expenses/expense.model.js';
 import AuditLog from '../audit/audit.model.js';
 import User from '../auth/user.model.js';
@@ -34,7 +33,6 @@ import { listMyOpenTasks } from '../dailyUpdates/dailyUpdate.service.js';
 import {
   getReceivablesOverview,
   getReadyToInvoice,
-  getStandbyWorkforce,
   listMissingTimesheets,
 } from '../deployments/deployment.service.js';
 import { getSubcontractorsPaymentSummary } from '../deployments/subcontractorInvoice.service.js';
@@ -42,7 +40,6 @@ import { IDENTITY_DOCS } from './dashboard.service.js';
 
 const DAY = 86_400_000;
 export const STUCK_AFTER_DAYS = 3;
-export const IDLE_STANDBY_DAYS = 14;
 const LIST_LIMIT = 5;
 
 const daysSince = (date) => Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / DAY));
@@ -220,32 +217,6 @@ async function signedInToday(teamIds) {
   return { count, recent: recent.filter((a) => a.employee).map((a) => ({ name: a.employee.fullName, at: a.checkInTime })) };
 }
 
-/** Own employees on standby longer than IDLE_STANDBY_DAYS — no pay figure here, only who and how long. */
-async function idleStandby() {
-  const { ownEmployees, subcontractedWorkers } = await getStandbyWorkforce();
-  const ids = ownEmployees.map((e) => e._id);
-  const [joined, lastEnded] = await Promise.all([
-    Employee.find({ _id: { $in: ids } }).select('joiningDate').lean(),
-    Deployment.aggregate([
-      { $match: { worker: { $in: ids }, endDate: { $ne: null } } },
-      { $group: { _id: '$worker', endDate: { $max: '$endDate' } } },
-    ]),
-  ]);
-  const joinedBy = new Map(joined.map((e) => [String(e._id), e.joiningDate]));
-  const endedBy = new Map(lastEnded.map((d) => [String(d._id), d.endDate]));
-
-  const idle = [];
-  for (const e of ownEmployees) {
-    const since = endedBy.get(String(e._id)) ?? joinedBy.get(String(e._id));
-    if (since) idle.push({ name: e.fullName, ref: e.employeeId, days: daysSince(since) });
-  }
-  for (const w of subcontractedWorkers) {
-    if (w.lastEndDate) idle.push({ name: w.workerName, ref: w.iqamaNumber, days: daysSince(w.lastEndDate) });
-  }
-  const over = idle.filter((w) => w.days > IDLE_STANDBY_DAYS).sort((a, b) => b.days - a.days);
-  return { count: over.length, items: over.slice(0, LIST_LIMIT) };
-}
-
 /** This calendar month's spending against last month's. */
 async function expensesMonthOverMonth() {
   const now = new Date();
@@ -346,7 +317,6 @@ export async function getDashboardInsights(actor) {
     contracts,
     leave,
     signedIn,
-    idle,
     billing,
     staleRequirements,
     missingTimesheets,
@@ -360,7 +330,6 @@ export async function getDashboardInsights(actor) {
     canEmployees ? contractsEnding(teamIds) : null,
     canLeave ? leavePicture(teamIds) : null,
     canAttendance ? signedInToday(teamIds) : null,
-    can('deploymentsRelease') && !isCoordinator ? idleStandby() : null,
     billingSnapshot(actor, access),
     listStaleRequirements(actor, LIST_LIMIT),
     listMissingTimesheets(actor),
@@ -376,7 +345,6 @@ export async function getDashboardInsights(actor) {
     contractsEnding: contracts,
     leavePicture: leave,
     signedInToday: signedIn,
-    idleStandby: idle,
     billing,
     myWork: {
       staleRequirements,

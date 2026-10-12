@@ -23,7 +23,6 @@ only headline numbers. Built for the web and the phone app, English and Arabic.
 | `contractsEnding` | `employeeCreate` | Contracts ending in 30 days (people who become eligible for annual vacation) |
 | `leavePicture` | `leaveRequests` | On approved leave today; back within 7 days |
 | `signedInToday` | `attendanceRecords` | Who has signed in today |
-| `idleStandby` | `deploymentsRelease` (not Coordinators) | Standby workers idle over 14 days; no pay figure |
 | `billing` | `mobilisationsViewer` or `deploymentsInvoicing` (parts: `expenses`) | Owed by clients aged 0-30 / 31-60 / 60+ days (days since the invoice was sent), due in 7 days, overdue, ready to invoice, owed to subcontractors, expenses this month vs last |
 | `myWork` | the viewer's own work (needs the Requirements / Daily Updates / Deployments access it already has) | Stale requirement cards, missing timesheets, my mobilisations in review and which role holds each, open tasks soonest-due first |
 | `decidedThisWeek` | none (own activity) | Requests the viewer decided in the last 7 days |

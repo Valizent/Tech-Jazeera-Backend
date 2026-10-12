@@ -71,7 +71,6 @@ describe('visibility: every block is null without its Read', () => {
     expect(insights.contractsEnding).toBeNull();
     expect(insights.leavePicture).toBeNull();
     expect(insights.signedInToday).toBeNull();
-    expect(insights.idleStandby).toBeNull();
     expect(insights.billing).toBeNull();
   });
 
