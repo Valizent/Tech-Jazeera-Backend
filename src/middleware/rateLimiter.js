@@ -67,22 +67,46 @@ export const userLimiter = rateLimit({
 });
 
 /**
- * Login-only limiter. 30/15min still lets a whole office log in during the
- * morning rush (one shared IP), but caps a password-guessing bot at a rate
- * where bcrypt + this limit make brute force hopeless. Applied ONLY to
- * POST /api/auth/login — refresh is self-throttling (it already requires a
- * validly signed token) and stays under the general limiter.
+ * Login throttling (reworked 2026-10-11 after the pre-production pass found the
+ * old single limiter - 30 attempts per 15 minutes per address, successful ones
+ * included - could lock a whole office behind one shared address out of the app
+ * at 8:00).
+ *
+ * Only FAILED attempts count (`skipSuccessfulRequests`: a response below 400 is
+ * not counted), and the budget is split three ways so a shared address is not
+ * punished for one person's typos while a guesser is still stopped:
+ *  - per address AND account (8 failures / 15 min): one person mistyping one
+ *    password locks only themselves, from that address;
+ *  - per address (60 failures / 15 min): password spraying across many
+ *    accounts from one address;
+ *  - per account (40 failures / 15 min, any address): guessing one account
+ *    from many addresses. High enough that it is not a cheap way to lock
+ *    somebody out, low enough that bcrypt + this makes brute force hopeless.
+ * The account is the lower-cased e-mail in the body; a malformed body shares
+ * one bucket per address. Applied ONLY to POST /api/auth/login.
  */
-export const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 30,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: {
-    success: false,
-    message: 'Too many login attempts. Please wait 15 minutes and try again.',
-  },
-});
+const FIFTEEN_MINUTES = 15 * 60 * 1000;
+const loginBlocked = {
+  success: false,
+  message: 'Too many failed sign-in attempts. Please wait 15 minutes and try again.',
+};
+const accountOf = (req) => (typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '');
+const failedLoginLimiter = (limit, keyGenerator) =>
+  rateLimit({
+    windowMs: FIFTEEN_MINUTES,
+    limit,
+    skipSuccessfulRequests: true,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    keyGenerator,
+    message: loginBlocked,
+  });
+
+export const loginLimiters = [
+  failedLoginLimiter(60, (req) => `ip:${req.ip}`),
+  failedLoginLimiter(8, (req) => `ip-account:${req.ip}|${accountOf(req)}`),
+  failedLoginLimiter(40, (req) => `account:${accountOf(req)}`),
+];
 
 /**
  * Public NFC card pages (/c/:token). Tokens are 12 random base62 chars (~70

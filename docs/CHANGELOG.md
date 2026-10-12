@@ -2381,3 +2381,19 @@ when requested):**
   holds, in the staff shell on the web and from More on the phone. See
   `docs/SELF-SERVICE-ROLES-notes.md`. User action: choose the members of "Worker" and "Staff" and
   grant them sections (staging and production too).
+- **11 October 2026: the dashboard gets a "look at today" layer, and the portal home a "Today" card.**
+  New `GET /api/dashboard/insights` (each block hidden unless the viewer holds the Read of the module it
+  summarises; a Coordinator is narrowed to their own team): system health strip (failed logins, access changes,
+  logins never used, reconciliation findings), requests waiting more than 3 days and the role holding them, documents
+  lapsing by type, contracts ending in 30 days, who is on leave / back this week, who signed in, workers idle on
+  standby over 14 days, a billing snapshot (owed by clients aged 0-30 / 31-60 / 60+ days, due in 7 days, ready to
+  invoice, owed to subcontractors, expenses vs last month), a "My work" card (stale requirements, missing timesheets,
+  my mobilisations in review and who holds them, open tasks) and a decided-this-week count; the leaderboard shows
+  "% of target". `GET /api/me/overview` powers the Worker/Staff home (signed in today, leave balance, next holiday,
+  request counts, documents to renew, contract end and vacation eligibility). English and Arabic, web and phone.
+  A pre-production pass (ten logins, every flow, hand-checked money figures) found and fixed one bug in this work (the
+  portal leave balance showed "of days left"). Findings it raised in existing code are listed in
+  `docs/DASHBOARD-INSIGHTS-notes.md` and the pre-production report; none were changed. See
+  `docs/DASHBOARD-INSIGHTS-notes.md`.
+- **11 October 2026: decisions on the pre-production findings.** End of Service and leave pay now follow Saudi Labor Law (Articles 84-85; leave at the real unused balance at the daily wage) instead of the flat 2 x wage and fixed 45 / 21 days: settlements saved earlier keep their old figures and should be deleted and recomputed. A mobilisation or deployment with no required timesheet hours now shows a warning (it still saves). The login throttle counts failed attempts only, per account and address (8 per account per address, 60 per address, 40 per account overall, per 15 minutes). Recording a received payment is unchanged by decision. See `docs/DASHBOARD-INSIGHTS-notes.md`.
+- **12 October 2026: API responses are never cached.** Every `/api` response now carries `Cache-Control: no-store` (`middleware/noStore.js`, mounted ahead of the rate limiter so a 429 has it too), closing the last open finding of the pre-production pass: a shared office proxy or a browser's back button can no longer keep one login's data for the next. The public NFC media stays cacheable (it is outside `/api`). No client change.

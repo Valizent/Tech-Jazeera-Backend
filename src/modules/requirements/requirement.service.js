@@ -371,16 +371,42 @@ export async function getLostRequirements(query, actor, { withCandidates = false
  * is exactly "entered the stage at or before N days ago". 0 without board access.
  */
 export async function countStaleRequirements(actor) {
-  const access = await resolveAccess(actor);
-  if (!access.ownRead && !access.teamRead) return 0;
+  const query = await staleRequirementsQuery(actor);
+  return query ? Requirement.countDocuments(query.filter) : 0;
+}
 
-  const stages = await RequirementStage.find({ isTerminal: false, staleAfterDays: { $ne: null } }).select('staleAfterDays').lean();
-  if (stages.length === 0) return 0;
+/** The "stale" filter shared by the count above and the dashboard list below, so the two
+ *  can never disagree on which cards are stale. null when this viewer sees no board. */
+async function staleRequirementsQuery(actor) {
+  const access = await resolveAccess(actor);
+  if (!access.ownRead && !access.teamRead) return null;
+
+  const stages = await RequirementStage.find({ isTerminal: false, staleAfterDays: { $ne: null } }).select('name staleAfterDays').lean();
+  if (stages.length === 0) return null;
 
   const now = Date.now();
   const filter = { $or: stages.map((s) => ({ stage: s._id, stageEnteredAt: { $lte: new Date(now - s.staleAfterDays * DAY_MS) } })) };
   if (!access.teamRead) filter.coordinators = actor.userId;
-  return Requirement.countDocuments(filter);
+  return { filter, stages };
+}
+
+/**
+ * The stale cards themselves, longest-stuck first, for the dashboard's "My work" card
+ * (2026-10-11): the count above says "3 stale", this says which three. Same scope and
+ * same rule as the count; `limit` keeps the payload small.
+ */
+export async function listStaleRequirements(actor, limit = 5) {
+  const query = await staleRequirementsQuery(actor);
+  if (!query) return [];
+  const stageNameById = new Map(query.stages.map((s) => [idOf(s._id), s.name]));
+  const cards = await Requirement.find(query.filter).select('clientName jobTitle stage stageEnteredAt').sort({ stageEnteredAt: 1 }).limit(limit).lean();
+  return cards.map((c) => ({
+    _id: c._id,
+    clientName: c.clientName,
+    jobTitle: c.jobTitle,
+    stage: stageNameById.get(idOf(c.stage)) ?? '',
+    daysInStage: Math.floor((Date.now() - new Date(c.stageEnteredAt).getTime()) / DAY_MS),
+  }));
 }
 
 /**

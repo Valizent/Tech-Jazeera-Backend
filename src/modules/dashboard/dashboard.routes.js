@@ -26,6 +26,10 @@ router.get(
   asyncHandler(dashboardController.overview)
 );
 
+// The second layer under the headline figures (2026-10-11) — its own call so the
+// main /dashboard response stays as light as it was.
+router.get('/insights', requireAuth, requireStaffOrExecutive, asyncHandler(dashboardController.insights));
+
 router.get(
   '/standby-analysis',
   requireAuth,

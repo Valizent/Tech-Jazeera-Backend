@@ -68,6 +68,16 @@ function assertEligible(employee) {
   throw new ApiError(400, 'Annual vacation can only be requested after a contract period has ended.');
 }
 
+/** Non-throwing form of the rule above, for the portal home ("can I ask for vacation yet?"). */
+export function vacationEligibility(employee) {
+  try {
+    assertEligible(employee);
+    return { eligible: true, reason: null };
+  } catch (error) {
+    return { eligible: false, reason: error.message };
+  }
+}
+
 async function createRequest(employeeId, { startDate, requestedDays, reason }, actor, onBehalf) {
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');

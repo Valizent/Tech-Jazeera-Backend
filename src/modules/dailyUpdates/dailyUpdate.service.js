@@ -210,6 +210,30 @@ export async function countOpenTasks(actor) {
   return DailyUpdate.countDocuments({ kind: 'Task', status: 'Open', ...(access.teamRead ? {} : { coordinator: actor.userId }) });
 }
 
+/**
+ * My own open to-dos, soonest-due first (no due date last), for the dashboard's
+ * "My work" card (2026-10-11). Always the caller's own tasks, even with team read:
+ * the card is "what I should do today", the Tasks tab is the place for oversight.
+ */
+export async function listMyOpenTasks(actor, limit = 5) {
+  const access = await resolveAccess(actor);
+  if (!access.ownRead && !access.teamRead) return [];
+  const tasks = await DailyUpdate.find({ kind: 'Task', status: 'Open', coordinator: actor.userId })
+    .select('text dueDate')
+    .sort({ dueDate: 1, createdAt: -1 })
+    .lean();
+  // Mongo sorts null before dates; the card wants dated tasks first.
+  const today = todayInRiyadh();
+  const dated = tasks.filter((t) => t.dueDate);
+  const undated = tasks.filter((t) => !t.dueDate);
+  return [...dated, ...undated].slice(0, limit).map((t) => ({
+    _id: t._id,
+    text: t.text,
+    dueDate: t.dueDate,
+    overdue: Boolean(t.dueDate) && new Date(t.dueDate) < new Date(today),
+  }));
+}
+
 /** The picker for "assign to" and the coordinator filter — team-read only,
  *  since an own-only coordinator never needs anyone else's name. Shared body
  *  with requirement.service.js's identical picker (2026-09-22, a real

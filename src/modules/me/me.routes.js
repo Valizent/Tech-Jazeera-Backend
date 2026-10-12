@@ -67,6 +67,7 @@ router.use(
 );
 
 router.get('/', asyncHandler(meController.getProfile));
+router.get('/overview', asyncHandler(meController.overview));
 router.patch('/', validate({ body: updateMyProfileSchema }), asyncHandler(meController.updateProfile));
 router.get('/documents', asyncHandler(meController.listDocuments));
 router.get(

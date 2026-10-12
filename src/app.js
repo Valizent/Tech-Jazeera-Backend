@@ -14,7 +14,8 @@
  *   3. cors       — reject foreign origins early, allow credentials for the
  *                   refresh-token cookie (M2)
  *   4. parsers    — JSON body with a size cap (large bodies are a DoS vector)
- *   5. rate limit — applied to /api as a whole
+ *   5. no-store + rate limit — both applied to /api as a whole (no-store first,
+ *                   so a 429 is never cached either)
  *   6. routes     — feature modules mount here as milestones add them
  *   7. 404        — anything that fell through every route
  *   8. errors     — LAST, so it catches failures from all of the above
@@ -26,6 +27,7 @@ import cookieParser from 'cookie-parser';
 import env from './config/env.js';
 import { requestMetrics } from './middleware/requestMetrics.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
+import { noStore } from './middleware/noStore.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 import ApiResponse from './utils/ApiResponse.js';
 import authRoutes from './modules/auth/auth.routes.js';
@@ -88,6 +90,7 @@ app.use(
 );
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser()); // parses the httpOnly refresh-token cookie
+app.use('/api', noStore); // before the limiter so a 429 is no-store too
 app.use('/api', apiLimiter);
 
 /**

@@ -1092,6 +1092,63 @@ export async function getPaidInvoices(actor) {
 }
 
 /**
+ * The Accounts snapshot (2026-10-11, dashboard "Billing snapshot"): everything still
+ * owed by clients, aged by days since the invoice was sent, plus what falls due in the
+ * next 7 days. Same allocation as Payments Due (oldest invoice paid first, never
+ * stored), so the totals here always equal the sum of that page. Whole-company view:
+ * returns null unless the viewer holds `mobilisationsViewer` read, the grant that gives
+ * the same view on the Payments Due page.
+ */
+export async function getReceivablesOverview(actor) {
+  if (!(await canAccessSection('mobilisationsViewer', actor, 'read'))) return null;
+
+  const deployments = await Deployment.find({
+    archived: { $ne: true },
+    monthlyHours: { $elemMatch: { invoiceSentAt: { $ne: null } } },
+  })
+    .select('client clientName')
+    .lean();
+  const clients = new Map(deployments.map((d) => [d.client.toString(), { clientId: d.client, clientName: d.clientName }]));
+
+  const now = Date.now();
+  const DAY = 86_400_000;
+  const buckets = { d0to30: 0, d31to60: 0, d61plus: 0 };
+  let total = 0;
+  let dueSoon = { count: 0, amount: 0 };
+  let overdue = { count: 0, amount: 0 };
+  const perClient = [];
+
+  const allocations = await Promise.all([...clients.values()].map((c) => getClientAllocation(c.clientId).then((a) => ({ c, a }))));
+  for (const { c, a } of allocations) {
+    let clientTotal = 0;
+    for (const e of a.perEntry) {
+      if (!(e.balanceDue > 0)) continue;
+      const ageDays = Math.max(0, Math.floor((now - new Date(e.invoiceSentAt).getTime()) / DAY));
+      if (ageDays <= 30) buckets.d0to30 += e.balanceDue;
+      else if (ageDays <= 60) buckets.d31to60 += e.balanceDue;
+      else buckets.d61plus += e.balanceDue;
+      clientTotal += e.balanceDue;
+      const dueIn = e.invoiceDueAt ? new Date(e.invoiceDueAt).getTime() - now : null;
+      if (dueIn != null && dueIn < 0) {
+        overdue = { count: overdue.count + 1, amount: overdue.amount + e.balanceDue };
+      } else if (dueIn != null && dueIn <= 7 * DAY) {
+        dueSoon = { count: dueSoon.count + 1, amount: dueSoon.amount + e.balanceDue };
+      }
+    }
+    if (clientTotal > 0) perClient.push({ clientId: c.clientId, clientName: c.clientName, outstanding: money(clientTotal) });
+    total += clientTotal;
+  }
+
+  return {
+    total: money(total),
+    buckets: { d0to30: money(buckets.d0to30), d31to60: money(buckets.d31to60), d61plus: money(buckets.d61plus) },
+    dueNext7Days: { count: dueSoon.count, amount: money(dueSoon.amount) },
+    overdue: { count: overdue.count, amount: money(overdue.amount) },
+    topClients: perClient.sort((x, y) => y.outstanding - x.outstanding).slice(0, 5),
+  };
+}
+
+/**
  * The dashboard's "Payments due soon" row (same visibility as
  * getClientsPaymentSummary above, reused rather than duplicated) — "soon"
  * mirrors deploymentBilling.job.js's own PRE_DUE_MILESTONES window
@@ -1158,7 +1215,16 @@ export async function getClientPaymentDetail(clientId, actor) {
  * that's been waiting longest leads.
  */
 export async function countDeploymentsMissingTimesheets(actor) {
-  if (actor.role !== 'Coordinator' && !(await canAccessSection('deploymentsRelease', actor, 'read'))) return 0;
+  return (await listMissingTimesheets(actor)).length;
+}
+
+/**
+ * Every (deployment, month) whose hours are overdue to be entered and visible to this
+ * viewer — the rows behind the dashboard's "Missing timesheets" count, listed on its
+ * "My work" card (2026-10-11) so the count has names next to it.
+ */
+export async function listMissingTimesheets(actor) {
+  if (actor.role !== 'Coordinator' && !(await canAccessSection('deploymentsRelease', actor, 'read'))) return [];
 
   const filter = { status: { $in: ['Active', 'Ended'] }, archived: { $ne: true } };
   if (actor.role === 'Coordinator') {
@@ -1166,8 +1232,8 @@ export async function countDeploymentsMissingTimesheets(actor) {
     filter.worker = { $in: teamIds };
   }
 
-  const deployments = await Deployment.find(filter).select('status startDate endDate monthlyHours.month').lean();
-  let totalMissing = 0;
+  const deployments = await Deployment.find(filter).select('status startDate endDate monthlyHours.month workerName clientName').lean();
+  const missing = [];
 
   const monthStrOf = (date) => {
     const d = new Date(date);
@@ -1207,13 +1273,13 @@ export async function countDeploymentsMissingTimesheets(actor) {
           if (now >= notificationStart) visible = true;
         }
         
-        if (visible) totalMissing++;
+        if (visible) missing.push({ deploymentId: d._id, workerName: d.workerName, clientName: d.clientName, month: candidate });
       }
       candidate = addMonthsToStr(candidate, 1);
     }
   }
   
-  return totalMissing;
+  return missing;
 }
 
 export async function getReadyToInvoice(actor) {

@@ -3,6 +3,7 @@
  */
 import ApiResponse from '../../utils/ApiResponse.js';
 import { getDashboard } from './dashboard.service.js';
+import { getDashboardInsights } from './dashboardInsights.service.js';
 
 /**
  * GET /api/dashboard?thresholdDays=  — 200 → data: the full rolled-up overview.
@@ -16,6 +17,12 @@ export async function overview(req, res) {
     actor: { role: req.user.role, userId: req.user.id },
   });
   res.json(new ApiResponse('Dashboard.', data));
+}
+
+/** GET /api/dashboard/insights — the "look at today" blocks, each null unless the viewer holds its Read. */
+export async function insights(req, res) {
+  const data = await getDashboardInsights({ role: req.user.role, userId: req.user.id });
+  res.json(new ApiResponse('Dashboard insights.', data));
 }
 
 export async function standbyAnalysis(req, res) {

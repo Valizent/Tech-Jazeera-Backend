@@ -12,6 +12,7 @@ import { contentDisposition } from '../../utils/contentDisposition.js';
 import { sendCertificatePdf } from '../exitDocuments/certificate.controller.js';
 
 import * as meService from './me.service.js';
+import { getMyOverview } from './meOverview.service.js';
 
 const actor = (req) => ({ userId: req.user.id, employee: req.user.employee, ip: req.ip });
 
@@ -28,6 +29,12 @@ function myEmployeeId(req) {
 export async function getProfile(req, res) {
   const employee = await meService.getMyProfile(myEmployeeId(req));
   res.json(new ApiResponse('Your profile.', employee));
+}
+
+/** GET /api/me/overview — 200 → data: the portal home (attendance today, leave balances, request counts, document warnings, contract/vacation) */
+export async function overview(req, res) {
+  const data = await getMyOverview(myEmployeeId(req));
+  res.json(new ApiResponse('Your overview.', data));
 }
 
 /** PATCH /api/me — self-edit contact-info fields only — 200 → data: employee (refreshed) */

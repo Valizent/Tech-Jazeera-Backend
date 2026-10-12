@@ -47,16 +47,11 @@ export function computeEosb({ joiningDate, exitDate, monthlyWage, exitReason }) 
   const totalMonths = monthsOfService(joiningDate, exitDate);
   const serviceYears = totalMonths / 12;
 
-  // User requested logic: if contract ends (2 years), 2 months salary. 
-  // Otherwise standard Article 84 fallback.
-  let eosbGross = 0;
-  if (serviceYears >= 2) {
-    eosbGross = money(2 * monthlyWage);
-  } else {
-    const firstBracketYears = Math.min(serviceYears, 5);
-    const remainingYears = Math.max(0, serviceYears - 5);
-    eosbGross = money(firstBracketYears * 0.5 * monthlyWage + remainingYears * monthlyWage);
-  }
+  // Article 84, pro-rated for part years: half a month's wage for each of the
+  // first 5 years, a full month's wage for each year after that.
+  const firstBracketYears = Math.min(serviceYears, 5);
+  const remainingYears = Math.max(0, serviceYears - 5);
+  const eosbGross = money(firstBracketYears * 0.5 * monthlyWage + remainingYears * monthlyWage);
 
   let reductionFactor = 1;
   if (exitReason === 'Resignation') {
@@ -117,14 +112,12 @@ export async function createSettlement(data, actor) {
     eosbNet = money(eosbGross * reductionFactor);
   }
 
+  // The employee's real unused annual-leave balance as of the exit date, paid at
+  // their daily wage (Labor Law Articles 109 and 111). Replaced 2026-10-11: a
+  // fixed 45 / 21 days regardless of the actual balance was never what the law
+  // says, and the Manual Override below remains for a negotiated figure.
   let unusedLeaveDays = await unusedLeaveDaysAsOf(employee, data.exitDate);
-  // User requested logic: 45 days if 2 years, 21 days if 1 year
-  if (serviceYears >= 2) {
-    unusedLeaveDays = 45;
-  } else if (serviceYears >= 1) {
-    unusedLeaveDays = 21;
-  }
-  
+
   if (data.overrideLeaveDays !== undefined) {
     unusedLeaveDays = data.overrideLeaveDays;
   }

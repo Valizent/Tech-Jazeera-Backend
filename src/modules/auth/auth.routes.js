@@ -7,7 +7,7 @@ import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
-import { loginLimiter } from '../../middleware/rateLimiter.js';
+import { loginLimiters } from '../../middleware/rateLimiter.js';
 import { requireTrustedOrigin } from '../../middleware/originGuard.js';
 import { loginSchema, changePasswordSchema, refreshTokenBodySchema } from './auth.validation.js';
 import { uploadAvatarImage } from './avatar.upload.js';
@@ -22,7 +22,7 @@ const router = Router();
 // once the frontend and API live on different domains.
 router.use(requireTrustedOrigin);
 
-router.post('/login', loginLimiter, validate({ body: loginSchema }), asyncHandler(authController.login));
+router.post('/login', ...loginLimiters, validate({ body: loginSchema }), asyncHandler(authController.login));
 router.post('/refresh', validate({ body: refreshTokenBodySchema }), asyncHandler(authController.refresh));
 router.post('/logout', validate({ body: refreshTokenBodySchema }), asyncHandler(authController.logout));
 
