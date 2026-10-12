@@ -136,6 +136,65 @@ function pickContacts(company, ids, companyLabel) {
 
 const COMMISSION_RECIPIENT_FROM = 1; // a commission of 1 or more needs a recipient
 
+/** What the caller asked for as one side's recipients: the list, or the older
+ *  single id read as one person at 100%. `undefined` = nothing sent. */
+function requestedRecipients(input, listKey, singleKey) {
+  if (input[listKey] !== undefined) return input[listKey];
+  if (input[singleKey]) return [{ coordinatorId: input[singleKey], sharePercent: 100 }];
+  return undefined;
+}
+
+/** Recipients -> snapshots with shares. One person is always 100%; two or three
+ *  each need a share above 0 and the shares add up to 100. */
+function pickRecipients(company, requested, companyLabel) {
+  const ids = requested.map((r) => String(r.coordinatorId));
+  if (new Set(ids).size !== ids.length) {
+    throw new ApiError(400, `Pick each ${companyLabel} coordinator only once.`);
+  }
+  const contacts = pickContacts(company, ids, companyLabel);
+  if (contacts.length === 1) return [{ ...contacts[0], sharePercent: 100 }];
+  const shares = requested.map((r) => Number(r.sharePercent));
+  if (shares.some((s) => !(s > 0))) {
+    throw new ApiError(400, `Give every ${companyLabel} coordinator a share above 0%.`);
+  }
+  const total = shares.reduce((sum, s) => sum + s, 0);
+  if (Math.abs(total - 100) > 0.01) {
+    throw new ApiError(400, `The ${companyLabel} commission shares must add up to 100%.`);
+  }
+  return contacts.map((c, i) => ({ ...c, sharePercent: shares[i] }));
+}
+
+/**
+ * One side's commission recipients (client or subcontractor). A commission of 1
+ * or more needs at least one; below 1 they are cleared. `commissionTouched` =
+ * this save changes the commission, a recipient or a company, so editing an
+ * older record's remark never trips on a commission saved before recipients
+ * existed.
+ */
+function applyRecipients(target, { side, company, label, needsRecipient, input, companyChanged, commissionTouched }) {
+  const listField = `${side}CommissionRecipients`;
+  const singleField = `${side}CommissionCoordinator`;
+  if (!needsRecipient) {
+    target[listField] = [];
+    target[singleField] = null;
+    return;
+  }
+  const requested = requestedRecipients(input, listField, `${singleField}Id`);
+  if (requested !== undefined) {
+    const picked = requested.length ? pickRecipients(company, requested, label) : [];
+    target[listField] = picked;
+    // The single field is the first person, without the share.
+    const { sharePercent: _share, ...first } = picked[0] ?? {};
+    target[singleField] = picked.length ? first : null;
+  } else if (companyChanged) {
+    target[listField] = [];
+    target[singleField] = null;
+  }
+  if (commissionTouched && !target[singleField]) {
+    throw new ApiError(400, `Choose which ${label} coordinator the ${label} commission goes to.`);
+  }
+}
+
 /**
  * The people-at-the-company part of a mobilisation (2026-10-12): which of the
  * client's / subcontractor's own coordinators this placement involves, and who
@@ -161,22 +220,21 @@ async function applyCompanyContacts(target, input, { commissionTouched }) {
   } else if (input.companyChanged?.client) {
     target.clientCoordinators = [];
   }
-  const clientNeedsRecipient = Number(target.clientCommission ?? 0) >= COMMISSION_RECIPIENT_FROM;
-  if (!clientNeedsRecipient) {
-    target.clientCommissionCoordinator = null;
-  } else if (input.clientCommissionCoordinatorId !== undefined) {
-    target.clientCommissionCoordinator = pickContacts(clientDoc, [input.clientCommissionCoordinatorId], 'client')[0];
-  } else if (input.companyChanged?.client) {
-    target.clientCommissionCoordinator = null;
-  }
-  if (clientNeedsRecipient && commissionTouched && !target.clientCommissionCoordinator) {
-    throw new ApiError(400, 'Choose which client coordinator the client commission goes to.');
-  }
+  applyRecipients(target, {
+    side: 'client',
+    company: clientDoc,
+    label: 'client',
+    needsRecipient: Number(target.clientCommission ?? 0) >= COMMISSION_RECIPIENT_FROM,
+    input,
+    companyChanged: input.companyChanged?.client,
+    commissionTouched,
+  });
 
   // subcontractor side (a subcontractor employee only)
   if (!isSupplier) {
     target.subcontractorCoordinators = [];
     target.subcontractorCommissionCoordinator = null;
+    target.subcontractorCommissionRecipients = [];
     return;
   }
   if (input.subcontractorCoordinatorIds !== undefined) {
@@ -184,17 +242,15 @@ async function applyCompanyContacts(target, input, { commissionTouched }) {
   } else if (input.companyChanged?.subcontractor) {
     target.subcontractorCoordinators = [];
   }
-  const subNeedsRecipient = Number(target.subcontractorCommission ?? 0) >= COMMISSION_RECIPIENT_FROM;
-  if (!subNeedsRecipient) {
-    target.subcontractorCommissionCoordinator = null;
-  } else if (input.subcontractorCommissionCoordinatorId !== undefined) {
-    target.subcontractorCommissionCoordinator = pickContacts(subDoc, [input.subcontractorCommissionCoordinatorId], 'subcontractor')[0];
-  } else if (input.companyChanged?.subcontractor) {
-    target.subcontractorCommissionCoordinator = null;
-  }
-  if (subNeedsRecipient && commissionTouched && !target.subcontractorCommissionCoordinator) {
-    throw new ApiError(400, 'Choose which subcontractor coordinator the subcontractor commission goes to.');
-  }
+  applyRecipients(target, {
+    side: 'subcontractor',
+    company: subDoc,
+    label: 'subcontractor',
+    needsRecipient: Number(target.subcontractorCommission ?? 0) >= COMMISSION_RECIPIENT_FROM,
+    input,
+    companyChanged: input.companyChanged?.subcontractor,
+    commissionTouched,
+  });
 }
 
 /** Applied right before every `.save()` (create/update/commercial-details)
@@ -245,6 +301,8 @@ const COMMERCIAL_FIELDS = [
   'employeeRate',
   'clientCommissionCoordinator',
   'subcontractorCommissionCoordinator',
+  'clientCommissionRecipients',
+  'subcontractorCommissionRecipients',
   'profitPerHour',
   'profitPerMonth',
   'otProfitPerHour',
@@ -1391,6 +1449,8 @@ export async function updateMobilisation(id, data, actor) {
     'subcontractorCommission' in data ||
     'clientCommissionCoordinatorId' in data ||
     'subcontractorCommissionCoordinatorId' in data ||
+    'clientCommissionRecipients' in data ||
+    'subcontractorCommissionRecipients' in data ||
     companyChanged.client ||
     companyChanged.subcontractor;
   applyRateRules(mobilisation);

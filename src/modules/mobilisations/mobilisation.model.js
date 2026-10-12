@@ -144,6 +144,21 @@ const companyContactSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/** One person a commission goes to, with their share of it (2026-10-13): up to
+ *  three per side, shares adding up to 100. The company-contact snapshot plus
+ *  `sharePercent`. */
+const commissionRecipientSchema = new mongoose.Schema(
+  {
+    coordinatorId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    name: { type: String, required: true, trim: true },
+    designation: { type: String, trim: true },
+    phone: { type: String, trim: true },
+    email: { type: String, trim: true },
+    sharePercent: { type: Number, required: true, min: 0.01, max: 100 },
+  },
+  { _id: false }
+);
+
 const mobilisationSchema = new mongoose.Schema(
   {
     // --- Section 1: worker & job ---
@@ -258,8 +273,15 @@ const mobilisationSchema = new mongoose.Schema(
     // company's own coordinators.
     clientCoordinators: { type: [companyContactSchema], default: [] },
     subcontractorCoordinators: { type: [companyContactSchema], default: [] },
+    // The first recipient of each side, kept as the single "who" every older
+    // reader (and every record saved before shares existed) understands; the
+    // arrays below are the full answer, one to three people with their shares.
+    // An older record has the single one and an empty array: read it as one
+    // recipient at 100%.
     clientCommissionCoordinator: { type: companyContactSchema, default: null },
     subcontractorCommissionCoordinator: { type: companyContactSchema, default: null },
+    clientCommissionRecipients: { type: [commissionRecipientSchema], default: [] },
+    subcontractorCommissionRecipients: { type: [commissionRecipientSchema], default: [] },
     documents: { type: [mobilisationDocumentSchema], default: [] },
     remark: { type: String, trim: true, maxlength: 1000 },
 

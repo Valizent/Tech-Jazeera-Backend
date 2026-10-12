@@ -146,6 +146,54 @@ describe('the client and subcontractor people on a mobilisation', () => {
     expect(lowered.clientCommissionCoordinator).toBeNull();
   });
 
+  it('splits a commission between up to three coordinators by percentage', async () => {
+    const c = await client([{ name: 'Aisha' }, { name: 'Bilal' }, { name: 'Chen' }, { name: 'Dara' }]);
+    const [aisha, bilal, chen, dara] = c.coordinators.map((x) => String(x._id));
+    const make = async (recipients) =>
+      createMobilisation(
+        {
+          ...base,
+          workerType: 'Employee',
+          worker: String((await employee())._id),
+          client: String(c._id),
+          clientCommission: 3,
+          clientCommissionRecipients: recipients,
+        },
+        actor()
+      );
+
+    const created = await make([
+      { coordinatorId: aisha, sharePercent: 50 },
+      { coordinatorId: bilal, sharePercent: 30 },
+      { coordinatorId: chen, sharePercent: 20 },
+    ]);
+    expect(created.clientCommissionRecipients.map((r) => [r.name, r.sharePercent])).toEqual([
+      ['Aisha', 50],
+      ['Bilal', 30],
+      ['Chen', 20],
+    ]);
+    // The first person stays as the single recipient older readers understand.
+    expect(created.clientCommissionCoordinator).toMatchObject({ name: 'Aisha' });
+
+    // One person is always 100%, whatever share came with it.
+    const single = await make([{ coordinatorId: dara, sharePercent: 40 }]);
+    expect(single.clientCommissionRecipients).toHaveLength(1);
+    expect(single.clientCommissionRecipients[0]).toMatchObject({ name: 'Dara', sharePercent: 100 });
+
+    // Shares must add up to 100, be above 0, and a person can only be picked once.
+    await expect(make([{ coordinatorId: aisha, sharePercent: 50 }, { coordinatorId: bilal, sharePercent: 30 }])).rejects.toMatchObject({ statusCode: 400 });
+    await expect(make([{ coordinatorId: aisha, sharePercent: 100 }, { coordinatorId: bilal, sharePercent: 0 }])).rejects.toMatchObject({ statusCode: 400 });
+    await expect(make([{ coordinatorId: aisha, sharePercent: 50 }, { coordinatorId: aisha, sharePercent: 50 }])).rejects.toMatchObject({ statusCode: 400 });
+    // More than three is refused by the request schema.
+    const four = [aisha, bilal, chen, dara].map((coordinatorId) => ({ coordinatorId, sharePercent: 25 }));
+    expect(createMobilisationSchema.safeParse({ ...base, workerType: 'Employee', worker: String(new mongoose.Types.ObjectId()), client: String(c._id), clientCommissionRecipients: four }).success).toBe(false);
+
+    // Dropping the commission below 1 clears all of them.
+    const lowered = await updateMobilisation(String(created._id), { clientCommission: 0 }, actor());
+    expect(lowered.clientCommissionRecipients).toEqual([]);
+    expect(lowered.clientCommissionCoordinator).toBeNull();
+  });
+
   it('handles the subcontractor side for a subcontractor employee only', async () => {
     const c = await client();
     const sub = await Subcontractor.create({ name: `Sub ${unique()}`, coordinators: [{ name: 'Sami' }, { name: 'Sara' }] });

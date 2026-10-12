@@ -16,6 +16,15 @@ const emptyToUndef = (value) =>
 
 const optionalStr = (max) => z.preprocess(emptyToUndef, z.string().trim().max(max).optional());
 const id = (label) => z.string().regex(/^[a-f0-9]{24}$/i, `Invalid ${label} id.`);
+/** One commission recipient: a company coordinator and, when there are several, their share. */
+const commissionRecipient = (label) =>
+  z.object({
+    coordinatorId: id(label),
+    sharePercent: z.preprocess(
+      emptyToUndef,
+      z.coerce.number({ error: 'Enter each coordinator\'s share as a number.' }).positive('A share must be above 0%.').max(100).optional()
+    ),
+  });
 // Capped 2026-09-14 (a real QA-audit-found gap, same class as
 // deployment.validation.js's deductionAmount fix): unbounded rate/commission
 // fields accepted an overflow value that then produced non-finite profit
@@ -124,6 +133,12 @@ const mobilisationFields = {
   subcontractorCoordinatorIds: z.array(id('subcontractor coordinator')).max(20).optional(),
   clientCommissionCoordinatorId: z.preprocess(emptyToUndef, id('client coordinator').optional()),
   subcontractorCommissionCoordinatorId: z.preprocess(emptyToUndef, id('subcontractor coordinator').optional()),
+  // 2026-10-13: a commission goes to one to three of the company's coordinators,
+  // each with a share. The single ids above stay for older callers (one person,
+  // 100%). The service checks the people belong to the company and that two or
+  // more shares add up to 100.
+  clientCommissionRecipients: z.array(commissionRecipient('client coordinator')).max(3).optional(),
+  subcontractorCommissionRecipients: z.array(commissionRecipient('subcontractor coordinator')).max(3).optional(),
   // No otSubcontractorRate/otSubcontractorCommission here (removed
   // 2026-09-14) — OT no longer has a subcontractor-side rate split at all,
   // see otEmployeeRate above.

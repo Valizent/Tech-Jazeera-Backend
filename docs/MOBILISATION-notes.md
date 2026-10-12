@@ -1035,3 +1035,28 @@ A mobilisation and its deployment are one page (`/mobilisations/:id`, web and ph
 - **Removed.** `DeploymentDetailPage`, the header "View deployment" button and the deployment page's "View
   mobilisation" link (the page is one now), and their two locale keys.
 - Tests: `mobilisation.placements.test.js` ("the placement page").
+
+## 2026-10-13: coordinators from dropdowns, split commission, autofill clearing, other allowances, profit warning
+
+- **Coordinators.** The tick list is gone. `CoordinatorMultiPicker` is a searchable dropdown ("Add a coordinator") with the
+  picked ones listed below it, removable; a company with a hundred coordinators is no longer a long list.
+- **Commission recipients.** "Commission goes to" is a dropdown of the company's coordinators plus "Multiple coordinators"
+  (any coordinator of that company, not only the ones added as involved). Multiple opens a box of up to three dropdown rows,
+  each with a percentage share; a person only once, every share above 0, the shares total 100.
+  `CommissionRecipientsField` (web and phone). One recipient is always stored at 100%.
+- **Server.** New `clientCommissionRecipients` / `subcontractorCommissionRecipients` arrays of
+  `{ coordinatorId, name, designation, phone, email, sharePercent }` (max 3). The single
+  `clientCommissionCoordinator` / `subcontractorCommissionCoordinator` stays as the first recipient so every older reader and
+  record keeps working; the old `...CoordinatorId` request fields are still accepted (one person, 100%). A commission of 1 or
+  more still needs a recipient, checked when the save touches a commission, a recipient or a company. Both arrays are
+  commercial fields (hidden with the other rates). The detail page lists each recipient with their share.
+- **Autofill clearing.** The Iqama lookup (and the previous-worker picker) remember exactly what they wrote. When the number
+  changes, name, nationality and phone are taken back only if they are still exactly as written; a field edited by hand
+  stays. Going back to the old number fills it again.
+- **Other allowances.** Only the words change: form field and remark ("What the other allowances are for"), detail page,
+  monthly breakdown labels, and the two Excel headers ("Other allowances", "Other allowances remark"). The field and the
+  maths are unchanged.
+- **Profit warning.** On the form only, never blocking: profit kept per hour (client rate - client commission - the
+  subcontractor's rate and commission, or the freelancer's hourly rate; the same figure the server computes) below the
+  commissions combined is a red warning, exactly equal is an amber one. Nothing is stored or enforced on the server.
+- Tests: `mobilisation.companyPeople.test.js` ("splits a commission between up to three coordinators by percentage").
