@@ -68,7 +68,7 @@ const SECTION_LABELS = {
 const SECTION_DESCRIPTIONS = {
 
   expenses: 'Grants access to the company\'s internal expense ledger. It is here to track and record spending that is not billed to a client.',
-  employeeCreate: 'Grants access to the employee directory. It exists so HR or management can add new workers, view profiles, and manage sensitive records.',
+  employeeCreate: 'Grants access to the employee directory. It exists so HR or management can add new workers, view profiles, and manage sensitive records. Whatever is ticked here, a Coordinator only sees the employees assigned to them, unassigned standby workers and every labourer (anyone with a Worker login).',
   companySettings: 'Grants access to edit the company\'s legal, contact, and bank details. It is here so only authorized personnel can change the details printed on official documents.',
   mobilisationsViewer: 'Grants full visibility into submitted mobilisations (including commercial rates). It exists to let management oversee active deals and margins without allowing them to create new ones.',
   mobilisationsSelfMobilise: 'Grants the ability to create a new mobilisation. It is here for coordinators to officially place a worker with a client.',

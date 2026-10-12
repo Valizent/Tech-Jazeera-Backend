@@ -39,6 +39,16 @@ export async function assertEmployeeVisibleToActor(employeeId, actor) {
   if (!owned) throw new ApiError(403, 'You do not have access to this employee.');
 }
 
+/**
+ * "Labour": the own field workforce a Coordinator mobilises, identified by the
+ * Worker login linked to the employee record. Same definition the
+ * Mobilisation "Own employee" picker uses (`loginRole: 'Worker'`), so the list
+ * and the picker can never disagree about who a labourer is.
+ */
+async function labourEmployeeIds() {
+  return User.find({ role: 'Worker', employee: { $ne: null } }).distinct('employee');
+}
+
 /** Fields the expiry-alert filter inspects. */
 const EXPIRY_FIELDS = [
   'passport.expiry',
@@ -125,13 +135,23 @@ export async function listEmployees(
   // P2-M2: a Coordinator sees their own assigned employees — this is not a
   // filter the caller can opt out of. Milestone 5: PLUS every standby
   // workforce employee (coordinator: null) company-wide, so any Coordinator
-  // can find and mobilise them — visibility only, never approval authority
+  // can find and mobilise them. 2026-10-12 (the user's decision): PLUS every
+  // labourer, i.e. every employee holding a Worker login, whoever they are
+  // assigned to or whatever they are doing — a Coordinator has to know who is
+  // in the company to mobilise them; office staff stay out of reach.
+  // Visibility only, never approval authority
   // (leave/attendance/dashboard scoping deliberately stay coordinator-owned-
   // only, unchanged). A Manager may narrow to their coordinators' teams with
   // team=mine; without it a Manager keeps the existing company-wide view
   // (adding Coordinator must not shrink anyone else's established access).
   if (actor?.role === 'Coordinator') {
-    conditions.push({ $or: [{ coordinator: actor.userId }, { coordinator: null, type: { $in: WORKFORCE_TYPES } }] });
+    conditions.push({
+      $or: [
+        { coordinator: actor.userId },
+        { coordinator: null, type: { $in: WORKFORCE_TYPES } },
+        { _id: { $in: await labourEmployeeIds() } },
+      ],
+    });
   } else if (actor?.role === 'Manager' && team === 'mine') {
     // The Manager's direct 'Own' reports (e.g. their Coordinators) → the
     // Users linked to those Employee records → the Employees THOSE
@@ -192,21 +212,23 @@ export async function getEmployee(id, actor) {
     .populate('createdBy', 'name role')
     .lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
-  // P2-M2: a Coordinator may only open employees assigned to them, PLUS
-  // (Milestone 5) any standby workforce employee — everyone else's existing
-  // access (Admin/Manager/HR/Accounts see everyone) is unchanged. Same
-  // visibility-only widening as listEmployees above.
-  if (actor?.role === 'Coordinator') {
-    const isMyAssignment = employee.coordinator?._id?.toString() === actor.userId;
-    const isStandbyWorkforce = !employee.coordinator && WORKFORCE_TYPES.includes(employee.type);
-    if (!isMyAssignment && !isStandbyWorkforce) {
-      throw new ApiError(403, 'You do not have access to this employee.');
-    }
-  }
   // P2-M1: surface whether this employee has a login so the profile can show
   // account status (and hide "create login" once one exists) without a second
   // round-trip. Minimal, non-sensitive fields only — never the hash.
   const login = await User.findOne({ employee: id }).select('email role isActive').lean();
+  // P2-M2: a Coordinator may only open employees assigned to them, PLUS
+  // (Milestone 5) any standby workforce employee, PLUS (2026-10-12) any
+  // labourer (Worker login) — everyone else's existing access
+  // (Admin/Manager/HR/Accounts see everyone) is unchanged. Same
+  // visibility-only widening as listEmployees above.
+  if (actor?.role === 'Coordinator') {
+    const isMyAssignment = employee.coordinator?._id?.toString() === actor.userId;
+    const isStandbyWorkforce = !employee.coordinator && WORKFORCE_TYPES.includes(employee.type);
+    const isLabour = login?.role === 'Worker';
+    if (!isMyAssignment && !isStandbyWorkforce && !isLabour) {
+      throw new ApiError(403, 'You do not have access to this employee.');
+    }
+  }
   employee.login = login
     ? { id: login._id.toString(), email: login.email, role: login.role, isActive: login.isActive }
     : null;
