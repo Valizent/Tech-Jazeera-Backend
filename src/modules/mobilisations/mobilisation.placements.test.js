@@ -12,7 +12,7 @@ import ApprovalWorkflow from '../approvals/approvalWorkflow.model.js';
 import SectionAccess from '../sectionAccess/sectionAccess.model.js';
 import Mobilisation from './mobilisation.model.js';
 import Deployment from '../deployments/deployment.model.js';
-import { createMobilisation, listMobilisations } from './mobilisation.service.js';
+import { createMobilisation, getMobilisation, listMobilisations } from './mobilisation.service.js';
 
 const unique = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 const iqama = () => String(Math.floor(1_000_000_000 + Math.random() * 8_999_999_999));
@@ -143,6 +143,33 @@ describe('who sees an approved placement', () => {
     expect(String(row._id)).toBe(String(live._id));
     expect(row).not.toHaveProperty('clientQuotation');
     expect(row).not.toHaveProperty('clientRate');
+  });
+});
+
+describe('the placement page', () => {
+  it('hands the deployment to someone who may open it, and only to them', async () => {
+    const live = await placement();
+    const forReader = await getMobilisation(String(live._id), reader);
+    expect(forReader.deployment).toMatchObject({ status: 'Active' });
+    const forViewer = await getMobilisation(String(live._id), viewerOnly);
+    expect(forViewer.deployment).toBeUndefined();
+  });
+
+  it('opens an approved placement for the register circle with the reduced view, and nothing else', async () => {
+    const live = await placement();
+    const view = await getMobilisation(String(live._id), reader);
+    for (const hidden of ['clientRate', 'subcontractorRate', 'clientQuotation', 'documents', 'approvalTrail']) {
+      expect(view).not.toHaveProperty(hidden);
+    }
+    expect(view.canEditSection1).toBe(false);
+    await expect(getMobilisation(String(live._id), stranger)).rejects.toMatchObject({ statusCode: 403 });
+    const pending = await placement({ status: 'PendingReview' });
+    await expect(getMobilisation(String(pending._id), reader)).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('has no deployment before approval', async () => {
+    const draft = await placement({ status: 'Draft' });
+    expect((await getMobilisation(String(draft._id), admin)).deployment).toBeUndefined();
   });
 });
 

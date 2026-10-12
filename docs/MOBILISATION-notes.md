@@ -1013,3 +1013,25 @@ unchanged (two collections, one Deployment per Mobilisation), only what the user
 - **Not changed.** The Standby list, Ready to invoice / Payments / Hours review pages and every `/deployments/*` API
   route are as they were, and a placement's detail page is still the Deployment page (milestone 2 merges the two).
 - Tests: `src/modules/mobilisations/mobilisation.placements.test.js`.
+
+## 2026-10-12: one page per placement (milestone 2)
+
+A mobilisation and its deployment are one page (`/mobilisations/:id`, web and phone).
+
+- **Tabs.** "Mobilisation" is the page as it was. "Deployment" is the old Deployment page's body, now the
+  `DeploymentPanel` component (web `features/deployments/components/DeploymentPanel.jsx`, phone the same path under
+  `src/features`): placement card, expenses, monthly hours and billing progress, Edit and Demobilise, with its own
+  data (`['deployment', id]`) and mutations unchanged. The tab bar only exists when `GET /mobilisations/:id` returns a
+  `deployment`; the tab is `?tab=deployment` on the web (`useTabParam`) and local state seeded from that param on the phone.
+- **`GET /mobilisations/:id`** returns `deployment` (`{ _id, status }`) only to whoever passes the register's gate
+  (`canReadDeployments`), so the tab is never a 403. The same gate now also lets the register's circle open an
+  Approved or Completed record at all (they could always open its deployment, and the page is one now). They get the
+  list's reduced view: no rate or review fields, and no `documents` or `approvalTrail`; both pages hide those cards
+  when the key is absent. A Coordinator is not widened (their own placements come through the coordinator rule).
+- **Old links.** `/deployments/:id` is `DeploymentRedirectPage` (web) / a redirect screen (phone): it reads the
+  deployment (same call, same access check as before) and forwards to `/mobilisations/<mobilisation>?tab=deployment`.
+  Dashboard cards, the hours review and invoicing queues, the Overview and notifications keep their links. The list rows
+  go straight to `?tab=deployment` for a placement.
+- **Removed.** `DeploymentDetailPage`, the header "View deployment" button and the deployment page's "View
+  mobilisation" link (the page is one now), and their two locale keys.
+- Tests: `mobilisation.placements.test.js` ("the placement page").

@@ -1575,3 +1575,8 @@ menu, and cleared `localStorage` back to `null`. `npm run lint`/
 The Deployments list page was removed; who is out right now is the Mobilisations list filtered to "Mobilised". The API
 (`/deployments`, `/deployments/export`, standby, hours, invoicing, payments) is unchanged, and so is the Deployment detail
 page. See `docs/MOBILISATION-notes.md`, "one list for mobilisations and deployments".
+
+## 2026-10-12: a deployment is the second tab of its mobilisation
+
+`/deployments/:id` forwards to `/mobilisations/<id>?tab=deployment`; the page body is `DeploymentPanel`. See
+`docs/MOBILISATION-notes.md`, "one page per placement".

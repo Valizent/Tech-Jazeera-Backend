@@ -284,6 +284,12 @@ const REVIEW_FIELDS = [
   'remark',
 ];
 
+// What someone who only reaches an approved placement through the deployments
+// register's circle (see canReadDeployments) does not get on top of the rate and
+// review fields above: the register always showed the worker, the client and the
+// dates, never the approval paper trail or the documents.
+const PAPER_TRAIL_FIELDS = ['documents', 'approvalTrail'];
+
 function stripFields(mobilisation, fields) {
   const copy = { ...mobilisation };
   for (const field of fields) delete copy[field];
@@ -1038,7 +1044,7 @@ async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
           // they get what that register always showed (the worker, the
           // client, the dates), not the approval paper trail or documents.
           if (!isCoordinator && !isStepReviewer && !(m.status === 'PendingReview' && isStepZeroReviewer)) {
-            item = stripFields(item, ['documents', 'approvalTrail']);
+            item = stripFields(item, PAPER_TRAIL_FIELDS);
           }
           const canSeeCommercial = (isCoordinator && m.status !== 'Approved') || isLaterStepReviewer;
           if (!canSeeCommercial) {
@@ -1133,8 +1139,15 @@ export async function getMobilisation(id, actor) {
       canEditSection1 = stepZeroRoleIds.length > 0 && (await isMemberOfAnyRole(actor.userId, stepZeroRoleIds));
     }
 
+    // An approved placement is also open to the deployments register's circle
+    // (they could always open its deployment, and a placement is one page now),
+    // with the same reduced view the list gives them. A Coordinator is scoped to
+    // their own placements, which the coordinator rule already covers.
+    let registerOnly = false;
     if (!isCoordinator && !isViewerAllowed && !isStepReviewer && !canEditSection1) {
-      throw new ApiError(403, 'You do not have access to this mobilisation.');
+      registerOnly =
+        actor.role !== 'Coordinator' && ['Approved', 'Completed'].includes(mobilisation.status) && (await canReadDeployments(actor));
+      if (!registerOnly) throw new ApiError(403, 'You do not have access to this mobilisation.');
     }
     // Section 2 (the current-step reviewer's own work) is never a plain
     // coordinator's to see — stripped unconditionally, not just once
@@ -1163,6 +1176,7 @@ export async function getMobilisation(id, actor) {
       // PROFIT_ESTIMATE_FIELDS' own doc comment.
       visible = stripFields(visible, PROFIT_ESTIMATE_FIELDS);
     }
+    if (registerOnly) visible = stripFields(visible, PAPER_TRAIL_FIELDS);
   }
 
   const [annotated] = await annotateCanDecide([visible], actor, {
@@ -1172,9 +1186,10 @@ export async function getMobilisation(id, actor) {
   annotated.canEditSection1 = canEditSection1;
 
   // Approved (or later, Completed) always has exactly one Deployment, born
-  // automatically at approval — surfaced here so the detail page can link
-  // straight to it instead of duplicating deployment state on this record.
-  if (['Approved', 'Completed'].includes(mobilisation.status)) {
+  // automatically at approval. Surfaced here so the detail page can show it as
+  // its second tab instead of duplicating deployment state on this record — but
+  // only to whoever may open a deployment, or the tab would just be a 403.
+  if (['Approved', 'Completed'].includes(mobilisation.status) && (await canReadDeployments(actor))) {
     const deployment = await Deployment.findOne({ mobilisation: id }).select('_id status').lean();
     annotated.deployment = deployment ?? null;
   }
