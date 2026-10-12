@@ -979,3 +979,37 @@ on a candidate; this is what changed on the Mobilisation side.
   replaced. Mobilisations can't be deleted, so the link can never dangle.
 - Verified end-to-end through the real approval flow (a disposable one-approver workflow),
   including that approving a mobilisation whose card was deleted still succeeds.
+
+## 2026-10-12: one list for mobilisations and deployments (milestone 1)
+
+A Deployment is born with its Mobilisation's approval and ends with its release, so it was always the same placement seen
+after approval. The Deployments register is folded into the Mobilisations list (web and phone); the data model is
+unchanged (two collections, one Deployment per Mobilisation), only what the user sees is one list.
+
+- **Status words.** The row shows the mobilisation's own status; `Approved` reads "Mobilised" and `Completed` reads
+  "Demobilised" (the deployment's own labels, via `mobilisationStatusLabel` on web and phone). The Mobilisation detail
+  badge uses the same words. A released row also shows the demobilisation reason.
+- **`GET /mobilisations`** gained a `site` filter (case-insensitive, matched as plain text), `sortBy=site`, and, for
+  an Approved or Completed row, a `deployment` summary `{ _id, status, startDate, endDate, endReason, monthlyHours:
+  [{ month }] }` (months only, enough for the missing-timesheet count). The summary is only attached for the register's
+  audience, so the row's click target is simply "deployment if present, else mobilisation".
+- **Who sees a row.** The existing rules are unchanged (coordinator on it, the `mobilisationsViewer` circle past Draft,
+  the current step's reviewers, step 0 while in review). New arm: whoever passes the old register's own gate
+  (`deploymentsRelease` read, or an Office Secretary) also sees every Approved and Completed placement. A Coordinator is
+  skipped by that arm (their own placements already come through the coordinator rule, exactly as the register scoped
+  them). Rows reached only through that arm lose `documents` and `approvalTrail` on top of the usual rate/review-field
+  stripping, so nobody gets more than the register always showed.
+- **A reviewer stops being a reviewer once the record has left review.** The list stripped review fields by "is in the
+  current step's role", with no status condition; with approved rows now in the list that would have given a former
+  final-step reviewer the rates on an Approved row that `GET /mobilisations/:id` refuses them. The check now needs
+  `PendingReview`, the same as the detail endpoint.
+- **Web / phone.** `MobilisationListPage` / the phone `mobilisations/index` carry the register's controls
+  (client filter, site filter, Overview, Standby list, Export deployments, Approve timesheets with its count). The client
+  filter and Overview/Export deployments are for the register's audience only; Export deployments is disabled while the
+  status filter is a state with no deployments (Draft, Pending review, Rejected). `/deployments` redirects to
+  `/mobilisations?status=Approved` (and keeps `?overview=1`); the phone keeps a one-line redirect screen because the
+  server still sends `/deployments` in a dashboard to-do. The Deployments navigation item is removed; its Section Access
+  cards are listed under the Mobilisations module.
+- **Not changed.** The Standby list, Ready to invoice / Payments / Hours review pages and every `/deployments/*` API
+  route are as they were, and a placement's detail page is still the Deployment page (milestone 2 merges the two).
+- Tests: `src/modules/mobilisations/mobilisation.placements.test.js`.

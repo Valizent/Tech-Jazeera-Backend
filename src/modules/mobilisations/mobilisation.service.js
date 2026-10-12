@@ -405,6 +405,15 @@ async function isMobilisationViewer(actor, precomputedRoleIds) {
   return isMemberOfAnyRole(actor.userId, settings.readApprovalRoles);
 }
 
+/** The circle that could always open the old Deployments register
+ *  (deployment.routes.js's own canReadDeployments gate: 'deploymentsRelease'
+ *  read, plus the hardcoded Office Secretary exception). The merged
+ *  Mobilisations list shows them every placement once it is approved, so
+ *  merging the two screens never took a "who is out right now" view away. */
+async function canReadDeployments(actor) {
+  return actor.role === 'Office Secretary' || (await canAccessSection('deploymentsRelease', actor, 'read'));
+}
+
 /**
  * Minimal, purpose-scoped lookup for the "invite a joint coordinator"
  * picker. `/api/users` (the general staff directory) is Admin/Manager/HR
@@ -912,11 +921,12 @@ export async function createMobilisation(data, actor) {
  * `skip`/`limit` omitted means "no pagination, fetch everything matching".
  */
 async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
-  const { status, client, worker, coordinator, shared, search, sortBy, sortOrder } = query;
+  const { status, client, worker, coordinator, shared, search, site, sortBy, sortOrder } = query;
   const conditions = [{ archived: { $ne: true } }];
   if (status) conditions.push({ status });
   if (shared === 'true') conditions.push({ 'coordinators.1': { $exists: true } });
   if (client) conditions.push({ client });
+  if (site) conditions.push({ site: { $regex: escapeRegex(site), $options: 'i' } });
   if (worker) conditions.push({ worker });
   if (coordinator) conditions.push({ 'coordinators.user': coordinator });
   if (search) {
@@ -932,6 +942,12 @@ async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
 
     const visibility = [{ 'coordinators.user': actor.userId }];
     if (isViewer) visibility.push({ status: { $ne: 'Draft' } });
+    // A Coordinator is already scoped to their own placements by the first arm
+    // (the deployments register scoped them the same way); everyone else on
+    // the register's circle sees every placement once it is approved.
+    if (actor.role !== 'Coordinator' && (await canReadDeployments(actor))) {
+      visibility.push({ status: { $in: ['Approved', 'Completed'] } });
+    }
     // Bug fixed 2026-09-08: this used to be `'steps.roles': { $in: roleIds }`
     // — matching membership in ANY step's role pool, not just the CURRENT
     // one. That let a first-step reviewer (e.g. Office Secretary) keep
@@ -1003,7 +1019,11 @@ async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
       ? rawItems
       : rawItems.map((m) => {
           const currentStepRoleIds = (m.steps?.[m.currentStep]?.roles ?? []).map((r) => (r._id ?? r).toString());
-          const isStepReviewer = roleIds.some((r) => currentStepRoleIds.includes(r.toString()));
+          // Only while PendingReview, exactly like getMobilisation: once the
+          // record has left review nobody reviews it any more, and the
+          // approved placements now in this list (see canReadDeployments)
+          // must not hand a former reviewer the rates they cannot open.
+          const isStepReviewer = m.status === 'PendingReview' && roleIds.some((r) => currentStepRoleIds.includes(r.toString()));
           let item = isStepReviewer ? m : stripFields(m, REVIEW_FIELDS);
           // Mirrors getMobilisation's own commercial-visibility rule
           // (2026-09-13) exactly — see that function's doc comment for the
@@ -1014,6 +1034,12 @@ async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
           const isStepZeroReviewer = roleIds.some((r) => stepZeroRoleIds.includes(r.toString()));
           const isCoordinator = m.coordinators.some((c) => (c.user._id ?? c.user).toString() === actor.userId);
           const isLaterStepReviewer = isStepReviewer && !isStepZeroReviewer;
+          // Reached this row only through the deployments register's circle:
+          // they get what that register always showed (the worker, the
+          // client, the dates), not the approval paper trail or documents.
+          if (!isCoordinator && !isStepReviewer && !(m.status === 'PendingReview' && isStepZeroReviewer)) {
+            item = stripFields(item, ['documents', 'approvalTrail']);
+          }
           const canSeeCommercial = (isCoordinator && m.status !== 'Approved') || isLaterStepReviewer;
           if (!canSeeCommercial) {
             item = stripFields(item, COMMERCIAL_FIELDS);
@@ -1033,11 +1059,37 @@ export async function listMobilisations(query, actor) {
     skip: (page - 1) * limit,
     limit,
   });
-  const items = await annotateCanDecide(strippedItems, actor, {
+  const decidable = await annotateCanDecide(strippedItems, actor, {
     pendingStatus: 'PendingReview',
     legacyAllowedRoles: ['Admin'],
   });
 
+  // An approved (or completed) mobilisation always has its one Deployment: the
+  // list shows where that placement stands, and its row opens it directly.
+  // Only for the deployments register's circle — anyone else keeps opening the
+  // mobilisation, since the deployment itself would refuse them.
+  const placedIds = decidable.filter((m) => ['Approved', 'Completed'].includes(m.status)).map((m) => m._id);
+  if (!placedIds.length || !(await canReadDeployments(actor))) {
+    return { items: decidable, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+  }
+  const deployments = await Deployment.find({ mobilisation: { $in: placedIds } })
+    .select('mobilisation status startDate endDate endReason monthlyHours.month')
+    .lean();
+  const byMobilisation = new Map(
+    deployments.map((d) => [
+      d.mobilisation.toString(),
+      {
+        _id: d._id,
+        status: d.status,
+        startDate: d.startDate,
+        endDate: d.endDate,
+        endReason: d.endReason,
+        // Months only: enough to count the timesheets still missing.
+        monthlyHours: d.monthlyHours.map(({ month }) => ({ month })),
+      },
+    ])
+  );
+  const items = decidable.map((m) => (byMobilisation.has(m._id.toString()) ? { ...m, deployment: byMobilisation.get(m._id.toString()) } : m));
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 

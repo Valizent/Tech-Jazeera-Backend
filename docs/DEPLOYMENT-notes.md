@@ -1569,3 +1569,9 @@ and closed the menu; closing and reopening the modal loaded that saved
 order; clicking "Reset columns" restored the built-in order, closed the
 menu, and cleared `localStorage` back to `null`. `npm run lint`/
 `npm run build` both clean. Throwaway admin deleted afterward.
+
+## 2026-10-12: the register is the Mobilisations list now
+
+The Deployments list page was removed; who is out right now is the Mobilisations list filtered to "Mobilised". The API
+(`/deployments`, `/deployments/export`, standby, hours, invoicing, payments) is unchanged, and so is the Deployment detail
+page. See `docs/MOBILISATION-notes.md`, "one list for mobilisations and deployments".

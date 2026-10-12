@@ -235,7 +235,10 @@ export const listMobilisationsSchema = z.object({
   // handled by more than one of our coordinators.
   shared: z.preprocess(emptyToUndef, z.enum(['true']).optional()),
   search: optionalStr(100),
-  sortBy: z.enum(['mobilisationDate', 'createdAt', 'workerName', 'clientName', 'status']).default('createdAt'),
+  // 2026-10-12 — the merged Mobilisations/Deployments list: filter and sort by
+  // the placement's site, as the old Deployments register did.
+  site: optionalStr(100),
+  sortBy: z.enum(['mobilisationDate', 'createdAt', 'workerName', 'clientName', 'site', 'status']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
@@ -261,7 +264,10 @@ export const exportMobilisationsSchema = z.object({
   // handled by more than one of our coordinators.
   shared: z.preprocess(emptyToUndef, z.enum(['true']).optional()),
   search: optionalStr(100),
-  sortBy: z.enum(['mobilisationDate', 'createdAt', 'workerName', 'clientName', 'status']).default('createdAt'),
+  // 2026-10-12 — the merged Mobilisations/Deployments list: filter and sort by
+  // the placement's site, as the old Deployments register did.
+  site: optionalStr(100),
+  sortBy: z.enum(['mobilisationDate', 'createdAt', 'workerName', 'clientName', 'site', 'status']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
