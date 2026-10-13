@@ -18,6 +18,7 @@ import * as annualVacationService from '../annualVacation/annualVacation.service
 import * as certificateService from '../exitDocuments/certificate.service.js';
 import * as assetService from '../assets/asset.service.js';
 import * as timesheetService from '../timesheets/timesheet.service.js';
+import Settlement from '../eosb/settlement.model.js';
 
 
 export async function getMyProfile(employeeId) {
@@ -186,5 +187,23 @@ export async function submitMyTimesheet(employeeId, body, actor) {
 
 export async function listMyTimesheets(employeeId, query) {
   return timesheetService.listOwnTimesheets(employeeId, query);
+}
+
+/**
+ * The worker's own EOSB settlement, if one has been computed. Returns the
+ * settlement document or null — never 404s (absence is a valid state; HR
+ * may not have run the calculation yet).
+ *
+ * Deliberately read-only: a Worker can never create or delete their own
+ * settlement — that stays strictly HR/Office-Secretary Write access only.
+ * The lookup is owned-employee-only so no Section Access grant is needed,
+ * consistent with every other /api/me/* endpoint.
+ */
+export async function getMySettlement(employeeId) {
+  const settlement = await Settlement.findOne({
+    employee: employeeId,
+    exitReason: { $in: ['Resignation', 'TerminationByEmployer', 'EndOfContract', 'SponsorshipTransfer'] },
+  }).lean();
+  return settlement ?? null;
 }
 

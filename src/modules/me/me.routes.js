@@ -189,6 +189,8 @@ router.patch(
 
 router.get('/assets', asyncHandler(meController.listAssets));
 
+router.get('/eosb', asyncHandler(meController.getMyEosb));
+
 router.get(
   '/timesheets',
   validate({ query: listMyTimesheetsSchema }),

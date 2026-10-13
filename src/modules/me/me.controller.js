@@ -243,3 +243,12 @@ export async function listTimesheets(req, res) {
   res.json(new ApiResponse('Your timesheets.', data));
 }
 
+/** GET /api/me/eosb — 200 → data: settlement | null.
+ *  Returns the worker's own computed settlement, or null if HR hasn't run
+ *  the calculation yet. Never 404s so the ESS page can show a friendly
+ *  "not yet calculated" state without treating it as a request error. */
+export async function getMyEosb(req, res) {
+  const settlement = await meService.getMySettlement(myEmployeeId(req));
+  res.json(new ApiResponse('Your end-of-service settlement.', settlement));
+}
+

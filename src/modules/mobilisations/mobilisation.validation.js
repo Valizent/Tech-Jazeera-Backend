@@ -381,9 +381,17 @@ export const decideMobilisationSchema = z
     }
   });
 
-export const mobilisationDocumentCategorySchema = z.object({
-  category: z.enum(['Contract', 'IDCopy', 'Other'], { error: 'Choose a document category.' }),
-});
+export const mobilisationDocumentCategorySchema = z
+  .object({
+    category: z.enum(['Contract', 'IDCopy', 'Other'], { error: 'Choose a document category.' }),
+    // What an "Other" file actually is; it becomes part of the stored file name.
+    documentName: z.string().trim().max(60, 'Keep the document name to 60 characters.').optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.category === 'Other' && !data.documentName) {
+      ctx.addIssue({ code: 'custom', path: ['documentName'], message: 'Say what this document is.' });
+    }
+  });
 
 export const mobilisationDocumentParamSchema = z.object({
   id: id('mobilisation'),

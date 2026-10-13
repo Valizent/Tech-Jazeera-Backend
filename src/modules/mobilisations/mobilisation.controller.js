@@ -177,7 +177,7 @@ export async function decide(req, res) {
 /** POST /api/mobilisations/:id/documents — multipart, field `files` + `category` */
 export async function addDocuments(req, res) {
   if (!req.files?.length) throw new ApiError(400, 'Attach at least one file.');
-  const mobilisation = await mobilisationService.addDocuments(req.params.id, req.files, req.body.category, actor(req));
+  const mobilisation = await mobilisationService.addDocuments(req.params.id, req.files, req.body, actor(req));
   res.status(201).json(new ApiResponse('Document(s) uploaded.', mobilisation));
 }
 

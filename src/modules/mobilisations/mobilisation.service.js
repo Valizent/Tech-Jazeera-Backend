@@ -33,6 +33,7 @@ import { nextSequence } from '../shared/counter.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import { createDeploymentFromMobilisation } from '../deployments/deployment.service.js';
 import MobilisationSubmissionLock from './mobilisationSubmissionLock.model.js';
+import { mobilisationDocumentName } from './documentName.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { ownEmployeeOtRate } from '../../utils/employeeOt.js';
 import logger from '../../config/logger.js';
@@ -2355,18 +2356,19 @@ async function assertCanAddDocuments(mobilisation, actor) {
   throw new ApiError(403, 'You do not have access to this mobilisation.');
 }
 
-export async function addDocuments(id, files, category, actor) {
+export async function addDocuments(id, files, { category, documentName }, actor) {
   const mobilisation = await Mobilisation.findById(id);
   if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
   await assertCanAddDocuments(mobilisation, actor);
   assertDocumentsEditable(mobilisation);
   if (!files?.length) throw new ApiError(400, 'Attach at least one file.');
 
+  const taken = new Set(mobilisation.documents.map((d) => d.originalName.toLowerCase()));
   for (const file of files) {
     mobilisation.documents.push({
       fileName: file.filename,
       resourceType: 'raw',
-      originalName: file.originalname,
+      originalName: mobilisationDocumentName(mobilisation, category, documentName, file.originalname, taken),
       mimeType: file.mimetype,
       size: file.size,
       category,
