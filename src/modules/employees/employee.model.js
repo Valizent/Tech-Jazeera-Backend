@@ -129,6 +129,13 @@ const employeeSchema = new mongoose.Schema(
     // from the employee form, same write circle as the rest of the record.
     expectedDailyHours: { type: Number, default: null, min: 0, max: 24 },
 
+    // The hours this employee's month is contracted for (e.g. 240). Their
+    // overtime hour is paid at salary / contractHours x 1.5 (see
+    // utils/employeeOt.js), so an Own employee cannot be mobilised without it
+    // (2026-10-13). Optional on the record itself: older employees do not have
+    // it yet, and HR fills it in before their next placement.
+    contractHours: { type: Number, default: null, min: 0, max: 744 },
+
     // The single fixed day this employee is normally off (0=Sun..6=Sat,
     // matching Date#getUTCDay() and attendance.dates.js's isWeekend
     // convention). Defaults to Friday (5) for anyone no one has explicitly

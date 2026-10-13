@@ -28,6 +28,12 @@ const nullableHours = z.preprocess(
   z.coerce.number({ error: 'Enter a number of hours.' }).min(0).max(24).nullable().optional()
 );
 
+/** Like nullableHours, but for a month's worth of hours (contractHours): at most 31 x 24. */
+const nullableMonthlyHours = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
+  z.coerce.number({ error: 'Enter the contract hours per month.' }).min(0).max(744).nullable().optional()
+);
+
 /** Like nullableHours, but for a SAR amount (basicSalary/housingAllowance/transportAllowance). */
 const nullableAmount = z.preprocess(
   (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
@@ -128,6 +134,9 @@ const employeeObjectSchema = z
     // Early-sign-out warning threshold for this employee (My Attendance). "" means
     // "no threshold" (null), not "leave unchanged" — same rule as manager.
     expectedDailyHours: nullableHours,
+    // Contract hours per month - overtime pay is salary / these x 1.5, and a
+    // mobilisation needs them. "" clears it (null).
+    contractHours: nullableMonthlyHours,
     weeklyOffDay: nullableWeekday,
     status: z.enum(EMPLOYEE_STATUSES).default('Active'),
 

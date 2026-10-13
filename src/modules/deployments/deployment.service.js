@@ -28,8 +28,10 @@ import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { notifyUser } from '../notifications/notification.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 import { signedDownloadUrl } from '../../middleware/upload.js';
-import { allocateClientPayments, getClientPaymentHistory } from './clientPayment.service.js';
+import { allocateClientPayments, getClientPaymentHistory, recordClientPayment } from './clientPayment.service.js';
+import { planAllocations } from './paymentAllocation.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { ownEmployeeOtRate } from '../../utils/employeeOt.js';
 
 function currentMonthStr() {
   const d = new Date();
@@ -98,7 +100,7 @@ export async function getPendingHoursQueue(actor) {
   })
     .select('workerName clientName site workerType monthlyHours mobilisation worker')
     .populate('mobilisation')
-    .populate('worker', 'salary')
+    .populate('worker', 'salary contractHours')
     .lean();
 
   const rows = [];
@@ -166,19 +168,20 @@ async function computeOtAmount(mobilisationId, otHours) {
   return money(otHours * (mobilisation?.otClientRate ?? 0));
 }
 
-/** OT hours billed to the CLIENT — always Client hours minus this
- *  deployment's own contracted hours, floored at 0, for every worker type
- *  alike (2026-10-01, the user's own correction, superseding the
- *  2026-09-19 SupplierEmployee-specific formula below). The earlier formula
- *  measured a SupplierEmployee's OT against the SUBCONTRACTOR's own
- *  timesheet — which broke the moment subcontractor hours became an
- *  optional, separately-entered follow-up step (see addMonthlyHours):
- *  client OT can no longer depend on a number that might not exist yet.
- *  What this company bills the client was always really about the client's
- *  own timesheet vs. the client's own agreed hours anyway; the
- *  subcontractor's real OT (what this company owes THEM extra) is now its
- *  own, independent figure — see computeSupplierOtHours below. */
-function computeOtHours(actualHours, contractHours) {
+/** OT hours for one month, floored at 0.
+ *
+ *  A subcontractor employee whose subcontractor timesheet has been entered:
+ *  the client's hours minus the subcontractor's hours (2026-10-13, the user's
+ *  own rule - 300 from the client and 300 given to the subcontractor is no OT,
+ *  whatever the contract says). Everyone else, and a subcontractor employee
+ *  until that timesheet is in (it is a separate, later follow-up step, see
+ *  addMonthlyHours): the client's hours minus the deployment's contracted
+ *  hours. Entering the subcontractor's hours later recomputes it.
+ *
+ *  What the subcontractor is owed extra is still its own, independent figure -
+ *  see computeSupplierOtHours below. */
+function computeOtHours(actualHours, contractHours, supplierHours = null) {
+  if (supplierHours != null) return Math.max(0, actualHours - supplierHours);
   return Math.max(0, actualHours - contractHours);
 }
 
@@ -409,7 +412,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
   const contractHours = deployment.requiredTimesheetHours ?? 0;
   const actualHours = data.actualHours;
   const supplierHours = deployment.workerType === 'SupplierEmployee' ? (data.supplierHours ?? null) : null;
-  const otHours = computeOtHours(actualHours, contractHours);
+  const otHours = computeOtHours(actualHours, contractHours, supplierHours);
   const otAmount = await computeOtAmount(deployment.mobilisation, otHours);
   const newEntry = {
     month: data.month,
@@ -538,7 +541,7 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   entry.dailyHours = [];
   entry.actualHours = actualHours;
   entry.supplierHours = supplierHours;
-  entry.otHours = computeOtHours(actualHours, entry.contractHours);
+  entry.otHours = computeOtHours(actualHours, entry.contractHours, supplierHours);
   entry.otAmount = await computeOtAmount(deployment.mobilisation, entry.otHours);
   entry.deductionAmount = data.deductionAmount ?? 0;
   entry.supplierDeductionAmount = data.supplierDeductionAmount ?? 0;
@@ -874,7 +877,7 @@ async function gatherClientInvoicedItems(clientId) {
   const deployments = await Deployment.find({ client: clientId, archived: { $ne: true } })
     .select('workerName subcontractorName monthlyHours mobilisation workerType worker')
     .populate('mobilisation', 'coordinators clientRate clientCommission subcontractorRate subcontractorCommission fta allowance mobilisationCost otClientRate otEmployeeRate employeeRate workerType')
-    .populate('worker', 'salary')
+    .populate('worker', 'salary contractHours')
     .lean();
 
   const items = [];
@@ -928,6 +931,20 @@ async function gatherClientInvoicedItems(clientId) {
 export async function getClientAllocation(clientId) {
   const items = await gatherClientInvoicedItems(clientId);
   return allocateClientPayments(clientId, items);
+}
+
+/**
+ * Records a payment a client made, optionally against invoices the recorder
+ * picked in order (2026-10-13). The amount received plus any unallocated
+ * credit already on the account fills those invoices in that order; what is
+ * left stays credit. Lives here because only this file can price an invoice
+ * (clientPayment.service.js must not import it).
+ */
+export function recordClientPaymentForInvoices(clientId, data, actor) {
+  return recordClientPayment(clientId, data, actor, async (amount, invoiceKeys) => {
+    const { perEntry, creditBalance } = await getClientAllocation(clientId);
+    return planAllocations({ perEntry, creditBalance, amount, invoiceKeys });
+  });
 }
 
 /**
@@ -1294,7 +1311,7 @@ export async function getReadyToInvoice(actor) {
   })
     .select('workerName clientName mobilisation monthlyHours workerType worker')
     .populate('mobilisation', 'serialNumber clientRate clientCommission subcontractorRate subcontractorCommission fta allowance mobilisationCost otClientRate otEmployeeRate employeeRate workerType')
-    .populate('worker', 'salary')
+    .populate('worker', 'salary contractHours')
     .lean();
 
   const rows = [];
@@ -1840,9 +1857,15 @@ export function computeMonthlyRevenueAndExpenses(entry, mobilisation, allEntries
   // (supplierOtHours), never the client-billed otHours — the two are
   // independent figures. Freelancer has no second timesheet, so it keeps using
   // the single, client-derived otHours.
+  // An Own employee's OT hour costs salary / contract hours x 1.5 from their
+  // own record (2026-10-13). A worker record without both figures (it predates
+  // the rule) keeps the typed rate on the mobilisation.
+  const ownOtRate = isEmployee ? ownEmployeeOtRate(worker?.salary, worker?.contractHours) : null;
   const otCalculations = isSupplier
     ? money((mobilisation.otEmployeeRate ?? 0) * (supplierOtHours ?? 0))
-    : money((mobilisation.otEmployeeRate ?? 0) * entry.otHours);
+    : ownOtRate != null
+      ? money(ownOtRate * entry.otHours)
+      : money((mobilisation.otEmployeeRate ?? 0) * entry.otHours);
   const expenseDeduction = money(entry.deductionAmount ?? 0);
   
   const expenseEmployeeSalary = isEmployee ? money(worker?.salary ?? 0) : 0;
@@ -1910,7 +1933,7 @@ export const PROFIT_RATE_FIELDS =
 
 export async function getDeployment(id, actor) {
   const deployment = await Deployment.findById(id)
-    .populate('worker', 'fullName employeeId salary')
+    .populate('worker', 'fullName employeeId salary contractHours')
     .populate('mobilisation', PROFIT_RATE_FIELDS)
     .lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
@@ -2103,7 +2126,7 @@ export async function getActualPerformanceSummary() {
     Deployment.find({ monthlyHours: { $elemMatch: { status: 'Approved', month: { $in: [...relevantMonthKeys] } } } })
       .select('client monthlyHours mobilisation worker')
       .populate('mobilisation', PROFIT_RATE_FIELDS)
-      .populate('worker', 'salary')
+      .populate('worker', 'salary contractHours')
       .lean(),
     sumDeploymentExpenses(monthDateBounds(lastMonth.year, lastMonth.month)),
     sumDeploymentExpenses(monthDateBounds(monthBeforeLast.year, monthBeforeLast.month)),

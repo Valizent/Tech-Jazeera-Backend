@@ -19,12 +19,28 @@ import mongoose from 'mongoose';
 
 export const CLIENT_PAYMENT_DECISION_STATUSES = ['Pending', 'Approved', 'Rejected'];
 
+/** What the recorder chose (2026-10-13): the invoices this payment was picked
+ *  to cover, in order, with what each takes. Empty on an older payment, which
+ *  `allocated: false` marks as "oldest invoice first". */
+const allocationSchema = new mongoose.Schema(
+  {
+    invoiceKey: { type: String, required: true },
+    invoiceNumber: { type: String, default: null },
+    amount: { type: Number, required: true, min: 0.01 },
+  },
+  { _id: false }
+);
+
 const clientPaymentSchema = new mongoose.Schema(
   {
     client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', required: true },
     amount: { type: Number, required: true, min: 0.01 },
     paymentReference: { type: String, trim: true, default: null, maxlength: 100 }, // e.g. invoice number, cheque number
     paymentDate: { type: Date, default: Date.now },
+    // true once the recorder picked invoices (then `allocations` is the order
+    // they were picked in); false on a payment recorded before that existed.
+    allocated: { type: Boolean, default: false },
+    allocations: { type: [allocationSchema], default: [] },
     recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     recordedAt: { type: Date, default: Date.now },
     decisionStatus: { type: String, enum: CLIENT_PAYMENT_DECISION_STATUSES, default: 'Pending' },

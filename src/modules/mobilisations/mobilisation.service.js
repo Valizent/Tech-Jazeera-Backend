@@ -34,6 +34,7 @@ import Deployment from '../deployments/deployment.model.js';
 import { createDeploymentFromMobilisation } from '../deployments/deployment.service.js';
 import MobilisationSubmissionLock from './mobilisationSubmissionLock.model.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { ownEmployeeOtRate } from '../../utils/employeeOt.js';
 import logger from '../../config/logger.js';
 import { assertCanStartFromRequirement, attachMobilisation, onMobilisationApproved } from '../requirements/requirement.service.js';
 import {
@@ -354,15 +355,32 @@ function stripFields(mobilisation, fields) {
   return copy;
 }
 
+/** An Own employee's overtime is paid from salary / contract hours (2026-10-13),
+ *  so the contract hours must be on their record before they are placed. */
+function assertHasContractHours(employee) {
+  if (!(Number(employee.contractHours) > 0)) {
+    throw new ApiError(
+      400,
+      `${employee.fullName} has no contract hours on file: set them on their employee profile before mobilising them.`
+    );
+  }
+}
+
 /** Snapshot fields captured from the referenced Employee at creation/edit —
  *  independently editable afterward, never live-joined on read (same
  *  durable-history convention as Deployment.clientName). */
 function snapshotFromEmployee(employee) {
+  // An Own employee's OT hour is paid at salary / contract hours x 1.5, from
+  // their record (2026-10-13) - so the mobilisation carries that figure as its
+  // OT payment to employee instead of a typed one, and its OT profit per hour
+  // follows. Without both figures the typed value (older records) stays.
+  const otRate = ownEmployeeOtRate(employee.salary, employee.contractHours);
   return {
     workerName: employee.fullName,
     iqamaNumber: employee.iqama?.number ?? null,
     nationality: employee.nationality ?? null,
     phone: employee.mobile ?? null,
+    ...(otRate != null && { otEmployeeRate: money(otRate) }),
   };
 }
 
@@ -822,6 +840,7 @@ export async function createMobilisation(data, actor) {
       if (employee.salary == null) {
         throw new ApiError(400, `${employee.fullName} has no salary on file set it on their employee profile before mobilising them.`);
       }
+      assertHasContractHours(employee);
       await assertNoActivePlacement(data.worker);
       await assertNoDateOverlap('Employee', { workerId: data.worker }, data.mobilisationDate, data.checkoutDate);
     } else {
@@ -1376,6 +1395,7 @@ export async function updateMobilisation(id, data, actor) {
         if (employee.salary == null) {
           throw new ApiError(400, `${employee.fullName} has no salary on file set it on their employee profile before mobilising them.`);
         }
+        assertHasContractHours(employee);
         await assertNoActivePlacement(workerInput.worker);
       } else {
         await assertNoActiveNonEmployeePlacement(workerInput.iqamaNumber);

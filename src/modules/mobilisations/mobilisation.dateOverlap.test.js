@@ -29,6 +29,7 @@ async function makeEmployee() {
     // Own employee before mobilising them (see its own doc comment) — this
     // fixture predates that check.
     salary: 3000,
+    contractHours: 240,
   });
 }
 

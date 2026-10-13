@@ -21,14 +21,11 @@ import Deployment from './deployment.model.js';
 import Client from '../clients/client.model.js';
 import ClientPayment from './clientPayment.model.js';
 import ApiError from '../../utils/ApiError.js';
+import { allocatePayments } from './paymentAllocation.js';
 import { logAudit } from '../audit/audit.service.js';
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
 import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { notifyUser } from '../notifications/notification.service.js';
-
-function money(n) {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
-}
 
 async function decidersOfDeploymentsPayment() {
   const settings = await getSectionAccess('deploymentsPaymentDecide');
@@ -84,46 +81,10 @@ async function clientPaymentAudience(clientId) {
  * top of the existing oldest-invoice-first order.
  */
 export async function allocateClientPayments(clientId, invoicedItems) {
-  const sorted = [...invoicedItems].sort((a, b) => new Date(a.invoiceSentAt) - new Date(b.invoiceSentAt));
-
   const approvedPayments = await ClientPayment.find({ client: clientId, decisionStatus: 'Approved' })
-    .select('amount paymentDate paymentReference')
-    .sort({ paymentDate: 1, _id: 1 })
+    .select('amount paymentDate paymentReference allocated allocations')
     .lean();
-  const pool = approvedPayments.map((p) => ({ ...p, remaining: p.amount }));
-  let poolIndex = 0;
-
-  const perEntry = [];
-  for (const item of sorted) {
-    let needed = item.revenue;
-    let runningBalance = item.revenue;
-    const payments = [];
-    while (needed > 0 && poolIndex < pool.length) {
-      const p = pool[poolIndex];
-      if (p.remaining <= 0) {
-        poolIndex += 1;
-        continue;
-      }
-      const take = money(Math.min(needed, p.remaining));
-      p.remaining = money(p.remaining - take);
-      needed = money(needed - take);
-      runningBalance = money(runningBalance - take);
-      payments.push({
-        paymentId: p._id,
-        amount: take,
-        paymentDate: p.paymentDate,
-        paymentReference: p.paymentReference,
-        runningBalance,
-      });
-      if (p.remaining <= 0) poolIndex += 1;
-    }
-    const allocated = money(item.revenue - needed);
-    const balanceDue = money(needed);
-    perEntry.push({ ...item, amountAllocated: allocated, balanceDue, fullyPaid: balanceDue <= 0, payments });
-  }
-
-  const creditBalance = money(pool.reduce((sum, p) => sum + p.remaining, 0));
-  return { perEntry, creditBalance };
+  return allocatePayments(invoicedItems, approvedPayments);
 }
 
 /** One client's real payment history — Pending/Approved/Rejected, newest
@@ -156,7 +117,7 @@ export async function getPendingPaymentsQueue(actor) {
  * allocateClientPayments's own doc comment); only an Approved payment ever
  * counts toward it.
  */
-export async function recordClientPayment(clientId, data, actor) {
+export async function recordClientPayment(clientId, data, actor, planAllocations = null) {
   const isOfficeSecretary = actor.role === 'Office Secretary';
   const allowed = isOfficeSecretary || (await canAccessSection('deploymentsHours', actor));
   if (!allowed) throw new ApiError(403, 'You do not have permission to record a received payment.');
@@ -164,11 +125,17 @@ export async function recordClientPayment(clientId, data, actor) {
   const client = await Client.findById(clientId).select('companyName').lean();
   if (!client) throw new ApiError(404, 'Client not found.');
 
+  // The invoices the recorder picked, in order, turned into amounts. Planned
+  // here, after the permission and client checks, by the caller (only
+  // deployment.service.js knows how to price an invoice).
+  const picked = data.invoiceKeys?.length && planAllocations ? await planAllocations(data.amount, data.invoiceKeys) : null;
+
   const payment = await ClientPayment.create({
     client: clientId,
     amount: data.amount,
     paymentReference: data.paymentReference || null,
     ...(data.paymentDate && { paymentDate: data.paymentDate }),
+    ...(picked && { allocated: true, allocations: picked.allocations }),
     recordedBy: actor.userId,
   });
 
@@ -177,7 +144,7 @@ export async function recordClientPayment(clientId, data, actor) {
     action: 'clientPayment.record',
     targetType: 'ClientPayment',
     targetId: payment._id,
-    meta: { client: clientId, amount: data.amount },
+    meta: { client: clientId, amount: data.amount, invoices: picked?.allocations.length ?? 0 },
     ip: actor.ip,
   });
 

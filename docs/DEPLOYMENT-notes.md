@@ -1580,3 +1580,23 @@ page. See `docs/MOBILISATION-notes.md`, "one list for mobilisations and deployme
 
 `/deployments/:id` forwards to `/mobilisations/<id>?tab=deployment`; the page body is `DeploymentPanel`. See
 `docs/MOBILISATION-notes.md`, "one page per placement".
+
+## 2026-10-13: overtime rules and employee contract hours
+
+- **OT hours** (`computeOtHours`, server-computed on every add and edit of a month):
+  - Subcontractor employee with the subcontractor's hours entered: `max(0, client hours - subcontractor hours)`. 300 and 300
+    is no OT even with 260 contract hours; the client is then billed all 300 at the normal rate (a new mobilisation's OT client
+    rate equals its client rate anyway).
+  - Subcontractor employee before those hours are entered (a separate, later follow-up): `max(0, client hours - contract
+    hours)` as an estimate. Entering the subcontractor's hours recomputes OT and the OT amount.
+  - Own employee and freelancer: `max(0, client hours - contract hours)`, as before.
+- **OT cost of an own employee** (`computeMonthlyRevenueAndExpenses`): `salary / contractHours x 1.5` per OT hour, from the
+  Employee record (`utils/employeeOt.js`), instead of the typed `otEmployeeRate`. An employee record without salary or
+  contract hours falls back to the typed rate, so figures for older workers do not jump. The freelancer's OT (their hourly
+  rate) and the subcontractor's own OT cost (their hours minus the contract hours, at the OT employee rate) are unchanged.
+- **Employee record.** New optional `contractHours` (0 to 744 a month), on the web and phone Employee forms next to salary.
+  `POST /mobilisations` (and a worker change on an edit) refuses an own employee without it, like it already did for salary.
+  The mobilisation stores `otEmployeeRate = salary / contractHours x 1.5` from the employee at creation, so its OT profit per
+  hour shows the real figure; the form shows what it will be (or what is missing) instead of an input.
+- **Forms.** The monthly-hours preview (web and phone) uses the same rule as the server.
+- Tests: `deployment.otRules.test.js`.

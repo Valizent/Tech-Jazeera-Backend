@@ -136,7 +136,7 @@ async function streamInvoiceFile(res, fileData) {
  *  (2026-09-27 bulk-payment redesign — one payment per CLIENT, not per
  *  worker/entry; see clientPayment.service.js). */
 export async function recordClientPayment(req, res) {
-  const payment = await clientPaymentService.recordClientPayment(req.params.clientId, req.body, actor(req));
+  const payment = await deploymentService.recordClientPaymentForInvoices(req.params.clientId, req.body, actor(req));
   res.status(201).json(new ApiResponse('Payment recorded.', payment));
 }
 
@@ -199,7 +199,7 @@ export async function subcontractorPaymentDetail(req, res) {
 
 /** POST /api/deployments/sub-payments-due/:subcontractorId/payments — 201 → data: payment */
 export async function recordSubcontractorPayment(req, res) {
-  const data = await subcontractorPaymentService.recordSubcontractorPayment(req.params.subcontractorId, req.body, actor(req));
+  const data = await subcontractorInvoiceService.recordSubcontractorPaymentForInvoices(req.params.subcontractorId, req.body, actor(req));
   res.status(201).json(new ApiResponse('Payment recorded.', data));
 }
 

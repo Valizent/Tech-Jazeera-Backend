@@ -1060,3 +1060,9 @@ A mobilisation and its deployment are one page (`/mobilisations/:id`, web and ph
   subcontractor's rate and commission, or the freelancer's hourly rate; the same figure the server computes) below the
   commissions combined is a red warning, exactly equal is an amber one. Nothing is stored or enforced on the server.
 - Tests: `mobilisation.companyPeople.test.js` ("splits a commission between up to three coordinators by percentage").
+
+## 2026-10-13: own employees are paid overtime from their record
+
+The "OT payment to employee" input is gone for an own employee: it is salary / contract hours x 1.5 from the Employee record.
+Mobilising needs the employee's contract hours (new field on the Employee form). See `docs/DEPLOYMENT-notes.md`, "overtime
+rules and employee contract hours".

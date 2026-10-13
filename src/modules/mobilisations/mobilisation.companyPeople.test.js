@@ -25,6 +25,7 @@ async function employee() {
     designation: 'Labour',
     joiningDate: new Date('2022-01-01'),
     salary: 3000,
+    contractHours: 240,
   });
 }
 
@@ -40,7 +41,8 @@ describe('OT rates', () => {
     const created = await createMobilisation({ ...base, workerType: 'Employee', worker: String(emp._id), client: String(c._id), otEmployeeRate: 5 }, actor());
     expect(created.otClientRate).toBe(30);
     expect(created.otClientRateFollowsClient).toBe(true);
-    expect(created.otEmployeeRate).toBe(5);
+    // An Own employee's OT hour is salary / contract hours x 1.5 (3000 / 240 x 1.5), not a typed rate.
+    expect(created.otEmployeeRate).toBe(18.75);
 
     const edited = await updateMobilisation(String(created._id), { clientRate: 45 }, actor());
     expect(edited.clientRate).toBe(45);

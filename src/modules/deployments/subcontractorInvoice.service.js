@@ -6,7 +6,8 @@ import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAcce
 import { notifyUser } from '../notifications/notification.service.js';
 import { membersOfRoles } from '../approvals/approvalEngine.service.js';
 import { computeMonthlyRevenueAndExpenses } from './deployment.service.js';
-import { allocateSubcontractorPayments } from './subcontractorPayment.service.js';
+import { allocateSubcontractorPayments, recordSubcontractorPayment } from './subcontractorPayment.service.js';
+import { planAllocations } from './paymentAllocation.js';
 
 function money(n) {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -105,7 +106,7 @@ async function gatherSubcontractorInvoicedItems(subcontractorId) {
   const deployments = await Deployment.find({ subcontractor: subcontractorId, archived: { $ne: true } })
     .select('workerName subcontractorName monthlyHours mobilisation workerType worker')
     .populate('mobilisation')
-    .populate('worker', 'salary')
+    .populate('worker', 'salary contractHours')
     .lean();
 
   const items = [];
@@ -160,6 +161,16 @@ async function gatherSubcontractorInvoicedItems(subcontractorId) {
 export async function getSubcontractorAllocation(subcontractorId) {
   const items = await gatherSubcontractorInvoicedItems(subcontractorId);
   return allocateSubcontractorPayments(subcontractorId, items);
+}
+
+/** Records a payment to a subcontractor, optionally against invoices the
+ *  recorder picked in order (2026-10-13) - see deployment.service.js's
+ *  recordClientPaymentForInvoices. */
+export function recordSubcontractorPaymentForInvoices(subcontractorId, data, actor) {
+  return recordSubcontractorPayment(subcontractorId, data, actor, async (amount, invoiceKeys) => {
+    const { perEntry, creditBalance } = await getSubcontractorAllocation(subcontractorId);
+    return planAllocations({ perEntry, creditBalance, amount, invoiceKeys });
+  });
 }
 
 export async function getSubcontractorsPaymentSummary(actor) {
@@ -308,7 +319,7 @@ export async function getReadyForSubInvoice(actor) {
   })
     .select('workerName clientName subcontractorName mobilisation monthlyHours workerType worker')
     .populate('mobilisation')
-    .populate('worker', 'salary')
+    .populate('worker', 'salary contractHours')
     .lean();
 
   const rows = [];

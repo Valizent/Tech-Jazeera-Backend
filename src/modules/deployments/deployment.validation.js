@@ -173,10 +173,16 @@ const paymentAmount = money2dp('Amount cannot have more than 2 decimal places.')
   message: 'That looks too high check the figure.',
 });
 
+// The invoices a payment is picked to cover, in order (2026-10-13): keys from the
+// outstanding-invoices list (`invoiceKey`). Left out, the payment is applied
+// oldest invoice first, as every payment recorded before this was.
+const invoiceKeys = z.array(z.string().trim().min(1).max(220)).min(1).max(200).optional();
+
 export const recordClientPaymentSchema = z.object({
   amount: paymentAmount,
   paymentReference: optionalStr(100),
   paymentDate: z.coerce.date({ error: 'Enter a valid payment date.' }).optional(),
+  invoiceKeys,
 });
 
 /** Approve/Reject a Pending recorded client payment. */
@@ -217,6 +223,7 @@ export const recordSubcontractorPaymentSchema = z.object({
   amount: paymentAmount,
   paymentReference: optionalStr(100),
   paymentDate: z.coerce.date({ error: 'Enter a valid payment date.' }).optional(),
+  invoiceKeys,
 });
 
 export const decideSubcontractorPaymentSchema = z.object({

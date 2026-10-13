@@ -162,3 +162,32 @@ Mobilisation's MODEL, never its service, for the same reason).
   drill-down's own banner when one exists). If the user wants a company-
   wide "which clients are sitting on a credit balance" report, that's a new
   small aggregate query, not built here since it wasn't asked for.
+
+
+## 2026-10-13: payments are applied to the invoices the recorder picks
+
+**Replaces** "nothing about allocation is stored; it is always oldest invoice first". The balance is still computed live,
+never stored; what is stored is what the recorder chose.
+
+- **Record.** `POST /deployments/payments-due/:clientId/payments` (and `/sub-payments-due/:subcontractorId/payments`) take an
+  optional `invoiceKeys` array, in the order to be paid. The server prices it (`planAllocations`,
+  `deployments/paymentAllocation.js`): money = the amount received + the unallocated credit already on the account; each picked
+  invoice takes what it still owes, in order, until the money runs out. The result is stored on the payment as
+  `allocated: true` and `allocations: [{ invoiceKey, invoiceNumber, amount }]`. An invoice that is not outstanding, or picked
+  twice, is refused with 400. Without `invoiceKeys` the payment is stored as before (`allocated: false`).
+- **An invoice** is every invoiced entry of that party sharing one invoice number (key `no:<number lowercased>`); an entry
+  with no number is its own (`entry:<id>`). `perEntry` in the detail response gained `invoiceKey`.
+- **Live allocation** (`allocatePayments`, shared by both ledgers): older, unpicked payments first, oldest invoice first
+  (exactly the old maths); then picked payments oldest first, each filling its stored allocations in order, capped by what the
+  invoice still owes and by the money actually on the account. What is left is `creditBalance`; it needs no field.
+- **Credit** is joined to the next payment automatically (the form says so); the recorder picks the invoices for the combined
+  money. A payment that is Pending or Rejected never counts.
+- **Approval.** Unchanged: approve or reject, nothing else. The queue and the payment history show "Applied to: INV-A 4,000.00
+  · INV-B 5,000.00 ...".
+- **Web / phone.** The record form (Payments Due and Sub Payments Due) has the picker: a searchable dropdown to add an
+  invoice, an ordered list with what each takes ("Paid in full" / "Pays X, Y still to pay"), a Remove on each, and "Left over
+  as credit on the account". `features/deployments/paymentPlan.js` previews it; the server is the authority.
+- **Why the wrapper.** `clientPayment.service.js` must not import `deployment.service.js` (circular), so
+  `recordClientPaymentForInvoices` (deployment.service.js) and `recordSubcontractorPaymentForInvoices`
+  (subcontractorInvoice.service.js) price the invoices and hand the plan to the payment services.
+- Tests: `payments.allocation.test.js`.
