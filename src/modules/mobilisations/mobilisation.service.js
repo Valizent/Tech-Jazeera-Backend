@@ -1026,7 +1026,7 @@ async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
   if (coordinator) conditions.push({ 'coordinators.user': coordinator });
   if (search) {
     const rx = { $regex: escapeRegex(search), $options: 'i' };
-    conditions.push({ $or: [{ workerName: rx }, { clientName: rx }, { jobTitle: rx }, { serialNumber: rx }] });
+    conditions.push({ $or: [{ workerName: rx }, { iqamaNumber: rx }, { clientName: rx }, { jobTitle: rx }, { serialNumber: rx }] });
   }
 
   let isViewer = false;

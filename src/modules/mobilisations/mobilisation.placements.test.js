@@ -188,6 +188,14 @@ describe('site', () => {
     await expect(listMobilisations({ ...LIST, site: '[' }, admin)).resolves.toMatchObject({ total: 0 });
   });
 
+  it('finds a placement by the Iqama number of its worker', async () => {
+    const live = await placement();
+    await placement({ site: 'Abha' });
+    const iqamaNumber = (await Mobilisation.findById(live._id).lean()).iqamaNumber;
+    const { items } = await listMobilisations({ ...LIST, search: iqamaNumber }, admin);
+    expect(items.map((m) => String(m._id))).toEqual([String(live._id)]);
+  });
+
   it('sorts by site', async () => {
     await placement({ site: 'Yanbu' });
     await placement({ site: 'Abha' });
