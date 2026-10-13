@@ -49,7 +49,9 @@ export async function bulkApprove(req, res) {
  *  has put into a real Approval Role (the same dynamic "sits somewhere in the
  *  hierarchy" rule the Approval Log uses) who also holds 'timesheetRequests'
  *  Read. Your OWN report only needs 'timesheetOwn' Read (checked by the route)
- *  and your own employee record as the subject. */
+ *  and your own employee record as the subject. Your own record is never put
+ *  through the Coordinator team check: it is rarely on your own team, so
+ *  applying it locked a Coordinator out of their own month (fixed 2026-10-13). */
 async function assertReportEligible(req, employeeId) {
   const isOwn = Boolean(req.user.employee) && String(req.user.employee) === String(employeeId);
   const sees = { userId: req.user.id, role: req.user.role };
@@ -59,6 +61,7 @@ async function assertReportEligible(req, employeeId) {
   if (!canSeeAll || !isEligible) {
     throw new ApiError(403, canSeeAll ? 'You are not part of any approval role.' : 'You can only open your own timesheet.');
   }
+  if (!isOwn) await assertEmployeesInCoordinatorTeam([employeeId], actor(req));
 }
 
 /**
@@ -75,7 +78,6 @@ export async function getMonthlyReport(req, res) {
 
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
-  await assertEmployeesInCoordinatorTeam([employeeId], actor(req));
 
   const result = await buildMonthlyAttendanceReport(employee, { month, year });
   res.json(new ApiResponse('Monthly report.', result));
@@ -94,7 +96,6 @@ export async function generateMonthlyReport(req, res) {
 
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
-  await assertEmployeesInCoordinatorTeam([employeeId], actor(req));
 
   const result = await buildMonthlyAttendanceReport(employee, { month, year });
   const logo = await getLogoForEmbedding();
