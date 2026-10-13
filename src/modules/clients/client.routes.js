@@ -18,7 +18,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireRoles, requireStaff } from '../../middleware/rbac.js';
+import { requireRoles, requireStaffOrExecutive } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
@@ -33,7 +33,9 @@ import * as clientController from './client.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaff); // staff-only module; Workers use the ESS portal (P2-M2)
+// Staff-only module; Workers use the ESS portal (P2-M2). Executive logins (MM, FM, COO, GM) are let
+// through the door; every route still needs its own Section Access grant.
+router.use(requireStaffOrExecutive);
 
 const canReadClients = requireSectionAccess('clientsManage', 'read');
 const canManageClients = requireSectionAccess('clientsManage', 'write');
@@ -58,9 +60,10 @@ router.patch(
   validate({ params: clientIdParamSchema, body: decideClientSchema }),
   asyncHandler(clientController.decide)
 );
+// 2026-10-13 (Section Access redesign): deleting a record is Admin only in every module.
 router.delete(
   '/:id',
-  requireRoles('Admin', 'Manager'),
+  requireRoles('Admin'),
   validate({ params: clientIdParamSchema }),
   asyncHandler(clientController.remove)
 );

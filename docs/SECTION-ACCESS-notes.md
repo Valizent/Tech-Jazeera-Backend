@@ -976,3 +976,64 @@ login-role lists for edit (Admin/Manager/HR) and delete (Admin/HR); salary came 
 **To set up after deploying** (Section Access page, Workforce -> Employees): see the milestone report; in short:
 tick the add group under "Employees view & add" -> Write, switch "All office staff" on under Read, tick Management
 under "Employees salary & pay", and tick Delete for Admin-only (leave empty) or a chosen circle.
+
+## 2026-10-13: Section Access redesign, milestone 2 (Leave, Timesheets, EOSB, Annual Vacation, Department)
+
+- **New keys.** `leaveApply` (Write: file your own leave) and `timesheetOwn` (Read: open your own monthly timesheet).
+  Both start by borrowing a circle (`FALLBACK_KEY` in `sectionAccess.service.js`): `leaveApply` <- `leaveRequests` Write,
+  `timesheetOwn` <- everyone who can read `timesheetRequests`. Saving the key (even empty) ends the borrowing.
+- **Leave.** `POST /leave` needs `leaveApply`; `GET /leave` and attachments need `leaveRequests` Read OR `leaveApply`
+  Write (`requireAnySectionAccess`). Without `leaveRequests` Read the list is scoped to the caller's own employee
+  (`actor.ownOnly`). Deciding is unchanged (`leaveRequests` Write + the real workflow membership).
+- **Timesheets.** The monthly report (`GET/POST /timesheets/monthly-report`) opens with `timesheetRequests` Read OR
+  `timesheetOwn` Read. Another person's report needs `timesheetRequests` Read AND an approval-role membership (as
+  before); your own needs only `timesheetOwn`.
+- **All office staff, except roles.** `allStaffExceptRoles` on a SectionAccess document: members of those approval roles
+  are not covered by either All-office-staff switch of that section. A person also named in a role grant keeps it.
+- **Department.** `employees/departments.js`: `EMPLOYEE_DEPARTMENTS` and `normalizeDepartment` (accounts/accounting/
+  finance -> Accounts, etc.). The employee validation accepts only the list; "" leaves the stored value alone.
+- **Routing by department.** `ApprovalWorkflow.departmentRoutes: [{ department, workflow }]` on a DEFAULT workflow.
+  `resolveApprovalWorkflow`: employee override > department route > default. Only a clearly recognised department routes.
+- **Index fix.** `appliesTo_default_unique` (partial: active AND non-empty `appliesTo`) replaces `appliesTo_1`, which made a
+  second active non-default workflow impossible. `retireLegacyWorkflowIndex()` drops the old index on boot.
+- **EOSB.** `GET /api/profile/eosb` for staff logins, `GET /api/me/eosb` for Worker/Staff (already existed, no screen used
+  it): the official settlement or null. Shown on the portal profile and on the staff "My details".
+- **Not code, set in the admin pages:** who holds Attendance records / sign in-out, who is in the leave and timesheet
+  circles, and the HR -> MM and BDM -> HR -> MM leave chains (per-employee workflow override) and the annual-vacation
+  chain with its Accounts route.
+
+## 2026-10-13: Section Access redesign, milestone 3 (the other modules)
+
+**Delete is Admin only.** `requireRoles('Admin')` on every record delete: `DELETE /clients/:id`,
+`/subcontractors/:id`, `/documents/:id`, `/assets/:id`, `/expenses/:id`, `/eosb/:id`, `/holidays/:id`,
+`/ramadan-periods/:id`, `/job-titles/:id`, the three NFC deletes. Not touched (not "records"): a coordinator removing
+their own daily task / requirement, a mobilisation's coordinator or document, an employee's login avatar.
+
+**Door.** `requireStaffOrExecutive` on clients, subcontractors, mobilisations and deployments. It only opens the door;
+per-route `requireSectionAccess` and the per-record visibility inside the services still decide what is returned.
+
+**Coordinator and money.** `COMMERCIAL_FIELDS` (rates, commission, FTA, allowances...) stay visible to a Coordinator who
+is on the record at every status; once the record is Approved/Completed `PROFIT_ESTIMATE_FIELDS` (`profitPerMonth`) and
+`PROFIT_RATE_FIELDS` (`profitPerHour`, `otProfitPerHour`) are removed from their view. Admin, a `mobilisationsViewer`
+member and a later-step reviewer are unchanged. Office Secretary at step 0 still does not see rates while reviewing.
+
+**Executive navigation.** `EXECUTIVE_GRANTED_ITEMS` (web `navConfig.js`) and the tail of `EXECUTIVE_NAV_ITEMS` (phone
+`navConfig.js`): the normal nav item for each module, shown only when the login holds the grant in
+`EXECUTIVE_GRANT_BY_PATH`.
+
+**Configuration, not code** (Section Access page, Approval Hierarchy):
+
+| Decision | Where |
+|---|---|
+| Clients / Subcontractors: view all, add + edit BDM, MM, Coordinators, Office Secretary | `clientsManage`, `subcontractorsManage`: Read = All office staff; Write = that role |
+| Mobilisation create | `mobilisationsSelfMobilise` Write (Coordinators, MM, BDM; Office Secretary is built in) |
+| See every mobilisation | `mobilisationsViewer` Read (MM, FM, COO, GM, BDM, Office Secretary, Accounts) |
+| Enter hours / approve hours / invoice + record payments / approve payments / edit | `deploymentsHours`, `deploymentsHoursDecide`, `deploymentsInvoicing`, `deploymentsPaymentDecide`, `deploymentsEdit` |
+| Daily Updates / Requirements oversight | `dailyUpdatesTeam` / `requirementsTeam`: Write MM, BDM; Read COO, GM |
+| Expenses | `expenses`: Read MM, FM, COO, GM; Write FM, Accounts |
+| Dashboard profit | `dashboardProfit` Read |
+| Documents, Assets | `documentsManage`, `assetsManage`: Read + Write HR, Office Secretary, MM, FM, COO, GM |
+| Holidays, Ramadan | `holidays`, `ramadanManage` Write: HR |
+| EOSB | `eosb`: Write HR; Read MM, FM, COO, GM |
+| Approval Hierarchy, Reconciliation (view) | `approvalHierarchy`, `reconciliation` Read: MM, COO, GM |
+| NFC | `nfc`: nobody granted (Admin only) |

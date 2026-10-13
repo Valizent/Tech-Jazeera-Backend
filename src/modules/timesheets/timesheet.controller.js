@@ -7,6 +7,7 @@ import ApiError from '../../utils/ApiError.js';
 import ApiResponse from '../../utils/ApiResponse.js';
 import Employee from '../employees/employee.model.js';
 import { isApprovalRoleMember } from '../approvals/approvals.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import { assertEmployeesInCoordinatorTeam } from '../attendance/attendance.service.js';
 import { getLogoForEmbedding } from '../companySettings/companySettings.service.js';
 import { buildTimesheetXlsx } from '../timesheetProcessor/timesheet.export.js';
@@ -44,12 +45,20 @@ export async function bulkApprove(req, res) {
   res.json(new ApiResponse(`${result.approved} of ${result.requested} timesheet(s) approved.`, result));
 }
 
-/** Shared by both handlers below: Admin, or anyone the Admin has put into a
- *  real Approval Role — the same dynamic, DB-checked "sits somewhere in the
- *  hierarchy" rule the Approval Log uses, not a fixed list of login roles. */
-async function assertReportEligible(req) {
+/** Shared by both handlers below. Everyone's report: Admin, or anyone the Admin
+ *  has put into a real Approval Role (the same dynamic "sits somewhere in the
+ *  hierarchy" rule the Approval Log uses) who also holds 'timesheetRequests'
+ *  Read. Your OWN report only needs 'timesheetOwn' Read (checked by the route)
+ *  and your own employee record as the subject. */
+async function assertReportEligible(req, employeeId) {
+  const isOwn = Boolean(req.user.employee) && String(req.user.employee) === String(employeeId);
+  const sees = { userId: req.user.id, role: req.user.role };
+  if (isOwn && (await canAccessSection('timesheetOwn', sees, 'read'))) return;
+  const canSeeAll = await canAccessSection('timesheetRequests', sees, 'read');
   const isEligible = req.user.role === 'Admin' || (await isApprovalRoleMember(req.user.id));
-  if (!isEligible) throw new ApiError(403, 'You are not part of any approval role.');
+  if (!canSeeAll || !isEligible) {
+    throw new ApiError(403, canSeeAll ? 'You are not part of any approval role.' : 'You can only open your own timesheet.');
+  }
 }
 
 /**
@@ -61,9 +70,9 @@ async function assertReportEligible(req) {
  * the browser can render it before anyone decides whether to export it.
  */
 export async function getMonthlyReport(req, res) {
-  await assertReportEligible(req);
-
   const { employeeId, month, year } = req.query;
+  await assertReportEligible(req, employeeId);
+
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
   await assertEmployeesInCoordinatorTeam([employeeId], actor(req));
@@ -80,9 +89,9 @@ export async function getMonthlyReport(req, res) {
  * Timesheet Processor's export. Same eligibility floor as GET above.
  */
 export async function generateMonthlyReport(req, res) {
-  await assertReportEligible(req);
-
   const { employeeId, month, year } = req.body;
+  await assertReportEligible(req, employeeId);
+
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
   await assertEmployeesInCoordinatorTeam([employeeId], actor(req));

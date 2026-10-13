@@ -7,6 +7,7 @@
  * replacing the previous hardcoded Admin/HR check.
  */
 import { Router } from 'express';
+import { requireRoles } from '../../middleware/rbac.js';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
@@ -33,9 +34,10 @@ router.patch(
   validate({ params: holidayIdParamSchema, body: updateHolidaySchema }),
   asyncHandler(holidayController.update)
 );
+// 2026-10-13 (Section Access redesign): deleting a record is Admin only in every module.
 router.delete(
   '/:id',
-  canManageHolidays,
+  requireRoles('Admin'),
   validate({ params: holidayIdParamSchema }),
   asyncHandler(holidayController.remove)
 );

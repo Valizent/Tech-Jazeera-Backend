@@ -21,7 +21,7 @@ import asyncHandler from '../../utils/asyncHandler.js';
 import logger from '../../config/logger.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { requireRoles } from '../../middleware/rbac.js';
-import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
+import { requireSectionAccess, requireAnySectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import { uploadSingle, destroyDocumentFile } from '../../middleware/upload.js';
 import { listLeaveRequestsSchema, submitLeaveRequestSchema, decideLeaveRequestSchema, leaveRequestIdParamSchema } from './leave.validation.js';
@@ -31,17 +31,21 @@ const router = Router();
 
 router.use(requireAuth);
 
-const canReadLeaveRequests = requireSectionAccess('leaveRequests', 'read');
 const canWriteLeaveRequests = requireSectionAccess('leaveRequests', 'write');
+// 2026-10-13: filing your OWN request is its own permission ('leaveApply'),
+// separate from seeing and deciding everyone's ('leaveRequests'). Someone who
+// can only apply sees just their own requests in the same list.
+const canApplyForLeave = requireSectionAccess('leaveApply', 'write');
+const canOpenLeaveList = requireAnySectionAccess(['leaveRequests', 'read'], ['leaveApply', 'write']);
 
-router.get('/', canReadLeaveRequests, validate({ query: listLeaveRequestsSchema }), asyncHandler(leaveController.list));
+router.get('/', canOpenLeaveList, validate({ query: listLeaveRequestsSchema }), asyncHandler(leaveController.list));
 // A staff member submitting their OWN leave request (Coordinator/HR/Manager/
 // Accounts) — the self-submission gap the Approval Hierarchy work filled.
 // Admin has no Employee record and gets a clear 400 from the controller.
-router.post('/', canWriteLeaveRequests, uploadSingle, validate({ body: submitLeaveRequestSchema }), asyncHandler(leaveController.submit));
+router.post('/', canApplyForLeave, uploadSingle, validate({ body: submitLeaveRequestSchema }), asyncHandler(leaveController.submit));
 router.get(
   '/:id/attachment',
-  canReadLeaveRequests,
+  canOpenLeaveList,
   validate({ params: leaveRequestIdParamSchema }),
   asyncHandler(leaveController.attachment)
 );

@@ -34,7 +34,8 @@ router.use(requireStaffOrSelfServiceGrant('assetsManage'));
 
 const canRead = requireSectionAccess('assetsManage', 'read');
 const canWrite = requireSectionAccess('assetsManage', 'write');
-const canDelete = requireRoles('Admin', 'HR');
+// 2026-10-13 (Section Access redesign): deleting a record is Admin only in every module.
+const canDelete = requireRoles('Admin');
 
 router.get('/', canRead, validate({ query: listAssetsSchema }), asyncHandler(assetController.list));
 // Before the /:id catch-all, or "by-employee" is read as an asset id.

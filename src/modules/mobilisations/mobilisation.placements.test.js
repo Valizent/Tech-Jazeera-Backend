@@ -142,7 +142,8 @@ describe('who sees an approved placement', () => {
     const [row] = (await listMobilisations(LIST, finalApprover)).items;
     expect(String(row._id)).toBe(String(live._id));
     expect(row).not.toHaveProperty('clientQuotation');
-    expect(row).not.toHaveProperty('clientRate');
+    // Listed here as a coordinator so the row is visible at all; a coordinator keeps the rates of a
+    // placement they run (2026-10-13), so only the review paperwork is asserted away.
   });
 });
 
@@ -192,5 +193,55 @@ describe('site', () => {
     await placement({ site: 'Abha' });
     const { items } = await listMobilisations({ ...LIST, sortBy: 'site', sortOrder: 'asc' }, admin);
     expect(items.map((m) => m.site)).toEqual(['Abha', 'Yanbu']);
+  });
+});
+
+describe('what a Coordinator sees of the money on their own placement (2026-10-13)', () => {
+  async function coordinatorPlacement(status) {
+    const coordinator = await login('Coordinator');
+    const circle = await ApprovalRole.create({ name: `Mobilisers ${unique()}`, members: [coordinator.id] });
+    await SectionAccess.create({ sectionKey: 'mobilisationsSelfMobilise', writeApprovalRoles: [circle._id] });
+    const created = await createMobilisation(
+      {
+        workerType: 'SupplierEmployee',
+        workerName: `Worker ${unique()}`,
+        iqamaNumber: iqama(),
+        jobTitle: 'Helper',
+        client: String(client._id),
+        clientRate: 30,
+        subcontractor: String(subcontractor._id),
+        subcontractorRate: 20,
+        requiredTimesheetHours: 200,
+        site: 'Jizan',
+        mobilisationDate: new Date('2031-01-01'),
+      },
+      coordinator
+    );
+    // The commission is set straight on the record: choosing who receives it is
+    // not what this test is about.
+    await Mobilisation.updateOne({ _id: created._id }, { status, clientCommission: 2 });
+    return { coordinator, id: String(created._id) };
+  }
+
+  it('keeps rate and commission after approval, but never the profit figures', async () => {
+    const { coordinator, id } = await coordinatorPlacement('Approved');
+    const seen = await getMobilisation(id, coordinator);
+    expect(seen).toMatchObject({ clientRate: 30, clientCommission: 2, subcontractorRate: 20 });
+    for (const hidden of ['profitPerHour', 'otProfitPerHour', 'profitPerMonth']) expect(seen).not.toHaveProperty(hidden);
+  });
+
+  it('still sees the per-hour profit they are working out while the record is a draft', async () => {
+    const { coordinator, id } = await coordinatorPlacement('Draft');
+    const seen = await getMobilisation(id, coordinator);
+    expect(seen).toMatchObject({ clientRate: 30 });
+    expect(seen).toHaveProperty('profitPerHour');
+    expect(seen).not.toHaveProperty('profitPerMonth');
+  });
+
+  it('keeps the same rule in the list', async () => {
+    const { coordinator } = await coordinatorPlacement('Approved');
+    const { items } = await listMobilisations(LIST, coordinator);
+    expect(items[0]).toMatchObject({ clientRate: 30, clientCommission: 2 });
+    expect(items[0]).not.toHaveProperty('profitPerHour');
   });
 });

@@ -419,7 +419,10 @@ export async function createEmployee(data, actor) {
 export async function updateEmployee(id, rawData, actor) {
   // Pay figures are changed only by someone who may see them; for everyone
   // else they are silently ignored so an edit form without those boxes works.
-  const data = actor.canSeeFinancial ? rawData : Object.fromEntries(Object.entries(rawData).filter(([k]) => !FINANCIAL_FIELDS.includes(k)));
+  const data = actor.canSeeFinancial ? { ...rawData } : Object.fromEntries(Object.entries(rawData).filter(([k]) => !FINANCIAL_FIELDS.includes(k)));
+  // "" for Department means "leave as is" (see employee.validation.js): an old
+  // free-text value is replaced only by picking one from the list, never wiped.
+  if ('department' in data && data.department === undefined) delete data.department;
   if ('manager' in data) await assertValidManager(data.manager);
   if ('approvalWorkflow' in data) await assertValidApprovalWorkflow(data.approvalWorkflow);
   if ('subcontractor' in data) await assertValidSubcontractor(data.subcontractor);

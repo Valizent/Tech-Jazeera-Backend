@@ -16,7 +16,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
+import { requireSectionAccess, requireAnySectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
   submitTimesheetSchema,
@@ -34,6 +34,9 @@ router.use(requireAuth);
 
 const canRead = requireSectionAccess('timesheetRequests', 'read');
 const canWrite = requireSectionAccess('timesheetRequests', 'write');
+// 2026-10-13: opening your OWN monthly timesheet is its own permission
+// ('timesheetOwn'); everyone's stays with 'timesheetRequests' Read.
+const canOpenMonthlyReport = requireAnySectionAccess(['timesheetRequests', 'read'], ['timesheetOwn', 'read']);
 
 router.get('/', canRead, validate({ query: listTimesheetsSchema }), asyncHandler(timesheetController.list));
 router.post('/', canWrite, validate({ body: submitTimesheetSchema }), asyncHandler(timesheetController.submit));
@@ -55,13 +58,13 @@ router.post(
 // same data to the .xlsx download — same eligibility floor, same builder.
 router.get(
   '/monthly-report',
-  canRead,
+  canOpenMonthlyReport,
   validate({ query: generateMonthlyReportSchema }),
   asyncHandler(timesheetController.getMonthlyReport)
 );
 router.post(
   '/monthly-report',
-  canRead,
+  canOpenMonthlyReport,
   validate({ body: generateMonthlyReportSchema }),
   asyncHandler(timesheetController.generateMonthlyReport)
 );

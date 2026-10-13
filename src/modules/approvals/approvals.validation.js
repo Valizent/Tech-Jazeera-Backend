@@ -4,6 +4,7 @@
  */
 import { z } from 'zod';
 import { APPROVAL_REQUEST_TYPES } from './approvalWorkflow.model.js';
+import { EMPLOYEE_DEPARTMENTS } from '../employees/departments.js';
 
 const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
 const objectId = (label) => z.string().regex(/^[a-f0-9]{24}$/i, `Invalid ${label} id.`);
@@ -29,10 +30,21 @@ const workflowStepSchema = z.object({
   roles: z.array(objectId('approval role')).min(1, 'Each step needs at least one role.'),
 });
 
+const departmentRouteSchema = z.object({
+  department: z.enum(EMPLOYEE_DEPARTMENTS, { error: 'Pick a department from the list.' }),
+  workflow: objectId('approval workflow'),
+});
+/** One route per department. */
+const departmentRoutes = z
+  .array(departmentRouteSchema)
+  .max(EMPLOYEE_DEPARTMENTS.length)
+  .refine((routes) => new Set(routes.map((r) => r.department)).size === routes.length, 'Each department can have one route.');
+
 export const createApprovalWorkflowSchema = z.object({
   name: z.string().trim().min(2, 'Name is required.').max(60),
   steps: z.array(workflowStepSchema).min(1, 'A workflow needs at least one step.'),
   appliesTo: z.array(z.enum(APPROVAL_REQUEST_TYPES)).default([]),
+  departmentRoutes: departmentRoutes.default([]),
   isActive: z.boolean().default(true),
 });
 
@@ -40,6 +52,7 @@ export const updateApprovalWorkflowSchema = z.object({
   name: z.string().trim().min(2).max(60).optional(),
   steps: z.array(workflowStepSchema).min(1).optional(),
   appliesTo: z.array(z.enum(APPROVAL_REQUEST_TYPES)).optional(),
+  departmentRoutes: departmentRoutes.optional(),
   isActive: z.boolean().optional(),
 });
 

@@ -28,5 +28,8 @@ router.use(requireRoles('Manager', 'HR', 'Accounts', 'Coordinator', 'Executive',
 
 router.get('/', asyncHandler(meController.getProfile));
 router.patch('/', validate({ body: updateMyProfileSchema }), asyncHandler(meController.updateProfile));
+// Their own official end-of-service settlement, once the company has calculated
+// it (null before that) - what Worker/Staff logins already see at /api/me/eosb.
+router.get('/eosb', asyncHandler(meController.getMyEosb));
 
 export default router;

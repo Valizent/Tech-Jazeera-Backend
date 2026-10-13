@@ -88,6 +88,8 @@ function publicUser(user) {
     role: user.role,
     avatarUrl: user.avatarUrl ?? null,
     forcePasswordChange: Boolean(user.forcePasswordChange),
+    // Their own Employee record, so a screen can open "my own" data (null for Admin).
+    employee: user.employee ? user.employee.toString() : null,
   };
 }
 

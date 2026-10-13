@@ -20,6 +20,7 @@
  * workflows' appliesTo collides even though the arrays themselves differ.
  */
 import mongoose from 'mongoose';
+import { EMPLOYEE_DEPARTMENTS } from '../employees/departments.js';
 
 export const APPROVAL_REQUEST_TYPES = [
   'Leave',
@@ -46,6 +47,18 @@ const workflowStepSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/** "For employees in this department, use that workflow instead" - lives on the
+ *  company-wide default for a request type (the workflow whose `appliesTo` lists
+ *  it). The target workflow is an ordinary workflow with an empty `appliesTo`, so
+ *  the one-default-per-type index below is untouched. */
+const departmentRouteSchema = new mongoose.Schema(
+  {
+    department: { type: String, enum: EMPLOYEE_DEPARTMENTS, required: true },
+    workflow: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalWorkflow', required: true },
+  },
+  { _id: false }
+);
+
 const approvalWorkflowSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, unique: true },
@@ -57,6 +70,7 @@ const approvalWorkflowSchema = new mongoose.Schema(
       },
     },
     appliesTo: { type: [{ type: String, enum: APPROVAL_REQUEST_TYPES }], default: [] },
+    departmentRoutes: { type: [departmentRouteSchema], default: [] },
     // Deactivate instead of delete — in-flight and decided requests freeze a
     // copy of `steps` at submission time (see e.g. leaveRequest.model.js),
     // but an Employee's `approvalWorkflow` override and this doc's own
@@ -66,9 +80,31 @@ const approvalWorkflowSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Only a workflow that is actually a DEFAULT for some request type competes for
+// the "one active default per type" rule. (2026-10-13: the old index also
+// counted an empty `appliesTo`, so a second active non-default workflow - a
+// per-employee override, or a department route - was refused with a misleading
+// "already has an active default" error: MongoDB indexes every empty array as
+// the same key.) Renamed, so the old index can be retired by
+// `retireLegacyWorkflowIndex` without an options conflict.
 approvalWorkflowSchema.index(
   { appliesTo: 1 },
-  { unique: true, partialFilterExpression: { isActive: true } }
+  { name: 'appliesTo_default_unique', unique: true, partialFilterExpression: { isActive: true, 'appliesTo.0': { $exists: true } } }
 );
 
-export default mongoose.model('ApprovalWorkflow', approvalWorkflowSchema);
+const ApprovalWorkflow = mongoose.model('ApprovalWorkflow', approvalWorkflowSchema);
+
+/** Drops the pre-2026-10-13 `appliesTo_1` unique index if a database still has
+ *  it. Idempotent and safe to run on every boot (called from server.js). */
+export async function retireLegacyWorkflowIndex() {
+  try {
+    await ApprovalWorkflow.collection.dropIndex('appliesTo_1');
+    return true;
+  } catch (err) {
+    // 26 = namespace not found (no collection yet), 27 = index not found.
+    if (err.code === 26 || err.code === 27 || /index not found|ns not found/i.test(err.message)) return false;
+    throw err;
+  }
+}
+
+export default ApprovalWorkflow;

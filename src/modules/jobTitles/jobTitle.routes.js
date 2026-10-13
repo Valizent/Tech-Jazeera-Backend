@@ -8,7 +8,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff } from '../../middleware/rbac.js';
+import { requireRoles, requireStaff } from '../../middleware/rbac.js';
 import { validate } from '../../middleware/validate.js';
 import {
   createJobTitleSchema,
@@ -29,6 +29,7 @@ router.patch(
   validate({ params: jobTitleIdParamSchema, body: updateJobTitleSchema }),
   asyncHandler(jobTitleController.update)
 );
-router.delete('/:id', validate({ params: jobTitleIdParamSchema }), asyncHandler(jobTitleController.remove));
+// 2026-10-13 (Section Access redesign): deleting a record is Admin only in every module.
+router.delete('/:id', requireRoles('Admin'), validate({ params: jobTitleIdParamSchema }), asyncHandler(jobTitleController.remove));
 
 export default router;

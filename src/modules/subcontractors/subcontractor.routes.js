@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff } from '../../middleware/rbac.js';
+import { requireRoles, requireStaffOrExecutive } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
@@ -27,7 +27,8 @@ import * as subcontractorController from './subcontractor.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaff);
+// Executive logins (MM, FM, COO, GM) pass the door; each route still needs its own grant.
+router.use(requireStaffOrExecutive);
 
 const canRead = requireSectionAccess('subcontractorsManage', 'read');
 const canWrite = requireSectionAccess('subcontractorsManage', 'write');
@@ -46,9 +47,10 @@ router.patch(
   validate({ params: subcontractorIdParamSchema, body: updateSubcontractorSchema }),
   asyncHandler(subcontractorController.update)
 );
+// 2026-10-13 (Section Access redesign): deleting a record is Admin only in every module.
 router.delete(
   '/:id',
-  canWrite,
+  requireRoles('Admin'),
   validate({ params: subcontractorIdParamSchema }),
   asyncHandler(subcontractorController.remove)
 );

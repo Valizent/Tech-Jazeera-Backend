@@ -531,10 +531,18 @@ export async function listLeaveRequests({ page, limit, status, employee }, actor
   if (status) filter.status = status;
   if (employee) filter.employee = employee;
 
+  // Only 'leaveApply' (no queue access): this person sees their own requests, nothing else.
+  if (actor.ownOnly) {
+    if (employee && employee !== String(actor.employee)) {
+      throw new ApiError(403, 'You do not have access to this employee.');
+    }
+    filter.employee = actor.employee ?? null;
+  }
+
   // Hoisted so it can also build `isInLegacyScope` below, without a second
   // identical query (2026-09-29 fix).
   let teamIdStrings = null;
-  if (actor.role === 'Coordinator') {
+  if (actor.role === 'Coordinator' && !actor.ownOnly) {
     const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
     teamIdStrings = new Set(teamIds.map((id) => id.toString()));
     const visibleIds = actor.employee ? [...teamIds, actor.employee] : teamIds;
@@ -680,6 +688,9 @@ export async function getMyAttachmentFile(employeeId, id) {
 export async function getAttachmentFile(id, actor) {
   const request = await LeaveRequest.findById(id).lean();
   if (!request) throw new ApiError(404, 'Leave request not found.');
+  if (actor.ownOnly && String(request.employee) !== String(actor.employee)) {
+    throw new ApiError(403, 'You do not have access to this request.');
+  }
   await assertEmployeeScope(actor, request.employee);
   return resolveAttachment(request);
 }

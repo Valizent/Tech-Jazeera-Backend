@@ -13,6 +13,7 @@
  * a rejected upload never leaves an orphan behind.
  */
 import { Router } from 'express';
+import { requireRoles } from '../../middleware/rbac.js';
 import asyncHandler from '../../utils/asyncHandler.js';
 import logger from '../../config/logger.js';
 import { requireAuth } from '../../middleware/auth.js';
@@ -34,7 +35,8 @@ router.use(requireStaffOrSelfServiceGrant('documentsManage'));
 
 const canRead = requireSectionAccess('documentsManage', 'read');
 const canWrite = requireSectionAccess('documentsManage', 'write');
-const canDelete = canWrite;
+// 2026-10-13 (Section Access redesign): deleting a record is Admin only in every module.
+const canDelete = requireRoles('Admin');
 
 router.get('/', canRead, validate({ query: listDocumentsSchema }), asyncHandler(documentController.list));
 router.get(

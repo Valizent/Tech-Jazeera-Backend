@@ -45,7 +45,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff } from '../../middleware/rbac.js';
+import { requireStaffOrExecutive } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import { uploadSingle, destroyDocumentFile } from '../../middleware/upload.js';
@@ -77,7 +77,8 @@ import * as deploymentController from './deployment.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaff);
+// Executive logins (MM, FM, COO, GM) pass the door; what they see is still decided per record / per grant.
+router.use(requireStaffOrExecutive);
 
 const canRelease = requireSectionAccess('deploymentsRelease', 'write');
 const canDecideHours = requireSectionAccess('deploymentsHoursDecide', 'write');

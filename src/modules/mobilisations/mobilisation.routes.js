@@ -12,7 +12,7 @@ import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import logger from '../../config/logger.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff, requireRoles } from '../../middleware/rbac.js';
+import { requireStaffOrExecutive, requireRoles } from '../../middleware/rbac.js';
 import { validate } from '../../middleware/validate.js';
 import { uploadMultiple, destroyDocumentFile } from '../../middleware/upload.js';
 import {
@@ -39,7 +39,8 @@ import * as mobilisationController from './mobilisation.controller.js';
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireStaff);
+// Executive logins (MM, FM, COO, GM) pass the door; what they see is still decided per record / per grant.
+router.use(requireStaffOrExecutive);
 
 router.get('/', validate({ query: listMobilisationsSchema }), asyncHandler(mobilisationController.list));
 // Before the /:id catch-all, or these are read as a mobilisation id.

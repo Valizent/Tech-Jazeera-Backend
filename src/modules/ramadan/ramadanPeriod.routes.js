@@ -10,6 +10,7 @@
  * Admin/Manager/HR circle exactly.
  */
 import { Router } from 'express';
+import { requireRoles } from '../../middleware/rbac.js';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
@@ -42,9 +43,10 @@ router.patch(
   validate({ params: ramadanPeriodIdParamSchema, body: updateRamadanPeriodSchema }),
   asyncHandler(ramadanPeriodController.update)
 );
+// 2026-10-13 (Section Access redesign): deleting a record is Admin only in every module.
 router.delete(
   '/:id',
-  canManageRamadan,
+  requireRoles('Admin'),
   validate({ params: ramadanPeriodIdParamSchema }),
   asyncHandler(ramadanPeriodController.remove)
 );

@@ -18,4 +18,5 @@ export const updateSectionAccessSchema = z.object({
   writeApprovalRoles: z.array(approvalRoleId).max(50),
   readAllStaff: z.boolean().optional(),
   writeAllStaff: z.boolean().optional(),
+  allStaffExceptRoles: z.array(approvalRoleId).max(50).optional(),
 });

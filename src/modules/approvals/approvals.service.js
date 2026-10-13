@@ -7,6 +7,7 @@
  */
 import ApprovalRole from './approvalRole.model.js';
 import ApprovalWorkflow from './approvalWorkflow.model.js';
+import { normalizeDepartment } from '../employees/departments.js';
 import User from '../auth/user.model.js';
 import LeaveRequest from '../leave/leaveRequest.model.js';
 import ExitReentryRequest from '../exitDocuments/exitReentry.model.js';
@@ -112,7 +113,11 @@ export async function updateApprovalRole(id, data, actor) {
 // ---------------------------------------------------------------------------
 
 export async function listApprovalWorkflows() {
-  return ApprovalWorkflow.find().sort({ name: 1 }).populate('steps.roles', 'name isActive').lean();
+  return ApprovalWorkflow.find()
+    .sort({ name: 1 })
+    .populate('steps.roles', 'name isActive')
+    .populate('departmentRoutes.workflow', 'name isActive')
+    .lean();
 }
 
 /** Every role referenced by a step must exist and be active. */
@@ -135,10 +140,24 @@ function rethrowAppliesToCollision(err) {
   throw err;
 }
 
+/** Every route must point at a real, active workflow other than the one being
+ *  saved, and only a workflow that is itself a default can carry routes. */
+async function assertValidDepartmentRoutes(routes, appliesTo, selfId) {
+  if (!routes?.length) return;
+  if (!appliesTo?.length) {
+    throw new ApiError(400, 'Department routes can only be set on a default workflow (one that applies to a request type).');
+  }
+  const ids = routes.map((r) => String(r.workflow));
+  if (selfId && ids.includes(String(selfId))) throw new ApiError(400, 'A workflow cannot route to itself.');
+  const found = await ApprovalWorkflow.countDocuments({ _id: { $in: ids }, isActive: true });
+  if (found !== new Set(ids).size) throw new ApiError(400, 'One or more department routes point at a workflow that is missing or inactive.');
+}
+
 export async function createApprovalWorkflow(data, actor) {
   const existing = await ApprovalWorkflow.findOne({ name: data.name }).lean();
   if (existing) throw new ApiError(409, 'An approval workflow with this name already exists.');
   await assertValidSteps(data.steps);
+  await assertValidDepartmentRoutes(data.departmentRoutes, data.appliesTo, null);
 
   let workflow;
   try {
@@ -160,11 +179,16 @@ export async function createApprovalWorkflow(data, actor) {
 
 export async function updateApprovalWorkflow(id, data, actor) {
   if (data.steps) await assertValidSteps(data.steps);
+  if (data.departmentRoutes?.length) {
+    const current = await ApprovalWorkflow.findById(id).select('appliesTo').lean();
+    await assertValidDepartmentRoutes(data.departmentRoutes, data.appliesTo ?? current?.appliesTo, id);
+  }
 
   let workflow;
   try {
     workflow = await ApprovalWorkflow.findByIdAndUpdate(id, data, { new: true, runValidators: true })
       .populate('steps.roles', 'name isActive')
+      .populate('departmentRoutes.workflow', 'name isActive')
       .lean();
   } catch (err) {
     rethrowAppliesToCollision(err);
@@ -196,7 +220,17 @@ export async function resolveApprovalWorkflow(employee, requestType) {
     const override = await ApprovalWorkflow.findById(employee.approvalWorkflow).lean();
     if (override?.isActive) return override;
   }
-  return ApprovalWorkflow.findOne({ appliesTo: requestType, isActive: true }).lean();
+  const companyDefault = await ApprovalWorkflow.findOne({ appliesTo: requestType, isActive: true }).lean();
+  // 2026-10-13: the default may route by the employee's department (e.g. annual
+  // vacation: Accounts -> FM, everyone else -> MM). Only a clearly recognisable
+  // department routes; anything else falls back to the default itself.
+  const department = normalizeDepartment(employee.department);
+  const route = department && companyDefault?.departmentRoutes?.find((r) => r.department === department);
+  if (route) {
+    const routed = await ApprovalWorkflow.findById(route.workflow).lean();
+    if (routed?.isActive) return routed;
+  }
+  return companyDefault;
 }
 
 // ---------------------------------------------------------------------------

@@ -58,6 +58,8 @@ const SECTION_LABELS = {
   employeeEdit: 'Employees edit',
   employeeDelete: 'Employees delete',
   employeeFinancial: 'Employees salary & pay',
+  leaveApply: 'Leave apply for yourself',
+  timesheetOwn: 'Timesheets see your own',
 };
 
 /** What each section IS FOR, in plain English — not what Read/Write
@@ -114,37 +116,61 @@ const SECTION_DESCRIPTIONS = {
   companyDetailsManager: 'Chooses who is reminded every 5 days, from day 45, while a client or subcontractor is still missing company details. Tick the Marketing Manager role under Write; Read is not used.',
   employeeEdit: 'Chooses who may change an existing employee or outsourced worker. Tick under Write; Read is not used. Until you set it here, it follows whoever may add employees ("Employees view & add", Write).',
   employeeDelete: 'Chooses who may delete an employee or outsourced worker. Tick under Write; Read is not used. Admin only until you grant it.',
+  leaveApply: 'Chooses who may file a leave request for themselves (they then see only their own requests). Tick under Write; Read is not used. Until you set it here, it follows whoever holds Write on Leave requests. Seeing and deciding everyone\'s requests stays with "Leave requests".',
+  timesheetOwn: 'Chooses who may open their own monthly timesheet without seeing everyone\'s. Tick under Read; Write is not used. Until you set it here, it follows whoever may read Timesheet requests. Seeing everyone\'s stays with "Timesheet requests".',
   employeeFinancial: 'Chooses who may see the salary and pay breakdown (Basic, Housing, Transport). Tick under Read; Write is not used. Everyone else never receives these figures, on the web or the phone. Admin only until you grant it. Each person always sees their own pay in their own portal.',
 };
 
 function defaultFor(sectionKey) {
-  return { sectionKey, readApprovalRoles: [], writeApprovalRoles: [], readAllStaff: false, writeAllStaff: false };
+  return {
+    sectionKey,
+    readApprovalRoles: [],
+    writeApprovalRoles: [],
+    readAllStaff: false,
+    writeAllStaff: false,
+    allStaffExceptRoles: [],
+  };
 }
 
-/** A section nobody has configured yet that borrows another section's Write
- *  circle until an Admin sets it. `employeeEdit` follows `employeeCreate`
- *  ("same group as Add") so switching on the new key never strands the people
- *  who could already add employees. Only the Write tier is borrowed. */
-const FALLBACK_KEY = { employeeEdit: 'employeeCreate' };
+/** A section nobody has configured yet that borrows another section's circle
+ *  until an Admin sets it, so switching on a new key never strands people who
+ *  already had that ability. `tier` is the tier of the NEW key that is
+ *  borrowed: 'write' takes the source's Write circle, 'read' takes everyone who
+ *  can read the source (its Read and Write circles together). Saving the key,
+ *  even empty, ends the borrowing. */
+const FALLBACK_KEY = {
+  employeeEdit: { from: 'employeeCreate', tier: 'write' },
+  leaveApply: { from: 'leaveRequests', tier: 'write' },
+  timesheetOwn: { from: 'timesheetRequests', tier: 'read' },
+};
 
 /** Sections that are a single yes/no permission: only this tier means anything,
  *  so the admin page shows just that one list instead of Read and Write. */
-const ONLY_TIER = { employeeEdit: 'write', employeeDelete: 'write', employeeFinancial: 'read' };
+const ONLY_TIER = { employeeEdit: 'write', employeeDelete: 'write', employeeFinancial: 'read', leaveApply: 'write', timesheetOwn: 'read' };
 
 /** The settings that apply to `key`: its own document, else the borrowed
  *  circle, else nobody (Admin only). `bySectionKey` holds already-loaded docs. */
 function settingsFor(bySectionKey, key) {
   const own = bySectionKey.get(key);
   if (own) return { ...defaultFor(key), ...own };
-  const source = FALLBACK_KEY[key] && bySectionKey.get(FALLBACK_KEY[key]);
-  if (source) {
-    return { ...defaultFor(key), writeApprovalRoles: source.writeApprovalRoles, writeAllStaff: source.writeAllStaff ?? false };
+  const fallback = FALLBACK_KEY[key];
+  const source = fallback && bySectionKey.get(fallback.from);
+  if (!source) return defaultFor(key);
+  const base = defaultFor(key);
+  const exceptRoles = source.allStaffExceptRoles ?? [];
+  if (fallback.tier === 'write') {
+    return { ...base, writeApprovalRoles: source.writeApprovalRoles, writeAllStaff: source.writeAllStaff ?? false, allStaffExceptRoles: exceptRoles };
   }
-  return defaultFor(key);
+  return {
+    ...base,
+    readApprovalRoles: [...(source.readApprovalRoles ?? []), ...(source.writeApprovalRoles ?? [])],
+    readAllStaff: Boolean(source.readAllStaff || source.writeAllStaff),
+    allStaffExceptRoles: exceptRoles,
+  };
 }
 
 export async function getSectionAccess(sectionKey) {
-  const keys = [sectionKey, FALLBACK_KEY[sectionKey]].filter(Boolean);
+  const keys = [sectionKey, FALLBACK_KEY[sectionKey]?.from].filter(Boolean);
   const docs = await SectionAccess.find({ sectionKey: { $in: keys } }).lean();
   return settingsFor(new Map(docs.map((d) => [d.sectionKey, d])), sectionKey);
 }
@@ -155,6 +181,7 @@ export async function listSectionAccess() {
   const docs = await SectionAccess.find({})
     .populate('readApprovalRoles', 'name')
     .populate('writeApprovalRoles', 'name')
+    .populate('allStaffExceptRoles', 'name')
     .lean();
   const bySectionKey = new Map(docs.map((d) => [d.sectionKey, d]));
   return SECTION_KEYS.map((key) => ({
@@ -197,13 +224,17 @@ export async function canAccessSection(sectionKey, actor, level = 'write') {
   if (actor.role === 'Admin') return true;
   const settings = await getSectionAccess(sectionKey);
 
-  // "All office staff" switch: any non-self-service login that passed the floor.
-  if (!selfService && settings.writeAllStaff) return true;
+  // "All office staff" switch: any non-self-service login that passed the floor,
+  // except members of the section's "except" roles.
+  const switchedOn = !selfService && (settings.writeAllStaff || (level === 'read' && settings.readAllStaff));
+  const excluded =
+    switchedOn && settings.allStaffExceptRoles?.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.allStaffExceptRoles));
+  if (!selfService && settings.writeAllStaff && !excluded) return true;
   const hasWrite = settings.writeApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.writeApprovalRoles));
   if (hasWrite) return true;
   if (level !== 'read') return false;
 
-  if (!selfService && settings.readAllStaff) return true;
+  if (!selfService && settings.readAllStaff && !excluded) return true;
   return settings.readApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.readApprovalRoles));
 }
 
@@ -238,6 +269,7 @@ export async function getMySectionAccess(actor) {
   for (const doc of docs) {
     for (const id of doc.readApprovalRoles) allRoleIds.add(id.toString());
     for (const id of doc.writeApprovalRoles) allRoleIds.add(id.toString());
+    for (const id of doc.allStaffExceptRoles ?? []) allRoleIds.add(id.toString());
   }
 
   const myRoles = allRoleIds.size
@@ -253,13 +285,14 @@ export async function getMySectionAccess(actor) {
   const evaluatedKeys = selfService ? SECTION_KEYS.filter((k) => SELF_SERVICE_GRANTABLE_KEYS.includes(k)) : SECTION_KEYS;
   for (const key of evaluatedKeys) {
     const settings = settingsFor(bySectionKey, key);
-    const hasWrite = (!selfService && settings.writeAllStaff) || settings.writeApprovalRoles.some((id) => myRoleIds.has(id.toString()));
+    const excluded = (settings.allStaffExceptRoles ?? []).some((id) => myRoleIds.has(id.toString()));
+    const hasWrite = (!selfService && settings.writeAllStaff && !excluded) || settings.writeApprovalRoles.some((id) => myRoleIds.has(id.toString()));
     if (hasWrite) {
       write.push(key);
       read.push(key);
       continue;
     }
-    const hasRead = (!selfService && settings.readAllStaff) || settings.readApprovalRoles.some((id) => myRoleIds.has(id.toString()));
+    const hasRead = (!selfService && settings.readAllStaff && !excluded) || settings.readApprovalRoles.some((id) => myRoleIds.has(id.toString()));
     if (hasRead) read.push(key);
   }
   return { read, write };
@@ -301,10 +334,22 @@ async function assertValidApprovalRoles(roleIds, sectionKey) {
 
 /** Admin-only (enforced by the route) — deciding who else can open a
  *  section is not itself delegable to whoever that grant creates. */
-export async function updateSectionAccess(sectionKey, { readApprovalRoles, writeApprovalRoles, readAllStaff, writeAllStaff }, actor) {
+export async function updateSectionAccess(
+  sectionKey,
+  { readApprovalRoles, writeApprovalRoles, readAllStaff, writeAllStaff, allStaffExceptRoles },
+  actor
+) {
   if (!SECTION_KEYS.includes(sectionKey)) throw new ApiError(404, 'Unknown section.');
   await assertValidApprovalRoles(readApprovalRoles, sectionKey);
   await assertValidApprovalRoles(writeApprovalRoles, sectionKey);
+  // Excluding a role grants it nothing, so the reserved Worker/Staff roles are
+  // fine here; they only need to be real, active roles.
+  if (allStaffExceptRoles?.length) {
+    const found = await ApprovalRole.countDocuments({ _id: { $in: allStaffExceptRoles }, isActive: true });
+    if (found !== new Set(allStaffExceptRoles.map(String)).size) {
+      throw new ApiError(400, 'One or more selected approval roles are invalid or inactive.');
+    }
+  }
 
   const settings = await SectionAccess.findOneAndUpdate(
     { sectionKey },
@@ -315,11 +360,13 @@ export async function updateSectionAccess(sectionKey, { readApprovalRoles, write
       // Omitted by an older client = leave the switch as it is.
       ...(readAllStaff !== undefined && { readAllStaff }),
       ...(writeAllStaff !== undefined && { writeAllStaff }),
+      ...(allStaffExceptRoles !== undefined && { allStaffExceptRoles }),
     },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   )
     .populate('readApprovalRoles', 'name')
     .populate('writeApprovalRoles', 'name')
+    .populate('allStaffExceptRoles', 'name')
     .lean();
 
   await logAudit({
@@ -333,6 +380,7 @@ export async function updateSectionAccess(sectionKey, { readApprovalRoles, write
       writeApprovalRoleCount: writeApprovalRoles?.length ?? 0,
       readAllStaff: settings.readAllStaff ?? false,
       writeAllStaff: settings.writeAllStaff ?? false,
+      exceptRoleCount: settings.allStaffExceptRoles?.length ?? 0,
     },
     ip: actor.ip,
   });

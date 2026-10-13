@@ -35,6 +35,22 @@ export function requireStaffOrSelfServiceGrant(...sectionKeys) {
   });
 }
 
+/**
+ * Passes when the actor holds ANY of the listed `[sectionKey, level]` grants.
+ * Used where one screen serves two circles (everyone's requests vs. only your
+ * own); the handler then asks `canAccessSection` again to learn which.
+ */
+export function requireAnySectionAccess(...grants) {
+  return asyncHandler(async (req, res, next) => {
+    if (!req.user) throw new ApiError(500, 'Something went wrong. Please try again.');
+    const actor = { userId: req.user.id, role: req.user.role };
+    for (const [sectionKey, level] of grants) {
+      if (await canAccessSection(sectionKey, actor, level)) return next();
+    }
+    throw new ApiError(403, 'You do not have permission to perform this action.');
+  });
+}
+
 export function requireSectionAccess(sectionKey, level = 'write') {
   return asyncHandler(async (req, res, next) => {
     if (!req.user) {

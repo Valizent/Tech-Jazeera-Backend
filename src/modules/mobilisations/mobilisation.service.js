@@ -324,6 +324,17 @@ const COMMERCIAL_FIELDS = [
 // replacement for it.
 const PROFIT_ESTIMATE_FIELDS = ['profitPerMonth'];
 
+// 2026-10-13 (the user's Section Access redesign): a Coordinator keeps seeing the
+// rates and commission of the placements they run, also once they are Approved,
+// but never what the company earns on them: the per-hour profit figures go as
+// soon as the record leaves review. (Before: every commercial field was hidden
+// from them at Approved.) While Draft/PendingReview/Rejected they still see
+// what they typed, as before.
+const PROFIT_RATE_FIELDS = ['profitPerHour', 'otProfitPerHour'];
+const isPastReview = (status) => status === 'Approved' || status === 'Completed';
+/** The profit fields hidden from a Coordinator-only viewer of a record in `status`. */
+const coordinatorHiddenProfit = (status) => (isPastReview(status) ? [...PROFIT_ESTIMATE_FIELDS, ...PROFIT_RATE_FIELDS] : PROFIT_ESTIMATE_FIELDS);
+
 // Section 2 — the CURRENT-STEP REVIEWER's own work (the client/sub
 // quotation-PO paper trail, their remark). A plain Coordinator never
 // entered any of this themselves — unlike Section 1 above, it is stripped
@@ -1124,13 +1135,13 @@ async function findVisibleMobilisations(query, actor, { skip, limit } = {}) {
           if (!isCoordinator && !isStepReviewer && !(m.status === 'PendingReview' && isStepZeroReviewer)) {
             item = stripFields(item, PAPER_TRAIL_FIELDS);
           }
-          const canSeeCommercial = (isCoordinator && m.status !== 'Approved') || isLaterStepReviewer;
+          const canSeeCommercial = isCoordinator || isLaterStepReviewer;
           if (!canSeeCommercial) {
             item = stripFields(item, COMMERCIAL_FIELDS);
           } else if (!isLaterStepReviewer) {
             // Reached only via the isCoordinator branch above — see
-            // PROFIT_ESTIMATE_FIELDS' own doc comment.
-            item = stripFields(item, PROFIT_ESTIMATE_FIELDS);
+            // PROFIT_ESTIMATE_FIELDS' and PROFIT_RATE_FIELDS' own doc comments.
+            item = stripFields(item, coordinatorHiddenProfit(m.status));
           }
           return item;
         });
@@ -1246,13 +1257,13 @@ export async function getMobilisation(id, actor) {
     // 'mobilisationsViewer' member, or the coordinator who typed it
     // themselves (only before Approved, unchanged from before).
     const isLaterStepReviewer = isStepReviewer && !canEditSection1;
-    const canSeeCommercial = isViewer || (isCoordinator && mobilisation.status !== 'Approved') || isLaterStepReviewer;
+    const canSeeCommercial = isViewer || isCoordinator || isLaterStepReviewer;
     if (!canSeeCommercial) {
       visible = stripFields(visible, COMMERCIAL_FIELDS);
     } else if (!isViewer && !isLaterStepReviewer) {
-      // Reached only via "I'm the coordinator, still pre-Approval" — see
-      // PROFIT_ESTIMATE_FIELDS' own doc comment.
-      visible = stripFields(visible, PROFIT_ESTIMATE_FIELDS);
+      // Reached only via "I'm the coordinator on this record" — see
+      // PROFIT_ESTIMATE_FIELDS' and PROFIT_RATE_FIELDS' own doc comments.
+      visible = stripFields(visible, coordinatorHiddenProfit(mobilisation.status));
     }
     if (registerOnly) visible = stripFields(visible, PAPER_TRAIL_FIELDS);
   }

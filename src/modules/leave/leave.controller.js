@@ -8,6 +8,7 @@ import ApiError from '../../utils/ApiError.js';
 import ApiResponse from '../../utils/ApiResponse.js';
 import { contentDisposition } from '../../utils/contentDisposition.js';
 import * as leaveService from './leave.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, employee: req.user.employee, ip: req.ip });
 
@@ -29,9 +30,17 @@ export async function updateType(req, res) {
   res.json(new ApiResponse('Leave type updated.', type));
 }
 
-/** GET /api/leave — staff review queue, scoped to a Coordinator's own team. */
+/** Whether this person may see the whole queue ('leaveRequests' Read) or only
+ *  their own requests (they hold just 'leaveApply'). */
+async function actorWithScope(req) {
+  const canSeeQueue = await canAccessSection('leaveRequests', { userId: req.user.id, role: req.user.role }, 'read');
+  return { ...actor(req), ownOnly: !canSeeQueue };
+}
+
+/** GET /api/leave — staff review queue, scoped to a Coordinator's own team;
+ *  only your own requests without 'leaveRequests' Read. */
 export async function list(req, res) {
-  const data = await leaveService.listLeaveRequests(req.query, actor(req));
+  const data = await leaveService.listLeaveRequests(req.query, await actorWithScope(req));
   res.json(new ApiResponse('Leave requests.', data));
 }
 
@@ -57,7 +66,7 @@ export async function submit(req, res) {
 
 /** GET /api/leave/:id/attachment — streams the attachment (staff review). */
 export async function attachment(req, res) {
-  const fileData = await leaveService.getAttachmentFile(req.params.id, actor(req));
+  const fileData = await leaveService.getAttachmentFile(req.params.id, await actorWithScope(req));
   await streamAttachment(fileData, res);
 }
 

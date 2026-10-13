@@ -5,6 +5,7 @@
  * preprocessor turns those into undefined so optional fields stay truly
  * absent instead of storing empty strings.
  */
+import { EMPLOYEE_DEPARTMENTS } from './departments.js';
 import { z } from 'zod';
 import { EMPLOYEE_STATUSES, EMPLOYEE_TYPES } from './employee.model.js';
 import { ROLES } from '../auth/user.model.js';
@@ -120,7 +121,9 @@ const employeeObjectSchema = z
     contractStartDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
     contractEndDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
     designation: z.string().trim().min(2, 'Designation is required.').max(60),
-    department: optionalStr(60),
+    // A fixed list (2026-10-13). "" means "leave as is" on a PATCH, so an old free-text
+    // value is never wiped by an unrelated edit; it is replaced only by picking one.
+    department: z.preprocess(emptyToUndef, z.enum(EMPLOYEE_DEPARTMENTS, { error: 'Pick a department from the list.' }).optional()),
     salary: z.preprocess(
       emptyToUndef,
       z.coerce.number({ error: 'Salary must be a number.' }).min(0).max(1_000_000).optional()

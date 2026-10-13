@@ -136,6 +136,14 @@ export const SECTION_KEYS = [
   'employeeEdit',
   'employeeDelete',
   'employeeFinancial',
+  // Added 2026-10-13 (milestone 2) - the "my own" half of two sections whose
+  // single Write used to mean both "file my own request" and "decide everyone's":
+  //   leaveApply     Write = file your own leave request. Until configured it
+  //                  follows `leaveRequests` Write, so nobody loses it.
+  //   timesheetOwn   Read  = see your own monthly timesheet (without seeing
+  //                  everyone's). Until configured it follows `timesheetRequests`.
+  'leaveApply',
+  'timesheetOwn',
 ];
 
 const sectionAccessSchema = new mongoose.Schema(
@@ -149,6 +157,11 @@ const sectionAccessSchema = new mongoose.Schema(
     // safe list allows. One switch per tier, same tiers as the role lists above.
     readAllStaff: { type: Boolean, default: false },
     writeAllStaff: { type: Boolean, default: false },
+    // "...except these": members of any of these approval roles are NOT
+    // covered by either All-office-staff switch above (e.g. everyone files
+    // leave except MM, FM, COO and GM). Does not remove a person who is also
+    // named in a role grant of the same section; that grant still applies.
+    allStaffExceptRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
   },
   { timestamps: true }
 );

@@ -7,6 +7,7 @@
  * unauthenticated.
  */
 import { Router } from 'express';
+import { requireRoles } from '../../middleware/rbac.js';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
@@ -45,14 +46,14 @@ router.get('/companies', canRead, validate({ query: listCompaniesSchema }), asyn
 router.post('/companies', canWrite, validate({ body: createCompanySchema }), asyncHandler(nfc.createCompany));
 router.get('/companies/:id', canRead, validate({ params: idParamSchema }), asyncHandler(nfc.getCompany));
 router.patch('/companies/:id', canWrite, validate({ params: idParamSchema, body: updateCompanySchema }), asyncHandler(nfc.updateCompany));
-router.delete('/companies/:id', canWrite, validate({ params: idParamSchema }), asyncHandler(nfc.deleteCompany));
+router.delete('/companies/:id', requireRoles('Admin'), validate({ params: idParamSchema }), asyncHandler(nfc.deleteCompany));
 router.post('/companies/:id/logo', canWrite, validate({ params: idParamSchema }), uploadNfcImage, asyncHandler(nfc.uploadCompanyLogo));
 router.delete('/companies/:id/logo', canWrite, validate({ params: idParamSchema }), asyncHandler(nfc.removeCompanyLogo));
 
 // People
 router.post('/employees', canWrite, validate({ body: createEmployeeSchema }), asyncHandler(nfc.createEmployee));
 router.patch('/employees/:id', canWrite, validate({ params: idParamSchema, body: updateEmployeeSchema }), asyncHandler(nfc.updateEmployee));
-router.delete('/employees/:id', canWrite, validate({ params: idParamSchema }), asyncHandler(nfc.deleteEmployee));
+router.delete('/employees/:id', requireRoles('Admin'), validate({ params: idParamSchema }), asyncHandler(nfc.deleteEmployee));
 router.post('/employees/:id/photo', canWrite, validate({ params: idParamSchema }), uploadNfcImage, asyncHandler(nfc.uploadEmployeePhoto));
 router.delete('/employees/:id/photo', canWrite, validate({ params: idParamSchema }), asyncHandler(nfc.removeEmployeePhoto));
 
@@ -67,7 +68,7 @@ router.get('/cards/:id', canRead, validate({ params: idParamSchema }), asyncHand
 router.get('/cards/:id/qr.png', canRead, validate({ params: idParamSchema }), asyncHandler(nfc.cardQr));
 router.get('/cards/:id/qr-offline.png', canRead, validate({ params: idParamSchema }), asyncHandler(nfc.cardQrOffline));
 router.patch('/cards/:id', canWrite, validate({ params: idParamSchema, body: updateCardSchema }), asyncHandler(nfc.updateCard));
-router.delete('/cards/:id', canWrite, validate({ params: idParamSchema }), asyncHandler(nfc.deleteCard));
+router.delete('/cards/:id', requireRoles('Admin'), validate({ params: idParamSchema }), asyncHandler(nfc.deleteCard));
 router.post('/cards/:id/assign', canWrite, validate({ params: idParamSchema, body: assignCardSchema }), asyncHandler(nfc.assignCard));
 router.post('/cards/:id/assign-company', canWrite, validate({ params: idParamSchema, body: assignCardToCompanySchema }), asyncHandler(nfc.assignCardToCompany));
 router.post('/cards/:id/unassign', canWrite, validate({ params: idParamSchema }), asyncHandler(nfc.unassignCard));
