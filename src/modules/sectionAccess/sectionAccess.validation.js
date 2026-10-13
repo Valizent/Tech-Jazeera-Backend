@@ -16,4 +16,6 @@ export const sectionKeyParamSchema = z.object({
 export const updateSectionAccessSchema = z.object({
   readApprovalRoles: z.array(approvalRoleId).max(50),
   writeApprovalRoles: z.array(approvalRoleId).max(50),
+  readAllStaff: z.boolean().optional(),
+  writeAllStaff: z.boolean().optional(),
 });

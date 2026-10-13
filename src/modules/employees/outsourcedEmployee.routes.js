@@ -3,7 +3,7 @@ import * as controller from './outsourcedEmployee.controller.js';
 import asyncHandler from '../../utils/asyncHandler.js';
 import logger from '../../config/logger.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireStaff } from '../../middleware/rbac.js';
+import { requireStaffOrExecutive } from '../../middleware/rbac.js';
 import { validate } from '../../middleware/validate.js';
 import { uploadSingle, destroyDocumentFile } from '../../middleware/upload.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
@@ -24,10 +24,14 @@ router.use(requireAuth);
 // routes below had no permission check beyond "logged in" — any Worker login
 // could list every outsourced worker (PII) and download their private
 // documents directly by id. Mirrors employee.routes.js's own floor exactly.
-router.use(requireStaff);
+router.use(requireStaffOrExecutive);
 
 const canWrite = requireSectionAccess('employeeCreate', 'write');
 const canRead = requireSectionAccess('employeeCreate', 'read');
+// Same split as the Employees register (2026-10-13): changing or deleting an
+// outsourced worker, or their documents, has its own permission.
+const canEdit = requireSectionAccess('employeeEdit', 'write');
+const canDelete = requireSectionAccess('employeeDelete', 'write');
 
 // Fixed 2026-09-30: 'employees' is not a real Section Access key (see
 // sectionAccess.model.js's SECTION_KEYS) — canAccessSection silently found
@@ -40,11 +44,11 @@ router.post('/', canWrite, validate({ body: createOutsourcedEmployeeSchema }), a
 router.get('/:id', canRead, validate({ params: outsourcedEmployeeIdParamSchema }), asyncHandler(controller.get));
 router.patch(
   '/:id',
-  canWrite,
+  canEdit,
   validate({ params: outsourcedEmployeeIdParamSchema, body: updateOutsourcedEmployeeSchema }),
   asyncHandler(controller.update)
 );
-router.delete('/:id', canWrite, validate({ params: outsourcedEmployeeIdParamSchema }), asyncHandler(controller.remove));
+router.delete('/:id', canDelete, validate({ params: outsourcedEmployeeIdParamSchema }), asyncHandler(controller.remove));
 
 // ---- documents (added 2026-09-30 — see outsourcedEmployee.model.js's own
 // doc comment: this field existed since the module was first built with no
@@ -55,7 +59,7 @@ router.delete('/:id', canWrite, validate({ params: outsourcedEmployeeIdParamSche
 // upload never leaves an orphan on Cloudinary.
 router.post(
   '/:id/documents',
-  canWrite,
+  canEdit,
   validate({ params: outsourcedEmployeeIdParamSchema }),
   uploadSingle,
   validate({ body: outsourcedEmployeeDocumentBodySchema }),
@@ -63,7 +67,7 @@ router.post(
 );
 router.delete(
   '/:id/documents/:fileId',
-  canWrite,
+  canEdit,
   validate({ params: outsourcedEmployeeDocumentParamSchema }),
   asyncHandler(controller.removeDocument)
 );

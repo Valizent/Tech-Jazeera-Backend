@@ -938,3 +938,41 @@ everywhere, unaffected). Two throwaway admins created and fully removed
 afterward (login, refresh tokens, audit rows); the one real section-access
 document touched mid-test (`deploymentsRelease`, from an unrelated stale
 browser-ref click) was reverted to its original value.
+
+## 2026-10-13: Section Access redesign, milestone 1 (Employees and Outsourced)
+
+**What changed.** The Employees section used one key (`employeeCreate`: Read = view, Write = add) and two fixed
+login-role lists for edit (Admin/Manager/HR) and delete (Admin/HR); salary came with every record. Now:
+
+| Key | Tier | Meaning | Until configured |
+|---|---|---|---|
+| `employeeCreate` | Read | see the register and basic details | as before |
+| `employeeCreate` | Write | add an employee | as before |
+| `employeeEdit` | Write | change an employee (and outsourced worker, their documents) | follows `employeeCreate` Write |
+| `employeeDelete` | Write | delete an employee / outsourced worker | Admin only |
+| `employeeFinancial` | Read | see salary and Basic / Housing / Transport | Admin only |
+
+- **Fallback.** `FALLBACK_KEY` in `sectionAccess.service.js`: a key with no document borrows another key's Write
+  circle. Only `employeeEdit` uses it. Saving the key (even empty) ends the borrowing.
+- **All office staff.** `readAllStaff` / `writeAllStaff` on a SectionAccess document: any login that passes the staff
+  floor (Admin, Manager, HR, Accounts, Coordinator, Executive, Office Secretary). Worker and Staff logins never match it.
+  An update that omits the flags leaves them unchanged (older clients).
+- **Single-tier cards.** `listSectionAccess` returns `onlyTier` ('read' | 'write' | null) so the pages show one list.
+- **Pay removal.** `redactFinancial` in `employee.service.js`; the controller resolves `actor.canSeeFinancial`
+  (`canAccessSection('employeeFinancial', ..., 'read')`) once per request. A person without it gets `salaryOnFile`
+  (boolean) in place of the four fields. Create keeps what they typed (write-once); update drops the four fields.
+  The own portal (`/api/me`) is a separate module and still shows each person their own pay.
+- **Visibility.** `listEmployees` / `getEmployee` no longer narrow a Coordinator. `assertEmployeeVisibleToActor`
+  (Documents, Assets, EOSB, Deployment, Exit documents, Annual vacation) is unchanged, so a Coordinator opening another
+  team's employee may see empty or refused documents/assets panels.
+- **Log.** `employee.update` meta: `fields`, `changes: { field: { from, to } }`; `employee.create` / `employee.delete`
+  add `type` and `designation`. Salary values appear in the log, which is Admin-only (`auditLog`).
+- **Router.** `employee.routes.js` and `outsourcedEmployee.routes.js` use `requireStaffOrExecutive` at the door; each
+  route still needs its own grant. Login provisioning, password reset and login role stay Admin/HR.
+- **Not covered yet** (later milestones): pay-derived figures elsewhere (the mobilisation `otEmployeeRate` snapshot,
+  deployment expense lines) keep their own gates; employee exports; the dashboard's idle-cost widget reads salary
+  server-side behind `dashboardProfit`.
+
+**To set up after deploying** (Section Access page, Workforce -> Employees): see the milestone report; in short:
+tick the add group under "Employees view & add" -> Write, switch "All office staff" on under Read, tick Management
+under "Employees salary & pay", and tick Delete for Admin-only (leave empty) or a chosen circle.

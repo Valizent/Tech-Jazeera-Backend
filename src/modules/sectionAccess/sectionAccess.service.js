@@ -55,6 +55,9 @@ const SECTION_LABELS = {
   requirementStages: 'Requirements board stages',
   companyDetailsBdm: 'Missing company details: BDM reminder',
   companyDetailsManager: 'Missing company details: Marketing Manager reminders',
+  employeeEdit: 'Employees edit',
+  employeeDelete: 'Employees delete',
+  employeeFinancial: 'Employees salary & pay',
 };
 
 /** What each section IS FOR, in plain English — not what Read/Write
@@ -109,15 +112,41 @@ const SECTION_DESCRIPTIONS = {
   requirementStages: 'Grants access to configure the columns on the requirements board. It is here to customize the sales pipeline stages (Read is already open to everyone).',
   companyDetailsBdm: 'Chooses who is reminded when a client or subcontractor is still missing company details 40 days after it was saved (the creator is reminded at 30 days). Tick the BDM role under Write; Read is not used.',
   companyDetailsManager: 'Chooses who is reminded every 5 days, from day 45, while a client or subcontractor is still missing company details. Tick the Marketing Manager role under Write; Read is not used.',
+  employeeEdit: 'Chooses who may change an existing employee or outsourced worker. Tick under Write; Read is not used. Until you set it here, it follows whoever may add employees ("Employees view & add", Write).',
+  employeeDelete: 'Chooses who may delete an employee or outsourced worker. Tick under Write; Read is not used. Admin only until you grant it.',
+  employeeFinancial: 'Chooses who may see the salary and pay breakdown (Basic, Housing, Transport). Tick under Read; Write is not used. Everyone else never receives these figures, on the web or the phone. Admin only until you grant it. Each person always sees their own pay in their own portal.',
 };
 
 function defaultFor(sectionKey) {
-  return { sectionKey, readApprovalRoles: [], writeApprovalRoles: [] };
+  return { sectionKey, readApprovalRoles: [], writeApprovalRoles: [], readAllStaff: false, writeAllStaff: false };
+}
+
+/** A section nobody has configured yet that borrows another section's Write
+ *  circle until an Admin sets it. `employeeEdit` follows `employeeCreate`
+ *  ("same group as Add") so switching on the new key never strands the people
+ *  who could already add employees. Only the Write tier is borrowed. */
+const FALLBACK_KEY = { employeeEdit: 'employeeCreate' };
+
+/** Sections that are a single yes/no permission: only this tier means anything,
+ *  so the admin page shows just that one list instead of Read and Write. */
+const ONLY_TIER = { employeeEdit: 'write', employeeDelete: 'write', employeeFinancial: 'read' };
+
+/** The settings that apply to `key`: its own document, else the borrowed
+ *  circle, else nobody (Admin only). `bySectionKey` holds already-loaded docs. */
+function settingsFor(bySectionKey, key) {
+  const own = bySectionKey.get(key);
+  if (own) return { ...defaultFor(key), ...own };
+  const source = FALLBACK_KEY[key] && bySectionKey.get(FALLBACK_KEY[key]);
+  if (source) {
+    return { ...defaultFor(key), writeApprovalRoles: source.writeApprovalRoles, writeAllStaff: source.writeAllStaff ?? false };
+  }
+  return defaultFor(key);
 }
 
 export async function getSectionAccess(sectionKey) {
-  const doc = await SectionAccess.findOne({ sectionKey }).lean();
-  return doc ?? defaultFor(sectionKey);
+  const keys = [sectionKey, FALLBACK_KEY[sectionKey]].filter(Boolean);
+  const docs = await SectionAccess.find({ sectionKey: { $in: keys } }).lean();
+  return settingsFor(new Map(docs.map((d) => [d.sectionKey, d])), sectionKey);
 }
 
 /** Every governed section's current settings, populated for the admin UI —
@@ -129,10 +158,12 @@ export async function listSectionAccess() {
     .lean();
   const bySectionKey = new Map(docs.map((d) => [d.sectionKey, d]));
   return SECTION_KEYS.map((key) => ({
-    ...(bySectionKey.get(key) ?? defaultFor(key)),
+    ...defaultFor(key),
+    ...(bySectionKey.get(key) ?? {}),
     sectionKey: key,
     label: SECTION_LABELS[key],
     description: SECTION_DESCRIPTIONS[key],
+    onlyTier: ONLY_TIER[key] ?? null,
   }));
 }
 
@@ -166,10 +197,13 @@ export async function canAccessSection(sectionKey, actor, level = 'write') {
   if (actor.role === 'Admin') return true;
   const settings = await getSectionAccess(sectionKey);
 
+  // "All office staff" switch: any non-self-service login that passed the floor.
+  if (!selfService && settings.writeAllStaff) return true;
   const hasWrite = settings.writeApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.writeApprovalRoles));
   if (hasWrite) return true;
   if (level !== 'read') return false;
 
+  if (!selfService && settings.readAllStaff) return true;
   return settings.readApprovalRoles.length > 0 && (await isMemberOfAnyRole(actor.userId, settings.readApprovalRoles));
 }
 
@@ -218,14 +252,14 @@ export async function getMySectionAccess(actor) {
   // A self-service login is only ever evaluated against the safe list.
   const evaluatedKeys = selfService ? SECTION_KEYS.filter((k) => SELF_SERVICE_GRANTABLE_KEYS.includes(k)) : SECTION_KEYS;
   for (const key of evaluatedKeys) {
-    const settings = bySectionKey.get(key) ?? defaultFor(key);
-    const hasWrite = settings.writeApprovalRoles.some((id) => myRoleIds.has(id.toString()));
+    const settings = settingsFor(bySectionKey, key);
+    const hasWrite = (!selfService && settings.writeAllStaff) || settings.writeApprovalRoles.some((id) => myRoleIds.has(id.toString()));
     if (hasWrite) {
       write.push(key);
       read.push(key);
       continue;
     }
-    const hasRead = settings.readApprovalRoles.some((id) => myRoleIds.has(id.toString()));
+    const hasRead = (!selfService && settings.readAllStaff) || settings.readApprovalRoles.some((id) => myRoleIds.has(id.toString()));
     if (hasRead) read.push(key);
   }
   return { read, write };
@@ -267,14 +301,21 @@ async function assertValidApprovalRoles(roleIds, sectionKey) {
 
 /** Admin-only (enforced by the route) — deciding who else can open a
  *  section is not itself delegable to whoever that grant creates. */
-export async function updateSectionAccess(sectionKey, { readApprovalRoles, writeApprovalRoles }, actor) {
+export async function updateSectionAccess(sectionKey, { readApprovalRoles, writeApprovalRoles, readAllStaff, writeAllStaff }, actor) {
   if (!SECTION_KEYS.includes(sectionKey)) throw new ApiError(404, 'Unknown section.');
   await assertValidApprovalRoles(readApprovalRoles, sectionKey);
   await assertValidApprovalRoles(writeApprovalRoles, sectionKey);
 
   const settings = await SectionAccess.findOneAndUpdate(
     { sectionKey },
-    { sectionKey, readApprovalRoles, writeApprovalRoles },
+    {
+      sectionKey,
+      readApprovalRoles,
+      writeApprovalRoles,
+      // Omitted by an older client = leave the switch as it is.
+      ...(readAllStaff !== undefined && { readAllStaff }),
+      ...(writeAllStaff !== undefined && { writeAllStaff }),
+    },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   )
     .populate('readApprovalRoles', 'name')
@@ -290,6 +331,8 @@ export async function updateSectionAccess(sectionKey, { readApprovalRoles, write
       sectionKey,
       readApprovalRoleCount: readApprovalRoles?.length ?? 0,
       writeApprovalRoleCount: writeApprovalRoles?.length ?? 0,
+      readAllStaff: settings.readAllStaff ?? false,
+      writeAllStaff: settings.writeAllStaff ?? false,
     },
     ip: actor.ip,
   });

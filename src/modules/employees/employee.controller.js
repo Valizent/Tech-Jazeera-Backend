@@ -5,10 +5,19 @@
  */
 import ApiResponse from '../../utils/ApiResponse.js';
 import * as employeeService from './employee.service.js';
+import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 /** Who performed the action, for the audit trail — `role` also drives P2-M2
  *  ownership scoping (Coordinator/Manager team views) in the service layer. */
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
+
+/** `actor`, plus whether this person may see/change pay figures
+ *  (`employeeFinancial` Read) - resolved once per request; the service strips
+ *  salary and the WPS breakdown from every response when it is false. */
+const actorWithPay = async (req) => ({
+  ...actor(req),
+  canSeeFinancial: await canAccessSection('employeeFinancial', { userId: req.user.id, role: req.user.role }, 'read'),
+});
 
 /**
  * GET /api/employees?page&limit&search&status&alerts&thresholdDays&team&sortBy&sortOrder
@@ -16,7 +25,7 @@ const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip }
  * Coordinator automatically, or for a Manager passing team=mine
  */
 export async function list(req, res) {
-  const data = await employeeService.listEmployees(req.query, actor(req));
+  const data = await employeeService.listEmployees(req.query, await actorWithPay(req));
   res.json(new ApiResponse('Employees.', data));
 }
 
@@ -25,30 +34,30 @@ export async function list(req, res) {
  * 200 → data: employee · 400 bad id · 403 outside a Coordinator's team · 404 unknown
  */
 export async function get(req, res) {
-  const employee = await employeeService.getEmployee(req.params.id, actor(req));
+  const employee = await employeeService.getEmployee(req.params.id, await actorWithPay(req));
   res.json(new ApiResponse('Employee.', employee));
 }
 
 /**
- * POST /api/employees   (Admin, Manager, HR)
+ * POST /api/employees   ('employeeCreate' Write)
  * 201 → data: employee · 400 validation · 409 duplicate employeeId
  */
 export async function create(req, res) {
-  const employee = await employeeService.createEmployee(req.body, actor(req));
+  const employee = await employeeService.createEmployee(req.body, await actorWithPay(req));
   res.status(201).json(new ApiResponse('Employee created.', employee));
 }
 
 /**
- * PATCH /api/employees/:id   (Admin, Manager, HR)
+ * PATCH /api/employees/:id   ('employeeEdit' Write)
  * 200 → data: employee · 400 / 404 / 409 as above
  */
 export async function update(req, res) {
-  const employee = await employeeService.updateEmployee(req.params.id, req.body, actor(req));
+  const employee = await employeeService.updateEmployee(req.params.id, req.body, await actorWithPay(req));
   res.json(new ApiResponse('Employee updated.', employee));
 }
 
 /**
- * DELETE /api/employees/:id   (Admin, HR)
+ * DELETE /api/employees/:id   ('employeeDelete' Write)
  * 200 → data: null · 404 unknown
  */
 export async function remove(req, res) {

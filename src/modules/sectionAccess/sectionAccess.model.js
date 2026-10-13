@@ -122,6 +122,20 @@ export const SECTION_KEYS = [
   // Write are notified (BDM at day 40, Marketing Manager from day 45).
   'companyDetailsBdm',
   'companyDetailsManager',
+  // Added 2026-10-13 - the Employees section's own permissions (the user's
+  // Section Access redesign, milestone 1). `employeeCreate` stays the "view
+  // the directory (Read) / add an employee (Write)" key; these three split
+  // out the rest so each can be given to a different circle:
+  //   employeeEdit      Write = change an existing employee. Until an Admin
+  //                     configures it, it follows `employeeCreate`'s Write
+  //                     circle (see FALLBACK_KEY in sectionAccess.service.js).
+  //   employeeDelete    Write = delete an employee. Admin only until granted.
+  //   employeeFinancial Read  = see salary and the WPS pay breakdown. Admin
+  //                     only until granted; the server removes those fields
+  //                     from every employee response for anyone else.
+  'employeeEdit',
+  'employeeDelete',
+  'employeeFinancial',
 ];
 
 const sectionAccessSchema = new mongoose.Schema(
@@ -129,6 +143,12 @@ const sectionAccessSchema = new mongoose.Schema(
     sectionKey: { type: String, enum: SECTION_KEYS, required: true, unique: true },
     readApprovalRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
     writeApprovalRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
+    // "All office staff" (2026-10-13): every Admin/Manager/HR/Accounts/Coordinator/
+    // Executive/Office Secretary login, without listing them in an Approval Role.
+    // Never Worker or Staff logins, and never beyond what that section's own
+    // safe list allows. One switch per tier, same tiers as the role lists above.
+    readAllStaff: { type: Boolean, default: false },
+    writeAllStaff: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

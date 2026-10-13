@@ -7,9 +7,11 @@
  * explicit, deliberate choice: this key's write default is empty/Admin-only
  * by design, and Read now mirrors that exactly too, so reading the employee
  * register also starts Admin-only until an Admin grants Read to whoever
- * needs it). WRITE (update) is Admin/Manager/HR (the people who own
- * workforce data); DELETE is Admin/HR only — it destroys history, so the
- * circle is smaller. Status 'Exited' is the everyday alternative to delete.
+ * needs it). Since 2026-10-13 EDIT is the 'employeeEdit' key (follows
+ * 'employeeCreate' Write until configured) and DELETE is 'employeeDelete'
+ * (Admin only until granted) — both used to be fixed login-role lists. Salary
+ * and the WPS breakdown leave the server only for 'employeeFinancial' Read.
+ * Status 'Exited' is the everyday alternative to delete.
  *
  * CREATE is 'employeeCreate' at the 'write' level — by default nobody but
  * Admin can add an employee ("until then only admin can add employees," the
@@ -24,7 +26,7 @@
 import { Router } from 'express';
 import asyncHandler from '../../utils/asyncHandler.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { requireRoles, requireStaff } from '../../middleware/rbac.js';
+import { requireRoles, requireStaffOrExecutive } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
 import {
@@ -43,7 +45,9 @@ const router = Router();
 // self-service persona and have no business in the workforce register — they
 // get a clean 403 here and use the ESS portal (P2-M2) instead.
 router.use(requireAuth);
-router.use(requireStaff);
+// Executive logins (MM, FM, COO, GM...) are let through the door; every route
+// below still needs its own Section Access grant, so this opens nothing by itself.
+router.use(requireStaffOrExecutive);
 
 const canReadEmployees = requireSectionAccess('employeeCreate', 'read');
 
@@ -62,13 +66,13 @@ router.post(
 );
 router.patch(
   '/:id',
-  requireRoles('Admin', 'Manager', 'HR'),
+  requireSectionAccess('employeeEdit', 'write'),
   validate({ params: employeeIdParamSchema, body: updateEmployeeSchema }),
   asyncHandler(employeeController.update)
 );
 router.delete(
   '/:id',
-  requireRoles('Admin', 'HR'),
+  requireSectionAccess('employeeDelete', 'write'),
   validate({ params: employeeIdParamSchema }),
   asyncHandler(employeeController.remove)
 );

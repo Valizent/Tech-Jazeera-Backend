@@ -2,7 +2,7 @@
  * Employee service — all employee business logic. Controllers only translate
  * HTTP; nothing in here touches req/res.
  */
-import Employee, { WORKFORCE_TYPES } from './employee.model.js';
+import Employee from './employee.model.js';
 import User, { MANAGER_ELIGIBLE_ROLES } from '../auth/user.model.js';
 import Attendance from '../attendance/attendance.model.js';
 import { activeMobilisationWorkerIds } from '../mobilisations/mobilisation.service.js';
@@ -21,6 +21,39 @@ import { escapeRegex } from '../../utils/escapeRegex.js';
 export const EXPIRY_WARNING_DAYS = 30;
 
 /**
+ * Pay figures (2026-10-13, Section Access redesign): salary and the WPS
+ * breakdown only ever leave the server for an actor holding `employeeFinancial`
+ * Read (the controller resolves that once per request into `actor.canSeeFinancial`).
+ * Everyone else gets the record without them plus `salaryOnFile`, so a screen
+ * can say "salary recorded" without the number. Stripped here, in the service,
+ * so the web, the phone and any future client all get the same answer.
+ */
+export const FINANCIAL_FIELDS = ['salary', 'basicSalary', 'housingAllowance', 'transportAllowance'];
+
+export function redactFinancial(employee, actor) {
+  if (actor?.canSeeFinancial) return employee;
+  const copy = { ...employee, salaryOnFile: employee.salary != null };
+  for (const field of FINANCIAL_FIELDS) delete copy[field];
+  return copy;
+}
+
+/** `{ field: { from, to } }` for the submitted fields whose value really changed -
+ *  what the Security Log keeps for an edit (the user chose old and new values).
+ *  Long values are cut so one audit row stays small. */
+export function changedValues(before, after, fields) {
+  const show = (v) => {
+    const text = v instanceof Date ? v.toISOString() : typeof v === 'object' && v !== null ? JSON.stringify(v) : v;
+    return typeof text === 'string' && text.length > 200 ? `${text.slice(0, 200)}...` : text;
+  };
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  const changed = {};
+  for (const field of fields) {
+    if (!same(before[field], after[field])) changed[field] = { from: show(before[field] ?? null), to: show(after[field] ?? null) };
+  }
+  return changed;
+}
+
+/**
  * A Coordinator may only see/act on employees assigned to them — the one
  * scoping rule this app enforces everywhere an Employee is the subject
  * (listEmployees, Attendance, Leave, ...). Added here as a single shared
@@ -37,16 +70,6 @@ export async function assertEmployeeVisibleToActor(employeeId, actor) {
   if (!employeeId || actor?.role !== 'Coordinator') return;
   const owned = await Employee.exists({ _id: employeeId, coordinator: actor.userId });
   if (!owned) throw new ApiError(403, 'You do not have access to this employee.');
-}
-
-/**
- * "Labour": the own field workforce a Coordinator mobilises, identified by the
- * Worker login linked to the employee record. Same definition the
- * Mobilisation "Own employee" picker uses (`loginRole: 'Worker'`), so the list
- * and the picker can never disagree about who a labourer is.
- */
-async function labourEmployeeIds() {
-  return User.find({ role: 'Worker', employee: { $ne: null } }).distinct('employee');
 }
 
 /** Fields the expiry-alert filter inspects. */
@@ -132,27 +155,12 @@ export async function listEmployees(
     const employeeIds = await User.find({ role: loginRole, employee: { $ne: null } }).distinct('employee');
     conditions.push({ _id: { $in: employeeIds } });
   }
-  // P2-M2: a Coordinator sees their own assigned employees — this is not a
-  // filter the caller can opt out of. Milestone 5: PLUS every standby
-  // workforce employee (coordinator: null) company-wide, so any Coordinator
-  // can find and mobilise them. 2026-10-12 (the user's decision): PLUS every
-  // labourer, i.e. every employee holding a Worker login, whoever they are
-  // assigned to or whatever they are doing — a Coordinator has to know who is
-  // in the company to mobilise them; office staff stay out of reach.
-  // Visibility only, never approval authority
-  // (leave/attendance/dashboard scoping deliberately stay coordinator-owned-
-  // only, unchanged). A Manager may narrow to their coordinators' teams with
-  // team=mine; without it a Manager keeps the existing company-wide view
-  // (adding Coordinator must not shrink anyone else's established access).
-  if (actor?.role === 'Coordinator') {
-    conditions.push({
-      $or: [
-        { coordinator: actor.userId },
-        { coordinator: null, type: { $in: WORKFORCE_TYPES } },
-        { _id: { $in: await labourEmployeeIds() } },
-      ],
-    });
-  } else if (actor?.role === 'Manager' && team === 'mine') {
+  // 2026-10-13 (the user's Section Access redesign): everyone who may view the
+  // register sees all of it, Coordinators included. They used to be narrowed to
+  // their own team + standby workforce + labourers. Other modules' per-employee
+  // checks (assertEmployeeVisibleToActor) are unchanged. A Manager may still
+  // narrow to their coordinators' teams with team=mine.
+  if (actor?.role === 'Manager' && team === 'mine') {
     // The Manager's direct 'Own' reports (e.g. their Coordinators) → the
     // Users linked to those Employee records → the Employees THOSE
     // Coordinators hold. Employee.manager replaced User.managedBy as the
@@ -190,10 +198,13 @@ export async function listEmployees(
   const loginByEmployeeId = new Map(logins.map((l) => [l.employee.toString(), l]));
   const withLogin = items.map((e) => {
     const login = loginByEmployeeId.get(e._id.toString());
-    return {
-      ...e,
-      login: login ? { id: login._id.toString(), email: login.email, role: login.role, isActive: login.isActive } : null,
-    };
+    return redactFinancial(
+      {
+        ...e,
+        login: login ? { id: login._id.toString(), email: login.email, role: login.role, isActive: login.isActive } : null,
+      },
+      actor
+    );
   });
 
   return { items: withLogin, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
@@ -216,23 +227,10 @@ export async function getEmployee(id, actor) {
   // account status (and hide "create login" once one exists) without a second
   // round-trip. Minimal, non-sensitive fields only — never the hash.
   const login = await User.findOne({ employee: id }).select('email role isActive').lean();
-  // P2-M2: a Coordinator may only open employees assigned to them, PLUS
-  // (Milestone 5) any standby workforce employee, PLUS (2026-10-12) any
-  // labourer (Worker login) — everyone else's existing access
-  // (Admin/Manager/HR/Accounts see everyone) is unchanged. Same
-  // visibility-only widening as listEmployees above.
-  if (actor?.role === 'Coordinator') {
-    const isMyAssignment = employee.coordinator?._id?.toString() === actor.userId;
-    const isStandbyWorkforce = !employee.coordinator && WORKFORCE_TYPES.includes(employee.type);
-    const isLabour = login?.role === 'Worker';
-    if (!isMyAssignment && !isStandbyWorkforce && !isLabour) {
-      throw new ApiError(403, 'You do not have access to this employee.');
-    }
-  }
   employee.login = login
     ? { id: login._id.toString(), email: login.email, role: login.role, isActive: login.isActive }
     : null;
-  return employee;
+  return redactFinancial(employee, actor);
 }
 
 /** The assigned manager, if any, must be an Admin or Manager user. */
@@ -395,17 +393,14 @@ export async function resetEmployeeLoginPassword(employeeId, actor) {
 
 /** Duplicate employeeId is caught by the unique index → 409 via errorHandler. */
 export async function createEmployee(data, actor) {
+  // Salary is write-once for anyone without `employeeFinancial`: they may type
+  // it when adding (an Outsourced employee needs one), but the response below
+  // never shows it back. Coordinator is deliberately NOT auto-assigned here
+  // (Milestone 5): a newly created employee always starts on standby
+  // (coordinator: null) and only gets one once a real Mobilisation places
+  // them. 2026-10-13: the old "a Coordinator can never create an Own record"
+  // override is gone (the user's decision) - a Coordinator may add any type.
   const payload = { ...data, createdBy: actor.userId };
-  // A Coordinator can never create an internal-staff record — only 'Own' is
-  // overridden (their choice of 'Outsourced' vs 'Subcontracted' is left
-  // alone, both are "their deployable team"). This is an override (not just
-  // a default) so a hand-crafted request can't smuggle an 'Own' type
-  // through. Coordinator is deliberately NOT auto-assigned here (Milestone
-  // 5): a newly created employee always starts on standby (coordinator:
-  // null), visible to every Coordinator, and only gets one once a real
-  // Mobilisation actually places them — see mobilisation.service.js's
-  // createMobilisation.
-  if (actor.role === 'Coordinator' && payload.type === 'Own') payload.type = 'Outsourced';
   await assertValidManager(payload.manager);
   await assertValidApprovalWorkflow(payload.approvalWorkflow);
   await assertValidSubcontractor(payload.subcontractor);
@@ -415,13 +410,16 @@ export async function createEmployee(data, actor) {
     action: 'employee.create',
     targetType: 'Employee',
     targetId: employee._id,
-    meta: { employeeId: employee.employeeId, fullName: employee.fullName },
+    meta: { employeeId: employee.employeeId, fullName: employee.fullName, type: employee.type, designation: employee.designation },
     ip: actor.ip,
   });
-  return employee.toObject();
+  return redactFinancial(employee.toObject(), actor);
 }
 
-export async function updateEmployee(id, data, actor) {
+export async function updateEmployee(id, rawData, actor) {
+  // Pay figures are changed only by someone who may see them; for everyone
+  // else they are silently ignored so an edit form without those boxes works.
+  const data = actor.canSeeFinancial ? rawData : Object.fromEntries(Object.entries(rawData).filter(([k]) => !FINANCIAL_FIELDS.includes(k)));
   if ('manager' in data) await assertValidManager(data.manager);
   if ('approvalWorkflow' in data) await assertValidApprovalWorkflow(data.approvalWorkflow);
   if ('subcontractor' in data) await assertValidSubcontractor(data.subcontractor);
@@ -438,17 +436,24 @@ export async function updateEmployee(id, data, actor) {
   // validators need to work correctly.
   const employee = await Employee.findById(id);
   if (!employee) throw new ApiError(404, 'Employee not found.');
+  const before = employee.toObject();
   Object.assign(employee, data);
   await employee.save();
+  const after = employee.toObject();
   await logAudit({
     user: actor.userId,
     action: 'employee.update',
     targetType: 'Employee',
     targetId: employee._id,
-    meta: { employeeId: employee.employeeId, fields: Object.keys(data) },
+    meta: {
+      employeeId: employee.employeeId,
+      fullName: employee.fullName,
+      fields: Object.keys(data),
+      changes: changedValues(before, after, Object.keys(data)),
+    },
     ip: actor.ip,
   });
-  return employee.toObject();
+  return redactFinancial(after, actor);
 }
 
 /**
@@ -481,6 +486,8 @@ export async function deleteEmployee(id, actor) {
     meta: {
       employeeId: employee.employeeId,
       fullName: employee.fullName,
+      type: employee.type,
+      designation: employee.designation,
       loginRemoved: Boolean(login),
     },
     ip: actor.ip,
