@@ -31,6 +31,7 @@ async function makeEmployee(extra = {}) {
     designation: 'Tester',
     joiningDate: new Date('2022-01-01'),
     contractEndDate: new Date('2025-01-01'), // already ended -> eligible
+    annualVacationDays: 5, // the contract's days (set by HR); a request always starts from them
     ...extra,
   });
 }
@@ -112,7 +113,7 @@ describe('Cancel and decide', () => {
   });
 
   it('approving records an approved leave and tells the employee', async () => {
-    const employee = await makeEmployee();
+    const employee = await makeEmployee({ annualVacationDays: 7 });
     await User.create({ name: 'Worker', email: `w-${unique()}@example.com`, passwordHash: 'x', role: 'Worker', employee: employee._id });
     const request = await submitOwnAnnualVacation(employee._id.toString(), { startDate: futureDay(10), requestedDays: 7, reason: 'Home' }, admin());
 

@@ -210,6 +210,7 @@ describe('portal home', () => {
       iqama: { number: '2000000010', expiry: daysFromNow(15) },
       passport: { number: 'P1234567', expiry: daysFromNow(400) },
       contractEndDate: daysFromNow(-10), // ended: eligible for vacation
+      annualVacationDays: 25, // and HR has set the contract's days
     });
     await Attendance.create({ employee: emp._id, date: utcDay(), status: 'Present', checkInTime: new Date() });
     await leave(emp, { status: 'PendingReview', startDate: daysFromNow(20), endDate: daysFromNow(21) });

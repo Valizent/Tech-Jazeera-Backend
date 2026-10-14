@@ -35,6 +35,12 @@ const nullableMonthlyHours = z.preprocess(
   z.coerce.number({ error: 'Enter the contract hours per month.' }).min(0).max(744).nullable().optional()
 );
 
+/** The contract's annual vacation days: a whole number of days, or "" to clear it. */
+const nullableVacationDays = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
+  z.coerce.number({ error: 'Enter the number of vacation days.' }).int('Whole days only.').min(1).max(90).nullable().optional()
+);
+
 /** Like nullableHours, but for a SAR amount (basicSalary/housingAllowance/transportAllowance). */
 const nullableAmount = z.preprocess(
   (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
@@ -140,6 +146,8 @@ const employeeObjectSchema = z
     // Contract hours per month - overtime pay is salary / these x 1.5, and a
     // mobilisation needs them. "" clears it (null).
     contractHours: nullableMonthlyHours,
+    // Annual vacation days the contract gives (HR sets it; "" clears it).
+    annualVacationDays: nullableVacationDays,
     weeklyOffDay: nullableWeekday,
     status: z.enum(EMPLOYEE_STATUSES).default('Active'),
 

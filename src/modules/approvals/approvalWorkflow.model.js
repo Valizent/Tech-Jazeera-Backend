@@ -22,6 +22,8 @@
 import mongoose from 'mongoose';
 import { EMPLOYEE_DEPARTMENTS } from '../employees/departments.js';
 
+export const STEP_DUTIES = ['HrReview', 'TravelDocuments'];
+
 export const APPROVAL_REQUEST_TYPES = [
   'Leave',
   'SalaryAdvance',
@@ -43,6 +45,10 @@ const workflowStepSchema = new mongoose.Schema(
         message: 'Each step needs at least one role.',
       },
     },
+    // A step's special duty (2026-10-14, annual vacation only): 'HrReview' lets whoever holds the step
+    // change the number of days; 'TravelDocuments' makes it the step that attaches the air tickets and
+    // uploads the re-entry visa, and it moves on by itself once both are done.
+    duty: { type: String, enum: STEP_DUTIES, default: null },
   },
   { _id: false }
 );
@@ -70,6 +76,9 @@ const approvalWorkflowSchema = new mongoose.Schema(
       },
     },
     appliesTo: { type: [{ type: String, enum: APPROVAL_REQUEST_TYPES }], default: [] },
+    // Told (not asked) when a request is submitted and again when it is approved, e.g. the Marketing
+    // Manager for an annual vacation. Roles only: membership is read at the moment they are told.
+    notifyRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
     departmentRoutes: { type: [departmentRouteSchema], default: [] },
     // Deactivate instead of delete — in-flight and decided requests freeze a
     // copy of `steps` at submission time (see e.g. leaveRequest.model.js),

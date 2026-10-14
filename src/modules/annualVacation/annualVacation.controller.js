@@ -3,8 +3,11 @@
  * own submit/list/cancel live in the `me` module; the routes here are the
  * staff-facing half (see annualVacation.routes.js).
  */
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import ApiResponse from '../../utils/ApiResponse.js';
 import ApiError from '../../utils/ApiError.js';
+import { contentDisposition } from '../../utils/contentDisposition.js';
 import * as service from './annualVacation.service.js';
 
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, employee: req.user.employee, ip: req.ip });
@@ -47,4 +50,54 @@ export async function cancel(req, res) {
 export async function decide(req, res) {
   const request = await service.decideAnnualVacation(req.params.id, req.body, actor(req));
   res.json(new ApiResponse(`Request ${request.status.toLowerCase()}.`, request));
+}
+
+/** PATCH /api/annual-vacation/:id/days — HR changing the days at the HR step. */
+export async function changeDays(req, res) {
+  const request = await service.changeVacationDays(req.params.id, req.body, actor(req));
+  res.json(new ApiResponse('The days were changed.', request));
+}
+
+/** POST /api/annual-vacation/:id/tickets — multipart `files` + travelDate. */
+export async function attachTickets(req, res) {
+  const request = await service.attachTickets(req.params.id, req.files, req.body, actor(req));
+  res.json(new ApiResponse('Tickets attached.', request));
+}
+
+/** DELETE /api/annual-vacation/:id/tickets/:fileId */
+export async function removeTicket(req, res) {
+  const request = await service.removeTicket(req.params.id, req.params.fileId, actor(req));
+  res.json(new ApiResponse('Ticket removed.', request));
+}
+
+/** POST /api/annual-vacation/:id/visa — multipart `file` + optional visaReferenceNumber. */
+export async function uploadVisa(req, res) {
+  const request = await service.uploadVisa(req.params.id, req.file, req.body, actor(req));
+  res.json(new ApiResponse('Re-entry visa uploaded.', request));
+}
+
+/** GET /api/annual-vacation/eligibility[?employee=] */
+export async function eligibility(req, res) {
+  const onBehalf = Boolean(req.query.employee) && req.query.employee !== req.user.employee;
+  const data = await service.getEligibility(req.query.employee ?? ownEmployeeId(req), actor(req), { onBehalf });
+  res.json(new ApiResponse('Annual vacation eligibility.', data));
+}
+
+/** Streams a stored file back to the (already authorised) caller. */
+export async function streamStoredFile(res, fileData) {
+  res.setHeader('Content-Type', fileData.mimeType);
+  res.setHeader('Content-Disposition', contentDisposition(fileData.originalName));
+  const upstream = await fetch(fileData.url);
+  if (!upstream.ok || !upstream.body) throw new ApiError(410, 'The stored document is no longer available.');
+  await pipeline(Readable.fromWeb(upstream.body), res);
+}
+
+/** GET /api/annual-vacation/:id/tickets/:fileId/file */
+export async function ticketFile(req, res) {
+  await streamStoredFile(res, await service.getTicketFile(req.params.id, req.params.fileId, { actor: actor(req) }));
+}
+
+/** GET /api/annual-vacation/:id/visa/file */
+export async function visaFile(req, res) {
+  await streamStoredFile(res, await service.getVisaFile(req.params.id, { actor: actor(req) }));
 }

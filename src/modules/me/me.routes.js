@@ -36,6 +36,7 @@ import {
   submitOwnAnnualVacationSchema,
   listMyAnnualVacationSchema,
   annualVacationIdParamSchema,
+  vacationTicketParamSchema,
 } from '../annualVacation/annualVacation.validation.js';
 import {
   submitCertificateSchema,
@@ -154,6 +155,17 @@ router.get(
   '/annual-vacation',
   validate({ query: listMyAnnualVacationSchema }),
   asyncHandler(meController.listAnnualVacation)
+);
+router.get('/annual-vacation/eligibility', asyncHandler(meController.annualVacationEligibility));
+router.get(
+  '/annual-vacation/:id/tickets/:fileId/file',
+  validate({ params: vacationTicketParamSchema }),
+  asyncHandler(meController.annualVacationTicketFile)
+);
+router.get(
+  '/annual-vacation/:id/visa/file',
+  validate({ params: annualVacationIdParamSchema }),
+  asyncHandler(meController.annualVacationVisaFile)
 );
 router.post(
   '/annual-vacation',

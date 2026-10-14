@@ -7,13 +7,16 @@ import { ANNUAL_VACATION_STATUSES } from './annualVacation.model.js';
 const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id.');
 const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
 
+const dayCount = z.coerce
+  .number({ error: 'Enter the number of days.' })
+  .int('Whole days only.')
+  .min(1, 'Must request at least 1 day.')
+  .max(90, 'A vacation can be at most 90 days.');
+
+// The number of days is not asked of the requester (2026-10-14): it is the contract's, set by HR on the
+// employee record. A client that still sends one is ignored.
 const vacationFields = {
   startDate: z.coerce.date({ error: 'Choose the first day of the vacation.' }),
-  requestedDays: z.coerce
-    .number({ error: 'Enter the number of days.' })
-    .int('Whole days only.')
-    .min(1, 'Must request at least 1 day.')
-    .max(90, 'A vacation can be at most 90 days.'),
   reason: z.preprocess(emptyToUndef, z.string().trim().max(1000).optional()),
 };
 
@@ -25,6 +28,24 @@ export const submitAnnualVacationSchema = z.object({
   employee: z.preprocess(emptyToUndef, id.optional()),
   ...vacationFields,
 });
+
+/** HR changing the days at the HR step, with the reason (usually what the employee wrote in the notes). */
+export const changeVacationDaysSchema = z.object({
+  requestedDays: dayCount,
+  note: z.preprocess(emptyToUndef, z.string().trim().max(500).optional()),
+});
+
+/** Accounts attaching the air tickets: the day of travel (the files travel as multipart). */
+export const attachTicketsSchema = z.object({
+  travelDate: z.coerce.date({ error: 'Choose the day of travel.' }),
+});
+
+export const visaDocumentSchema = z.object({
+  visaReferenceNumber: z.preprocess(emptyToUndef, z.string().trim().max(100).optional()),
+});
+
+export const vacationTicketParamSchema = z.object({ id, fileId: id });
+export const eligibilityQuerySchema = z.object({ employee: z.preprocess(emptyToUndef, id.optional()) });
 
 export const decideAnnualVacationSchema = z.object({
   status: z.enum(['Approved', 'Rejected'], { error: 'Decision must be Approved or Rejected.' }),

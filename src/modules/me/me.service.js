@@ -160,6 +160,18 @@ export async function cancelMyAnnualVacation(employeeId, id, actor) {
   return annualVacationService.cancelAnnualVacation(employeeId, id, actor);
 }
 
+export async function myAnnualVacationEligibility(employeeId, actor) {
+  return annualVacationService.getEligibility(employeeId, actor);
+}
+
+export async function myVacationTicketFile(employeeId, id, fileId) {
+  return annualVacationService.getTicketFile(id, fileId, { ownEmployeeId: employeeId });
+}
+
+export async function myVacationVisaFile(employeeId, id) {
+  return annualVacationService.getVisaFile(id, { ownEmployeeId: employeeId });
+}
+
 export async function submitMyCertificate(employeeId, body, actor) {
   return certificateService.submitCertificate(employeeId, body, actor);
 }

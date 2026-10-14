@@ -25,7 +25,49 @@ const annualVacationSchema = new mongoose.Schema(
     // the same counting Leave uses) — never trusted from the client.
     endDate: { type: Date, required: true },
     requestedDays: { type: Number, required: true, min: 1, max: 90 },
+    // The notes the requester wrote (labelled "Notes" on screen; the field keeps its original name).
     reason: { type: String, trim: true, maxlength: 1000 },
+
+    // The contract's vacation days when the request was made (Employee.annualVacationDays). `requestedDays`
+    // starts equal to it; HR may change it at the HR step, and `daysChange` keeps who changed what and why.
+    contractDays: { type: Number, default: null },
+    daysChange: {
+      type: new mongoose.Schema(
+        {
+          from: Number,
+          to: Number,
+          note: { type: String, trim: true, maxlength: 500 },
+          by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+          at: Date,
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+
+    // Travel documents, attached at the step that carries the 'TravelDocuments' duty (see
+    // approvalWorkflow.model.js): the day of travel, the air tickets, and the re-entry visa request that is
+    // raised from that day (its visa document is uploaded on that request).
+    travelDate: { type: Date, default: null },
+    tickets: {
+      type: [
+        {
+          fileName: { type: String, required: true }, // storage id, never sent to a client
+          resourceType: { type: String, required: true },
+          originalName: { type: String, required: true },
+          mimeType: { type: String, required: true },
+          size: { type: Number, required: true },
+          uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+          uploadedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+    visaRequest: { type: mongoose.Schema.Types.ObjectId, ref: 'ExitReentryRequest', default: null },
+
+    // Roles told when this was submitted and when it is approved (copied from the workflow at submission,
+    // like `steps`, so editing the workflow later does not change a request already under way).
+    informRoles: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }], default: [] },
 
     status: { type: String, enum: ANNUAL_VACATION_STATUSES, default: 'PendingReview' },
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
@@ -43,6 +85,7 @@ const annualVacationSchema = new mongoose.Schema(
         {
           label: String,
           roles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }],
+          duty: { type: String, default: null },
           _id: false,
         },
       ],

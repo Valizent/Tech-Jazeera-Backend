@@ -16,6 +16,15 @@ import { getMyOverview } from './meOverview.service.js';
 
 const actor = (req) => ({ userId: req.user.id, employee: req.user.employee, ip: req.ip });
 
+/** Streams a stored file (already authorised) back to the caller. */
+async function streamStoredFile(res, fileData) {
+  res.setHeader('Content-Type', fileData.mimeType);
+  res.setHeader('Content-Disposition', contentDisposition(fileData.originalName));
+  const upstream = await fetch(fileData.url);
+  if (!upstream.ok || !upstream.body) throw new ApiError(410, 'The stored document is no longer available.');
+  await pipeline(Readable.fromWeb(upstream.body), res);
+}
+
 /** requireRoles('Worker') on the router guarantees a role, not the link — a
  *  Worker whose Employee was since deleted would otherwise 500 downstream. */
 function myEmployeeId(req) {
@@ -193,6 +202,22 @@ export async function submitAnnualVacation(req, res) {
 export async function listAnnualVacation(req, res) {
   const data = await meService.listMyAnnualVacation(myEmployeeId(req), req.query);
   res.json(new ApiResponse('Your annual vacation requests.', data));
+}
+
+/** GET /api/me/annual-vacation/eligibility — can I ask for vacation yet, and how many days is my contract's. */
+export async function annualVacationEligibility(req, res) {
+  const data = await meService.myAnnualVacationEligibility(myEmployeeId(req), actor(req));
+  res.json(new ApiResponse('Annual vacation eligibility.', data));
+}
+
+/** GET /api/me/annual-vacation/:id/tickets/:fileId/file — my own air ticket. */
+export async function annualVacationTicketFile(req, res) {
+  await streamStoredFile(res, await meService.myVacationTicketFile(myEmployeeId(req), req.params.id, req.params.fileId));
+}
+
+/** GET /api/me/annual-vacation/:id/visa/file — my own re-entry visa. */
+export async function annualVacationVisaFile(req, res) {
+  await streamStoredFile(res, await meService.myVacationVisaFile(myEmployeeId(req), req.params.id));
 }
 
 /** PATCH /api/me/annual-vacation/:id/cancel — 200 → data: request */

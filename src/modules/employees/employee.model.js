@@ -105,6 +105,9 @@ const employeeSchema = new mongoose.Schema(
     joiningDate: { type: Date, required: requiredForWorkforce },
     contractStartDate: { type: Date, default: null },
     contractEndDate: { type: Date, default: null },
+    // Annual vacation days the contract gives (2026-10-14): HR sets it; an annual vacation request always
+    // starts from this number (HR may change it for one request at the review step).
+    annualVacationDays: { type: Number, default: null, min: 1, max: 90 },
     designation: { type: String, required: true, trim: true },
     department: { type: String, trim: true },
     // Monthly salary in SAR. Number (not string) so M10 can aggregate costs.

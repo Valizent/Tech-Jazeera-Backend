@@ -20,11 +20,21 @@ import LeaveRequest from '../leave/leaveRequest.model.js';
 import LeaveType from '../leave/leaveType.model.js';
 import AnnualVacationRequest from './annualVacation.model.js';
 import ApiError from '../../utils/ApiError.js';
+import logger from '../../config/logger.js';
 import { logAudit } from '../audit/audit.service.js';
+import ExitReentryRequest from '../exitDocuments/exitReentry.model.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
-import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import {
+  decideApprovalStep,
+  annotateCanDecide,
+  notifySubmission,
+  resolveStepAuthority,
+  membersOfRoles,
+} from '../approvals/approvalEngine.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
+import { notifyUser, notifyEmployeeUser } from '../notifications/notification.service.js';
+import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.js';
 
 /** The ORIGINAL decide-route role gate, used whenever no ApprovalWorkflow governs a request. */
 const LEGACY_DECIDE_ROLES = ['Admin', 'Manager', 'HR'];
@@ -42,12 +52,42 @@ function utcDay(date) {
 
 /** Shared by submit (notifySubmission) and decide (buildStepNotification) so the text can't drift. */
 function buildStepNotification(doc, stepIndex) {
+  const step = doc.steps?.[stepIndex];
+  const travel = step?.duty === 'TravelDocuments';
   return {
     type: 'RequestStatus',
-    title: 'An annual vacation request needs your approval',
-    body: doc.steps?.[stepIndex]?.label ? `Step: ${doc.steps[stepIndex].label}` : undefined,
+    title: travel ? 'Annual vacation: attach the air tickets and the re-entry visa' : 'An annual vacation request needs your approval',
+    body: step?.label ? `Step: ${step.label}` : undefined,
     url: '/annual-vacation',
   };
+}
+
+const fmtDay = (date) => {
+  const d = new Date(date);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+};
+
+/**
+ * Tells the roles the workflow lists as "informed" (2026-10-14: the Marketing Manager for an annual vacation, the
+ * Financial Manager for someone in Accounts): when the request is submitted, and again when it is approved. They
+ * are told, they are not asked. Best effort: it never fails the request itself.
+ */
+async function notifyInformed(doc, event) {
+  try {
+    if (!doc.informRoles?.length) return;
+    const employee = await Employee.findById(doc.employee).select('fullName').lean();
+    const name = employee?.fullName ?? 'An employee';
+    const span = `from ${fmtDay(doc.startDate)} to ${fmtDay(doc.endDate)}`;
+    const notification =
+      event === 'approved'
+        ? { type: 'RequestStatus', title: `${name} is going on annual leave`, body: `${name} will be on annual leave ${span} (${doc.requestedDays} days).`, url: '/annual-vacation' }
+        : { type: 'RequestStatus', title: `${name} has requested annual vacation`, body: `${name} asked for annual vacation ${span} (${doc.requestedDays} days).`, url: '/annual-vacation' };
+    const userIds = await membersOfRoles(doc.informRoles);
+    await Promise.allSettled(userIds.map((userId) => notifyUser(userId, notification)));
+  } catch (err) {
+    logger.error(`[annualVacation] informing roles failed: ${err.message}`);
+  }
 }
 
 /**
@@ -70,18 +110,29 @@ function assertEligible(employee) {
 
 /** Non-throwing form of the rule above, for the portal home ("can I ask for vacation yet?"). */
 export function vacationEligibility(employee) {
+  const contractDays = employee.annualVacationDays ?? null;
   try {
     assertEligible(employee);
-    return { eligible: true, reason: null };
+    assertContractDays(employee);
+    return { eligible: true, reason: null, contractDays };
   } catch (error) {
-    return { eligible: false, reason: error.message };
+    return { eligible: false, reason: error.message, contractDays };
   }
 }
 
-async function createRequest(employeeId, { startDate, requestedDays, reason }, actor, onBehalf) {
+/** The number of days is the contract's, set by HR on the employee record. */
+function assertContractDays(employee) {
+  if (!(employee.annualVacationDays > 0)) {
+    throw new ApiError(400, 'The annual vacation days from the contract are not set on this record yet. Please ask HR to set them.');
+  }
+}
+
+async function createRequest(employeeId, { startDate, reason }, actor, onBehalf) {
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
   assertEligible(employee);
+  assertContractDays(employee);
+  const requestedDays = employee.annualVacationDays;
 
   const start = utcDay(startDate);
   if (start < utcDay(new Date())) throw new ApiError(400, 'The vacation cannot start in the past.');
@@ -93,7 +144,13 @@ async function createRequest(employeeId, { startDate, requestedDays, reason }, a
 
   const workflow = await resolveApprovalWorkflow(employee, 'AnnualVacation');
   const workflowFields = workflow
-    ? { workflow: workflow._id, workflowName: workflow.name, steps: workflow.steps, currentStep: 0 }
+    ? {
+        workflow: workflow._id,
+        workflowName: workflow.name,
+        steps: workflow.steps,
+        currentStep: 0,
+        informRoles: workflow.notifyRoles ?? [],
+      }
     : {};
 
   const request = await AnnualVacationRequest.create({
@@ -102,6 +159,7 @@ async function createRequest(employeeId, { startDate, requestedDays, reason }, a
     startDate: start,
     endDate: end,
     requestedDays,
+    contractDays: employee.annualVacationDays,
     reason,
     ...workflowFields,
   });
@@ -120,6 +178,7 @@ async function createRequest(employeeId, { startDate, requestedDays, reason }, a
     LEGACY_DECIDE_ROLES,
     employee.coordinator ? [employee.coordinator] : []
   );
+  await notifyInformed(plain, 'submitted');
   return plain;
 }
 
@@ -156,14 +215,32 @@ export async function submitAnnualVacationFor(employeeId, data, actor) {
   return createRequest(employeeId, data, actor, true);
 }
 
+const VISA_SUMMARY_FIELDS = 'status visaReferenceNumber departureDate expectedReturnDate issuedAt visaFile.originalName';
+
+/** A request as clients may see it: ticket names and sizes (never the storage id), and where the visa stands. */
+function publicVacation(item) {
+  const visa = item.visaRequest && typeof item.visaRequest === 'object' && item.visaRequest._id ? item.visaRequest : null;
+  const { visaFile, ...visaRest } = visa ?? {};
+  return {
+    ...item,
+    tickets: (item.tickets ?? []).map(({ _id, originalName, mimeType, size, uploadedAt }) => ({ _id, originalName, mimeType, size, uploadedAt })),
+    visaRequest: visa ? { ...visaRest, hasFile: Boolean(visaFile?.originalName), fileName: visaFile?.originalName ?? null } : item.visaRequest ?? null,
+  };
+}
+
 export async function listOwnAnnualVacation(employeeId, { page, limit, status }) {
   const filter = { employee: employeeId };
   if (status) filter.status = status;
   const [items, total] = await Promise.all([
-    AnnualVacationRequest.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    AnnualVacationRequest.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate('visaRequest', VISA_SUMMARY_FIELDS)
+      .lean(),
     AnnualVacationRequest.countDocuments(filter),
   ]);
-  return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+  return { items: items.map(publicVacation), total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
 export async function cancelAnnualVacation(employeeId, id, actor) {
@@ -211,6 +288,7 @@ export async function listAnnualVacation({ page, limit, status, employee }, acto
       .populate('steps.roles', 'name')
       .populate('approvalTrail.approvalRole', 'name')
       .populate('approvalTrail.approvedBy', 'name role')
+      .populate('visaRequest', VISA_SUMMARY_FIELDS)
       .lean(),
     AnnualVacationRequest.countDocuments(filter),
   ]);
@@ -221,7 +299,7 @@ export async function listAnnualVacation({ page, limit, status, employee }, acto
   // The route already requires Read; deciding additionally needs Write, so a
   // read-only viewer in a workflow step never sees Approve/Reject buttons.
   const hasWrite = await canAccessSection('annualVacation', actor, 'write');
-  const items = annotated.map((item) => ({ ...item, canDecideCurrentStep: item.canDecideCurrentStep && hasWrite }));
+  const items = annotated.map((item) => publicVacation({ ...item, canDecideCurrentStep: item.canDecideCurrentStep && hasWrite }));
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
@@ -262,6 +340,10 @@ async function recordApprovedLeave(vacation) {
       decidedAt: vacation.decidedAt,
     });
     await AnnualVacationRequest.updateOne({ _id: vacation._id }, { $set: { linkedLeaveRequest: leave._id } });
+    // The re-entry visa request raised from this vacation points at the approved leave, as its own field expects.
+    if (vacation.visaRequest) {
+      await ExitReentryRequest.updateOne({ _id: vacation.visaRequest }, { $set: { linkedLeaveRequest: leave._id } });
+    }
   } catch (err) {
     await AnnualVacationRequest.updateOne(
       { _id: vacation._id, status: 'Approved' },
@@ -274,12 +356,36 @@ async function recordApprovedLeave(vacation) {
     if (err instanceof ApiError) throw err;
     throw new ApiError(500, 'Approval could not be completed because recording the leave failed. It was reverted, please try again.');
   }
+  // Only once the leave is really recorded: tell the roles the workflow lists (the Marketing Manager, or the
+  // Financial Manager for an Accounts person) that this person is going on annual leave.
+  await notifyInformed(vacation, 'approved');
+}
+
+/** The air tickets are attached and the re-entry visa uploaded: the TravelDocuments step may move on. */
+async function travelDocumentsDone(doc) {
+  if (!doc.tickets?.length || !doc.visaRequest) return false;
+  const visa = await ExitReentryRequest.findById(doc.visaRequest).select('status visaFile').lean();
+  return visa?.status === 'Issued' && Boolean(visa.visaFile?.fileName);
 }
 
 export async function decideAnnualVacation(id, { status, decisionNote }, actor) {
   if (!(await canAccessSection('annualVacation', actor, 'write'))) {
     throw new ApiError(403, 'You do not have permission to decide annual vacation requests.');
   }
+  if (status === 'Approved') {
+    const doc = await AnnualVacationRequest.findById(id).lean();
+    const step = doc?.workflow ? doc.steps?.[doc.currentStep] : null;
+    if (doc?.status === 'PendingReview' && step?.duty === 'TravelDocuments' && !(await travelDocumentsDone(doc))) {
+      throw new ApiError(
+        400,
+        'Attach the air tickets and upload the re-entry visa first. The request moves on by itself once both are done.'
+      );
+    }
+  }
+  return runDecision(id, status, decisionNote, actor);
+}
+
+function runDecision(id, status, decisionNote, actor) {
   return decideApprovalStep({
     Model: AnnualVacationRequest,
     id,
@@ -300,4 +406,226 @@ export async function decideAnnualVacation(id, { status, decisionNote }, actor) 
     buildStepNotification,
     onApproved: recordApprovedLeave,
   });
+}
+
+// ---------------------------------------------------------------------------
+// HR's days, Accounts' tickets and re-entry visa (2026-10-14)
+// ---------------------------------------------------------------------------
+
+/** The request at the step that carries `duty`, and the actor really holds that step (or is Admin). */
+async function loadAtDutyStep(id, duty, actor) {
+  const doc = await AnnualVacationRequest.findById(id);
+  if (!doc) throw new ApiError(404, 'Annual vacation request not found.');
+  if (doc.status !== 'PendingReview') throw new ApiError(409, 'This request is no longer waiting for review.');
+  const step = doc.workflow ? doc.steps?.[doc.currentStep] : null;
+  if (step?.duty !== duty) {
+    throw new ApiError(409, duty === 'HrReview' ? 'The days can only be changed at the HR step.' : 'Tickets and the re-entry visa belong to the Accounts step.');
+  }
+  const { authorized } = await resolveStepAuthority(actor, step.roles);
+  if (!authorized) throw new ApiError(403, 'You are not an approver for the current step of this request.');
+  await assertEmployeeVisibleToActor(doc.employee, actor);
+  return doc;
+}
+
+/** HR changing the number of days for this one request, with the reason (usually what the employee asked in the notes). */
+export async function changeVacationDays(id, { requestedDays, note }, actor) {
+  const doc = await loadAtDutyStep(id, 'HrReview', actor);
+  if (requestedDays === doc.requestedDays) throw new ApiError(400, 'The request already has that number of days.');
+  const start = utcDay(doc.startDate);
+  const end = new Date(start.getTime() + (requestedDays - 1) * MS_PER_DAY);
+  await assertNoOverlap(doc.employee, start, end, doc._id);
+
+  const from = doc.requestedDays;
+  doc.requestedDays = requestedDays;
+  doc.endDate = end;
+  doc.daysChange = { from, to: requestedDays, note, by: actor.userId, at: new Date() };
+  await doc.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'annualVacation.daysChanged',
+    targetType: 'AnnualVacationRequest',
+    targetId: doc._id,
+    meta: { from, to: requestedDays, note },
+    ip: actor.ip,
+  });
+  await notifyEmployeeUser(doc.employee, {
+    type: 'RequestStatus',
+    title: 'HR changed the days of your annual vacation',
+    body: `From ${from} to ${requestedDays} days${note ? `: ${note}` : ''}.`,
+    url: '/me/annual-vacation',
+  }).catch(() => {});
+  const item = await AnnualVacationRequest.findById(id).populate('visaRequest', VISA_SUMMARY_FIELDS).lean();
+  return publicVacation(item);
+}
+
+/**
+ * The visa request raised from the day of travel: a single re-entry visa that starts on the day of travel
+ * and covers the vacation days plus one more, already cleared (the vacation approval is the only approval)
+ * and waiting in Accounts' pool for the visa document. Re-run whenever the day of travel or the days change.
+ */
+async function ensureVisaRequest(doc, actor) {
+  const departureDate = utcDay(doc.travelDate);
+  // The travel day is day 1: vacation days + 1 days on the visa ends vacation days after the travel day.
+  const expectedReturnDate = new Date(departureDate.getTime() + doc.requestedDays * MS_PER_DAY);
+  if (doc.visaRequest) {
+    const existing = await ExitReentryRequest.findById(doc.visaRequest);
+    if (existing && existing.status !== 'Issued') {
+      existing.departureDate = departureDate;
+      existing.expectedReturnDate = expectedReturnDate;
+      await existing.save();
+    }
+    return;
+  }
+  const visa = await ExitReentryRequest.create({
+    employee: doc.employee,
+    visaType: 'Single',
+    departureDate,
+    expectedReturnDate,
+    reason: 'Annual vacation',
+    status: 'Approved',
+    decidedBy: actor.userId,
+    decidedAt: new Date(),
+    decisionNote: 'Raised automatically from the annual vacation request.',
+    annualVacation: doc._id,
+  });
+  doc.visaRequest = visa._id;
+  await doc.save();
+}
+
+/** If both the tickets and the visa are in, hand the request on to the next step on behalf of whoever just finished. */
+async function advanceWhenReady(id, actor) {
+  const doc = await AnnualVacationRequest.findById(id).lean();
+  if (!doc || doc.status !== 'PendingReview') return;
+  const step = doc.workflow ? doc.steps?.[doc.currentStep] : null;
+  if (step?.duty !== 'TravelDocuments' || !(await travelDocumentsDone(doc))) return;
+  await runDecision(id, 'Approved', 'Air tickets attached and re-entry visa uploaded.', actor);
+}
+
+const asStored = (file) => ({
+  fileName: file.filename,
+  resourceType: 'raw',
+  originalName: file.originalname,
+  mimeType: file.mimetype,
+  size: file.size,
+});
+
+/** Accounts attaching the air tickets with the day of travel; the re-entry visa request is raised from that day. */
+export async function attachTickets(id, files, { travelDate }, actor) {
+  const doc = await loadAtDutyStep(id, 'TravelDocuments', actor);
+  if (!files?.length && doc.tickets.length === 0) throw new ApiError(400, 'Attach at least one air ticket.');
+  const travel = utcDay(travelDate);
+  if (travel > utcDay(doc.endDate)) throw new ApiError(400, 'The day of travel cannot be after the vacation ends.');
+
+  for (const file of files ?? []) doc.tickets.push({ ...asStored(file), uploadedBy: actor.userId, uploadedAt: new Date() });
+  doc.travelDate = travel;
+  await doc.save();
+  await ensureVisaRequest(doc, actor);
+
+  await logAudit({
+    user: actor.userId,
+    action: 'annualVacation.ticketsAttached',
+    targetType: 'AnnualVacationRequest',
+    targetId: doc._id,
+    meta: { files: files?.length ?? 0, travelDate: travel.toISOString().slice(0, 10) },
+    ip: actor.ip,
+  });
+  await advanceWhenReady(id, actor);
+  const item = await AnnualVacationRequest.findById(id).populate('visaRequest', VISA_SUMMARY_FIELDS).lean();
+  return publicVacation(item);
+}
+
+export async function removeTicket(id, fileId, actor) {
+  const doc = await loadAtDutyStep(id, 'TravelDocuments', actor);
+  const ticket = doc.tickets.id(fileId);
+  if (!ticket) throw new ApiError(404, 'Ticket not found.');
+  await destroyDocumentFile(ticket.fileName, ticket.resourceType).catch(() => {});
+  doc.tickets = doc.tickets.filter((t) => String(t._id) !== String(fileId));
+  await doc.save();
+  await logAudit({
+    user: actor.userId,
+    action: 'annualVacation.ticketRemoved',
+    targetType: 'AnnualVacationRequest',
+    targetId: doc._id,
+    meta: { originalName: ticket.originalName },
+    ip: actor.ip,
+  });
+  const item = await AnnualVacationRequest.findById(id).populate('visaRequest', VISA_SUMMARY_FIELDS).lean();
+  return publicVacation(item);
+}
+
+/** Accounts uploading the issued re-entry visa; it closes the visa request, and the step moves on once tickets are in too. */
+export async function uploadVisa(id, file, { visaReferenceNumber }, actor) {
+  const doc = await loadAtDutyStep(id, 'TravelDocuments', actor);
+  if (!doc.visaRequest) throw new ApiError(400, 'Attach the air tickets first: the re-entry visa request is raised from the day of travel.');
+  if (!file) throw new ApiError(400, 'Choose the re-entry visa document to upload.');
+  const visa = await ExitReentryRequest.findById(doc.visaRequest);
+  if (!visa) throw new ApiError(404, 'The re-entry visa request was not found.');
+
+  if (visa.visaFile?.fileName) await destroyDocumentFile(visa.visaFile.fileName, visa.visaFile.resourceType).catch(() => {});
+  visa.visaFile = { ...asStored(file), uploadedAt: new Date() };
+  visa.status = 'Issued';
+  visa.issuedAt = new Date();
+  visa.issuedBy = actor.userId;
+  if (visaReferenceNumber) visa.visaReferenceNumber = visaReferenceNumber;
+  await visa.save();
+
+  await logAudit({
+    user: actor.userId,
+    action: 'annualVacation.visaUploaded',
+    targetType: 'AnnualVacationRequest',
+    targetId: doc._id,
+    meta: { originalName: file.originalname, visaReferenceNumber },
+    ip: actor.ip,
+  });
+  await advanceWhenReady(id, actor);
+  const item = await AnnualVacationRequest.findById(id).populate('visaRequest', VISA_SUMMARY_FIELDS).lean();
+  return publicVacation(item);
+}
+
+// ---------------------------------------------------------------------------
+// Reading the documents back (anyone who may see the request; the employee for their own)
+// ---------------------------------------------------------------------------
+
+async function loadVisibleVacation(id, viewer) {
+  const doc = await AnnualVacationRequest.findById(id).lean();
+  if (!doc) throw new ApiError(404, 'Annual vacation request not found.');
+  if (viewer.ownEmployeeId) {
+    if (String(doc.employee) !== String(viewer.ownEmployeeId)) throw new ApiError(403, 'You can only open your own documents.');
+  } else if (!(viewer.actor.employee && String(doc.employee) === String(viewer.actor.employee))) {
+    // Someone else's request: a reader of the section (read-only for the rest of management), team-scoped for a Coordinator.
+    if (!(await canAccessSection('annualVacation', viewer.actor, 'read'))) {
+      throw new ApiError(403, 'You do not have access to this request.');
+    }
+    await assertEmployeeVisibleToActor(doc.employee, viewer.actor);
+  }
+  return doc;
+}
+
+/** @param viewer {{actor}|{ownEmployeeId}} - a staff actor (team-scoped for a Coordinator) or the employee themselves. */
+export async function getTicketFile(id, fileId, viewer) {
+  const doc = await loadVisibleVacation(id, viewer);
+  const ticket = (doc.tickets ?? []).find((t) => String(t._id) === String(fileId));
+  if (!ticket) throw new ApiError(404, 'Ticket not found.');
+  return { url: signedDownloadUrl(ticket.fileName, ticket.resourceType), mimeType: ticket.mimeType, originalName: ticket.originalName };
+}
+
+export async function getVisaFile(id, viewer) {
+  const doc = await loadVisibleVacation(id, viewer);
+  const visa = doc.visaRequest ? await ExitReentryRequest.findById(doc.visaRequest).select('visaFile').lean() : null;
+  if (!visa?.visaFile?.fileName) throw new ApiError(404, 'The re-entry visa has not been uploaded yet.');
+  return { url: signedDownloadUrl(visa.visaFile.fileName, visa.visaFile.resourceType), mimeType: visa.visaFile.mimeType, originalName: visa.visaFile.originalName };
+}
+
+/** Can this employee ask for vacation, and with how many days — for the request form. */
+export async function getEligibility(employeeId, actor, { onBehalf = false } = {}) {
+  const employee = await Employee.findById(employeeId).lean();
+  if (!employee) throw new ApiError(404, 'Employee not found.');
+  if (onBehalf) {
+    if (!(await canAccessSection('annualVacation', actor, 'write'))) {
+      throw new ApiError(403, 'You do not have permission to file an annual vacation for someone else.');
+    }
+    await assertEmployeeVisibleToActor(employeeId, actor);
+  }
+  return vacationEligibility(employee);
 }

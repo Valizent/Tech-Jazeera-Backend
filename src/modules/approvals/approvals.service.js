@@ -116,13 +116,18 @@ export async function listApprovalWorkflows() {
   return ApprovalWorkflow.find()
     .sort({ name: 1 })
     .populate('steps.roles', 'name isActive')
+    .populate('notifyRoles', 'name isActive')
     .populate('departmentRoutes.workflow', 'name isActive')
     .lean();
 }
 
 /** Every role referenced by a step must exist and be active. */
-async function assertValidSteps(steps) {
-  const roleIds = [...new Set(steps.flatMap((s) => s.roles.map(String)))];
+async function assertValidSteps(steps, notifyRoles = []) {
+  const duties = steps.map((s) => s.duty).filter(Boolean);
+  if (new Set(duties).size !== duties.length) {
+    throw new ApiError(400, 'Each special step duty can be given to only one step of a workflow.');
+  }
+  const roleIds = [...new Set([...steps.flatMap((s) => s.roles.map(String)), ...notifyRoles.map(String)])];
   if (roleIds.length === 0) return;
   const count = await ApprovalRole.countDocuments({ _id: { $in: roleIds }, isActive: true });
   if (count !== roleIds.length) {
@@ -156,7 +161,7 @@ async function assertValidDepartmentRoutes(routes, appliesTo, selfId) {
 export async function createApprovalWorkflow(data, actor) {
   const existing = await ApprovalWorkflow.findOne({ name: data.name }).lean();
   if (existing) throw new ApiError(409, 'An approval workflow with this name already exists.');
-  await assertValidSteps(data.steps);
+  await assertValidSteps(data.steps, data.notifyRoles);
   await assertValidDepartmentRoutes(data.departmentRoutes, data.appliesTo, null);
 
   let workflow;
@@ -178,7 +183,10 @@ export async function createApprovalWorkflow(data, actor) {
 }
 
 export async function updateApprovalWorkflow(id, data, actor) {
-  if (data.steps) await assertValidSteps(data.steps);
+  if (data.steps || data.notifyRoles) {
+    const current = data.steps ? null : await ApprovalWorkflow.findById(id).select('steps').lean();
+    await assertValidSteps(data.steps ?? current?.steps ?? [], data.notifyRoles);
+  }
   if (data.departmentRoutes?.length) {
     const current = await ApprovalWorkflow.findById(id).select('appliesTo').lean();
     await assertValidDepartmentRoutes(data.departmentRoutes, data.appliesTo ?? current?.appliesTo, id);
@@ -188,6 +196,7 @@ export async function updateApprovalWorkflow(id, data, actor) {
   try {
     workflow = await ApprovalWorkflow.findByIdAndUpdate(id, data, { new: true, runValidators: true })
       .populate('steps.roles', 'name isActive')
+      .populate('notifyRoles', 'name isActive')
       .populate('departmentRoutes.workflow', 'name isActive')
       .lean();
   } catch (err) {

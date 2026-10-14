@@ -3,7 +3,7 @@
  * configuration (Admin-only — see approvals.routes.js).
  */
 import { z } from 'zod';
-import { APPROVAL_REQUEST_TYPES } from './approvalWorkflow.model.js';
+import { APPROVAL_REQUEST_TYPES, STEP_DUTIES } from './approvalWorkflow.model.js';
 import { EMPLOYEE_DEPARTMENTS } from '../employees/departments.js';
 
 const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
@@ -28,6 +28,7 @@ export const approvalRoleIdParamSchema = z.object({ id: objectId('approval role'
 const workflowStepSchema = z.object({
   label: z.preprocess(emptyToUndef, z.string().trim().max(60).optional()),
   roles: z.array(objectId('approval role')).min(1, 'Each step needs at least one role.'),
+  duty: z.preprocess(emptyToUndef, z.enum(STEP_DUTIES, { error: 'Unknown step duty.' }).nullable().optional()),
 });
 
 const departmentRouteSchema = z.object({
@@ -44,6 +45,7 @@ export const createApprovalWorkflowSchema = z.object({
   name: z.string().trim().min(2, 'Name is required.').max(60),
   steps: z.array(workflowStepSchema).min(1, 'A workflow needs at least one step.'),
   appliesTo: z.array(z.enum(APPROVAL_REQUEST_TYPES)).default([]),
+  notifyRoles: z.array(objectId('approval role')).default([]),
   departmentRoutes: departmentRoutes.default([]),
   isActive: z.boolean().default(true),
 });
@@ -52,6 +54,7 @@ export const updateApprovalWorkflowSchema = z.object({
   name: z.string().trim().min(2).max(60).optional(),
   steps: z.array(workflowStepSchema).min(1).optional(),
   appliesTo: z.array(z.enum(APPROVAL_REQUEST_TYPES)).optional(),
+  notifyRoles: z.array(objectId('approval role')).optional(),
   departmentRoutes: departmentRoutes.optional(),
   isActive: z.boolean().optional(),
 });

@@ -81,3 +81,14 @@ Worker files in the ESS portal, Admin reviews in the queue (approval trail
 shown), approves, the approved leave is recorded, Admin files on behalf of a
 login-less employee, Arabic/RTL renders. Everything cleaned up (counters
 unchanged, no notification left for a real user).
+
+## 2026-10-14: contract days, Accounts' tickets and re-entry visa, FM, and who is told
+
+**Flow (all configured in Approval Hierarchy, nothing hard-coded to a role name):**
+HR (duty `HrReview`) -> Accounts (duty `TravelDocuments`) -> FM (ordinary last step). The workflow's `notifyRoles` ("Told, not asked") hear about it at submission and at approval.
+
+- **Days:** `Employee.annualVacationDays` (HR, 1-90). The request's `requestedDays` always starts from it (a client-sent value is ignored; no value on the record = request refused). `contractDays` snapshots it on the request. At the HR step `PATCH /api/annual-vacation/:id/days` changes the days for that one request and records `daysChange {from, to, note, by, at}`; the end date and the overlap check are re-run.
+- **Accounts step:** `POST /api/annual-vacation/:id/tickets` (files + `travelDate`; travel day on or before the last vacation day) attaches tickets and raises one `ExitReentryRequest` (Single, status Approved, `annualVacation` back-link) from the travel day to travel day + vacation days (vacation days + 1 days counting the travel day). `POST /api/annual-vacation/:id/visa` uploads the issued visa document (+ optional reference), marking that request Issued. When tickets and visa are both in, the step is approved by itself on behalf of whoever finished; approving it by hand before then is refused. Both need "Can change" on Annual Vacation and membership of the step's roles (Admin overrides).
+- **Approval:** FM's approval records the leave as before, links the visa request to it, and informs the roles.
+- **Reading:** `GET /api/annual-vacation/:id/tickets/:fileId/file` and `.../visa/file` for the employee's own request or any reader of the section (Coordinators team-scoped); `/api/me/...` for Worker/Staff. Storage ids never leave the server.
+- **Setup in production (toggles only):** Approval Hierarchy: a workflow with the three steps and the duties, "Told" = Marketing Manager role, default for Annual Vacation; a second one with FM as "Told" routed for the Accounts department. Section Access: Annual Vacation "Can change" = HR, Accounts and FM roles. Employees: HR fills in the contract days.

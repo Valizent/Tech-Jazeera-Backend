@@ -29,6 +29,23 @@ const exitReentrySchema = new mongoose.Schema(
     // pending review.
     linkedLeaveRequest: { type: mongoose.Schema.Types.ObjectId, ref: 'LeaveRequest', default: null },
     reason: { type: String, trim: true, maxlength: 500 },
+    // Raised automatically from an annual vacation request (2026-10-14): the request it came from, and the
+    // visa document Accounts upload when it is issued.
+    annualVacation: { type: mongoose.Schema.Types.ObjectId, ref: 'AnnualVacationRequest', default: null },
+    visaFile: {
+      type: new mongoose.Schema(
+        {
+          fileName: { type: String, required: true },
+          resourceType: { type: String, required: true },
+          originalName: { type: String, required: true },
+          mimeType: { type: String, required: true },
+          size: { type: Number, required: true },
+          uploadedAt: { type: Date, default: Date.now },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
 
     status: { type: String, enum: EXIT_REENTRY_STATUSES, default: 'Pending' },
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
