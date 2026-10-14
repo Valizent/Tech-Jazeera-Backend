@@ -91,32 +91,41 @@ async function notifyInformed(doc, event) {
 }
 
 /**
- * An employee may take annual vacation once a contract period has ended: the
- * recorded contract end date has passed, or the contract was renewed (the
- * current contract started well after joining, so the first one is over).
+ * The contract period the next vacation follows (2026-10-14, the user's rule). A request may be filed at any
+ * time, but its first day must come after that period's end date: the contract end date, or, when the contract
+ * was renewed before it ended, the END THE RENEWAL REPLACED (`previousContractEndDate`, kept by the server), so
+ * a renewal never costs the vacation. Records renewed before this field existed fall back to the old
+ * "current contract started well after joining" reading (the vacation may start any time). One approved
+ * vacation per period: it opens again when HR renews the contract.
  */
-function assertEligible(employee) {
+async function vacationCycle(employee) {
   if (employee.status === 'Exited') throw new ApiError(400, 'This employee has exited the company.');
   if (!employee.contractEndDate) {
     throw new ApiError(400, 'Contract end date is not set on this employee. Please contact HR.');
   }
-  if (new Date() >= new Date(employee.contractEndDate)) return;
-  if (employee.contractStartDate && employee.joiningDate) {
+  let anchor = employee.previousContractEndDate ?? employee.contractEndDate;
+  if (!employee.previousContractEndDate && employee.contractStartDate && employee.joiningDate) {
     const gapDays = (new Date(employee.contractStartDate) - new Date(employee.joiningDate)) / MS_PER_DAY;
-    if (gapDays > 30) return;
+    if (gapDays > 30 && !(await AnnualVacationRequest.exists({ employee: employee._id }))) anchor = employee.contractStartDate;
   }
-  throw new ApiError(400, 'Annual vacation can only be requested after a contract period has ended.');
+  anchor = utcDay(anchor);
+  const taken = await AnnualVacationRequest.exists({ employee: employee._id, periodEnd: anchor, status: 'Approved' });
+  if (taken) {
+    throw new ApiError(400, 'An annual vacation was already taken for this contract period. The next one opens when the contract is renewed.');
+  }
+  return { anchor, earliestStart: new Date(anchor.getTime() + MS_PER_DAY) };
 }
 
-/** Non-throwing form of the rule above, for the portal home ("can I ask for vacation yet?"). */
-export function vacationEligibility(employee) {
+/** Non-throwing form of the rule above, for the request form and the portal home. */
+export async function vacationEligibility(employee) {
   const contractDays = employee.annualVacationDays ?? null;
   try {
-    assertEligible(employee);
+    const { earliestStart } = await vacationCycle(employee);
     assertContractDays(employee);
-    return { eligible: true, reason: null, contractDays };
+    return { eligible: true, reason: null, contractDays, earliestStart };
   } catch (error) {
-    return { eligible: false, reason: error.message, contractDays };
+    if (!(error instanceof ApiError)) throw error;
+    return { eligible: false, reason: error.message, contractDays, earliestStart: null };
   }
 }
 
@@ -130,12 +139,13 @@ function assertContractDays(employee) {
 async function createRequest(employeeId, { startDate, reason }, actor, onBehalf) {
   const employee = await Employee.findById(employeeId).lean();
   if (!employee) throw new ApiError(404, 'Employee not found.');
-  assertEligible(employee);
+  const { anchor, earliestStart } = await vacationCycle(employee);
   assertContractDays(employee);
   const requestedDays = employee.annualVacationDays;
 
   const start = utcDay(startDate);
   if (start < utcDay(new Date())) throw new ApiError(400, 'The vacation cannot start in the past.');
+  if (start < earliestStart) throw new ApiError(400, `The vacation can start only after the contract end date (${fmtDay(anchor)}).`);
   const end = new Date(start.getTime() + (requestedDays - 1) * MS_PER_DAY);
 
   const open = await AnnualVacationRequest.exists({ employee: employee._id, status: 'PendingReview' });
@@ -159,6 +169,7 @@ async function createRequest(employeeId, { startDate, reason }, actor, onBehalf)
     startDate: start,
     endDate: end,
     requestedDays,
+    periodEnd: anchor,
     contractDays: employee.annualVacationDays,
     reason,
     ...workflowFields,
@@ -356,9 +367,38 @@ async function recordApprovedLeave(vacation) {
     if (err instanceof ApiError) throw err;
     throw new ApiError(500, 'Approval could not be completed because recording the leave failed. It was reverted, please try again.');
   }
+  await pushContractEnd(vacation);
   // Only once the leave is really recorded: tell the roles the workflow lists (the Marketing Manager, or the
   // Financial Manager for an Accounts person) that this person is going on annual leave.
   await notifyInformed(vacation, 'approved');
+}
+
+/**
+ * The contract was renewed since this vacation was filed (its end date is no longer the period it follows), so
+ * the time away does not count toward it: the renewed end date moves later by the days taken. A contract that
+ * was not renewed changes nothing. Best effort: the leave is already recorded, so a failure here is logged,
+ * never turned into a failed approval.
+ */
+async function pushContractEnd(vacation) {
+  try {
+    if (!vacation.periodEnd || vacation.contractPush?.to) return;
+    const employee = await Employee.findById(vacation.employee).select('contractEndDate').lean();
+    if (!employee?.contractEndDate) return;
+    const current = utcDay(employee.contractEndDate);
+    if (current.getTime() === utcDay(vacation.periodEnd).getTime()) return;
+    const to = new Date(current.getTime() + vacation.requestedDays * MS_PER_DAY);
+    await Employee.updateOne({ _id: vacation.employee }, { $set: { contractEndDate: to } });
+    await AnnualVacationRequest.updateOne({ _id: vacation._id }, { $set: { contractPush: { from: current, to } } });
+    await logAudit({
+      user: vacation.decidedBy,
+      action: 'annualVacation.contractPush',
+      targetType: 'Employee',
+      targetId: vacation.employee,
+      meta: { vacationId: String(vacation._id), days: vacation.requestedDays, from: current, to },
+    });
+  } catch (err) {
+    logger.error(`[annualVacation] moving the contract end date failed: ${err.message}`);
+  }
 }
 
 /** The air tickets are attached and the re-entry visa uploaded: the TravelDocuments step may move on. */

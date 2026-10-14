@@ -227,10 +227,10 @@ describe('portal home', () => {
   });
 
   it('says why annual vacation is not available yet', async () => {
-    const emp = await employee({ contractEndDate: daysFromNow(200), joiningDate: new Date('2026-05-01') });
+    const emp = await employee({ contractEndDate: null, joiningDate: new Date('2026-05-01') });
     const overview = await getMyOverview(emp._id.toString());
     expect(overview.contract.vacationEligible).toBe(false);
-    expect(overview.contract.vacationReason).toMatch(/contract period has ended/i);
+    expect(overview.contract.vacationReason).toMatch(/contract end date is not set/i);
     expect(overview.today.signedIn).toBe(false);
   });
 });

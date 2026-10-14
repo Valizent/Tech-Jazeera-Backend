@@ -92,3 +92,12 @@ HR (duty `HrReview`) -> Accounts (duty `TravelDocuments`) -> FM (ordinary last s
 - **Approval:** FM's approval records the leave as before, links the visa request to it, and informs the roles.
 - **Reading:** `GET /api/annual-vacation/:id/tickets/:fileId/file` and `.../visa/file` for the employee's own request or any reader of the section (Coordinators team-scoped); `/api/me/...` for Worker/Staff. Storage ids never leave the server.
 - **Setup in production (toggles only):** Approval Hierarchy: a workflow with the three steps and the duties, "Told" = Marketing Manager role, default for Annual Vacation; a second one with FM as "Told" routed for the Accounts department. Section Access: Annual Vacation "Can change" = HR, Accounts and FM roles. Employees: HR fills in the contract days.
+## 2026-10-14: any-time filing, first day after the contract end, renewal pushes the end date
+
+Replaces the "contract period must have ended" gate above.
+
+- **Filing:** allowed whenever the contract end date is set (and days are set, and the person has not exited). `GET /eligibility` now also returns `earliestStart` (the day after the period's end); the date picker uses it as `min` (never earlier than today). The server refuses an earlier first day ("can start only after the contract end date (...)").
+- **The period's end** (`vacationCycle`): `previousContractEndDate ?? contractEndDate`. HR moving `contractEndDate` later (employee update) stores the replaced end in `Employee.previousContractEndDate`, unless a vacation was already approved for that period (then the renewal simply starts a fresh cycle). Records renewed before this existed fall back to the old reading: contract started more than 30 days after joining and no vacation filed yet = the first day may be any time.
+- **One per period:** each request snapshots `periodEnd`; an Approved request with the same `periodEnd` closes the period. It reopens on the next renewal.
+- **Push (only if renewed):** on final approval, if the employee's current `contractEndDate` differs from the request's `periodEnd`, the current end date moves later by `requestedDays` (after any HR change of days). Recorded on the request (`contractPush {from,to}`) and in the audit trail (`annualVacation.contractPush`). Not renewed = no dates change. Best effort: a failure is logged and never undoes the approval.
+- **Edge cases:** correcting a typo by moving the end date later also counts as a renewal; if HR renews twice before the vacation, the first replaced end stays the anchor.

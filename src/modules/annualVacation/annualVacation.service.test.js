@@ -16,12 +16,18 @@ import {
   cancelAnnualVacation,
   decideAnnualVacation,
   listAnnualVacation,
+  getEligibility,
 } from './annualVacation.service.js';
+import { updateEmployee } from '../employees/employee.service.js';
 
 const oid = () => new mongoose.Types.ObjectId().toString();
 const unique = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 const admin = () => ({ userId: oid(), role: 'Admin', ip: '127.0.0.1' });
 const futureDay = (daysAhead) => new Date(Date.now() + daysAhead * 86_400_000);
+const utcDayIn = (daysAhead) => {
+  const d = futureDay(daysAhead);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+};
 
 async function makeEmployee(extra = {}) {
   return Employee.create({
@@ -46,7 +52,7 @@ describe('Annual Vacation submission', () => {
     expect(new Date(request.endDate).getTime() - new Date(request.startDate).getTime()).toBe(4 * 86_400_000);
   });
 
-  it('refuses an employee whose contract has not ended', async () => {
+  it('can be filed before the contract ends, but the first day must come after the end date', async () => {
     const employee = await makeEmployee({
       joiningDate: new Date('2025-06-01'),
       contractStartDate: new Date('2025-06-10'),
@@ -54,7 +60,46 @@ describe('Annual Vacation submission', () => {
     });
     await expect(
       submitOwnAnnualVacation(employee._id.toString(), { startDate: futureDay(10), requestedDays: 5 }, admin())
+    ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/only after the contract end date/) });
+
+    const request = await submitOwnAnnualVacation(employee._id.toString(), { startDate: futureDay(201), requestedDays: 5 }, admin());
+    expect(request.status).toBe('PendingReview');
+  });
+
+  it('a contract renewed before it ended still follows the replaced end date, and the push moves the new end', async () => {
+    const oldEnd = utcDayIn(60);
+    const newEnd = utcDayIn(150);
+    const employee = await makeEmployee({ contractEndDate: oldEnd, annualVacationDays: 5 });
+    await updateEmployee(employee._id.toString(), { contractEndDate: newEnd }, admin());
+    const renewed = await Employee.findById(employee._id).lean();
+    expect(new Date(renewed.previousContractEndDate).getTime()).toBe(oldEnd.getTime());
+
+    // the first day still has to be after the OLD end, not the new one
+    const eligibility = await getEligibility(employee._id.toString(), admin());
+    expect(eligibility.eligible).toBe(true);
+    expect(new Date(eligibility.earliestStart).getTime()).toBe(oldEnd.getTime() + 86_400_000);
+
+    const request = await submitOwnAnnualVacation(
+      employee._id.toString(),
+      { startDate: utcDayIn(65), requestedDays: 5 },
+      admin()
+    );
+    await decideAnnualVacation(request._id.toString(), { status: 'Approved' }, admin());
+
+    const after = await Employee.findById(employee._id).lean();
+    expect(new Date(after.contractEndDate).getTime()).toBe(newEnd.getTime() + 5 * 86_400_000);
+    // one vacation per period: a second one is refused until the next renewal
+    await expect(
+      submitOwnAnnualVacation(employee._id.toString(), { startDate: utcDayIn(200), requestedDays: 5 }, admin())
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('a contract that was not renewed keeps its dates when the vacation is approved', async () => {
+    const employee = await makeEmployee({ annualVacationDays: 5 });
+    const request = await submitOwnAnnualVacation(employee._id.toString(), { startDate: futureDay(10), requestedDays: 5 }, admin());
+    await decideAnnualVacation(request._id.toString(), { status: 'Approved' }, admin());
+    const after = await Employee.findById(employee._id).lean();
+    expect(new Date(after.contractEndDate).getTime()).toBe(new Date('2025-01-01').getTime());
   });
 
   it('refuses a second open request and overlapping dates', async () => {

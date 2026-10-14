@@ -105,6 +105,9 @@ const employeeSchema = new mongoose.Schema(
     joiningDate: { type: Date, required: requiredForWorkforce },
     contractStartDate: { type: Date, default: null },
     contractEndDate: { type: Date, default: null },
+    // Set by the server when HR moves contractEndDate later: the end of the period just renewed. Annual vacation
+    // follows THAT date, so a renewal before the old end never costs the vacation (annualVacation.service.js).
+    previousContractEndDate: { type: Date, default: null },
     // Annual vacation days the contract gives (2026-10-14): HR sets it; an annual vacation request always
     // starts from this number (HR may change it for one request at the review step).
     annualVacationDays: { type: Number, default: null, min: 1, max: 90 },

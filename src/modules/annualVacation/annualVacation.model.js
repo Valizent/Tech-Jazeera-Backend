@@ -25,6 +25,11 @@ const annualVacationSchema = new mongoose.Schema(
     // the same counting Leave uses) — never trusted from the client.
     endDate: { type: Date, required: true },
     requestedDays: { type: Number, required: true, min: 1, max: 90 },
+    // The end date of the contract period this vacation follows, fixed when it is filed (2026-10-14). The first
+    // day must come after it; one approved vacation per period; and when the contract was renewed since (its
+    // current end date differs), approval pushes the new end date later by the days taken.
+    periodEnd: { type: Date, default: null },
+    contractPush: { from: Date, to: Date },
     // The notes the requester wrote (labelled "Notes" on screen; the field keeps its original name).
     reason: { type: String, trim: true, maxlength: 1000 },
 

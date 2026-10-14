@@ -79,7 +79,7 @@ export async function getMyOverview(employeeId) {
     .filter(Boolean)
     .sort((a, b) => a.daysLeft - b.daysLeft);
 
-  const { eligible, reason } = vacationEligibility(employee);
+  const { eligible, reason } = await vacationEligibility(employee);
   return {
     today: {
       signedIn: Boolean(attendance?.checkInTime),

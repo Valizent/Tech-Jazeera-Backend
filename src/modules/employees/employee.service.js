@@ -13,6 +13,7 @@ import { hashPassword, generateTempPassword, revokeAllSessions } from '../auth/a
 import { logAudit } from '../audit/audit.service.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { syncLoginToDesignation } from './designationSync.service.js';
+import AnnualVacationRequest from '../annualVacation/annualVacation.model.js';
 
 /**
  * A document counts as "needs attention" when it expires within this many
@@ -418,6 +419,24 @@ export async function createEmployee(data, actor) {
   return redactFinancial(employee.toObject(), actor);
 }
 
+/**
+ * HR moved the contract end date later (a renewal): remember the end it replaced, because the annual vacation
+ * follows that date, not the new one (annualVacation.service.js, vacationCycle). If a vacation was already
+ * taken for the replaced period, the renewal starts a fresh cycle instead.
+ */
+async function rememberRenewedContractEnd(before, after) {
+  if (!before.contractEndDate || !after.contractEndDate || after.contractEndDate <= before.contractEndDate) return;
+  const periods = [before.previousContractEndDate ?? before.contractEndDate, before.contractStartDate].filter(Boolean).map((d) => {
+    const day = new Date(d);
+    return new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
+  });
+  const consumed = await AnnualVacationRequest.exists({ employee: after._id, periodEnd: { $in: periods }, status: 'Approved' });
+  await Employee.updateOne(
+    { _id: after._id },
+    { $set: { previousContractEndDate: consumed ? null : before.previousContractEndDate ?? before.contractEndDate } }
+  );
+}
+
 export async function updateEmployee(id, rawData, actor) {
   // Pay figures are changed only by someone who may see them; for everyone
   // else they are silently ignored so an edit form without those boxes works.
@@ -445,6 +464,7 @@ export async function updateEmployee(id, rawData, actor) {
   Object.assign(employee, data);
   await employee.save();
   if (before.designation !== employee.designation) await syncLoginToDesignation(employee, before.designation);
+  await rememberRenewedContractEnd(before, employee);
   const after = employee.toObject();
   await logAudit({
     user: actor.userId,
