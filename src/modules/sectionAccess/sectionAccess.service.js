@@ -13,7 +13,7 @@ import { SELF_SERVICE_LOGIN_ROLES, SELF_SERVICE_GRANTABLE_KEYS } from './selfSer
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 
-const SECTION_LABELS = {
+export const SECTION_LABELS = {
 
   expenses: 'Expenses',
   employeeCreate: 'Employees view & add',

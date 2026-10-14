@@ -2482,7 +2482,7 @@ export async function removeDocument(id, fileId, actor) {
     action: 'mobilisation.documents.remove',
     targetType: 'Mobilisation',
     targetId: mobilisation._id,
-    meta: { fileId },
+    meta: { fileId, documentName: doc.originalName, category: doc.category },
     ip: actor.ip,
   });
   return mobilisation.toObject();
