@@ -30,7 +30,7 @@ const annualVacationSchema = new mongoose.Schema(
     // current end date differs), approval pushes the new end date later by the days taken.
     periodEnd: { type: Date, default: null },
     contractPush: { from: Date, to: Date },
-    // The notes the requester wrote (labelled "Notes" on screen; the field keeps its original name).
+    // The notes the requester wrote (labelled "Remarks" on screen; the field keeps its original name).
     reason: { type: String, trim: true, maxlength: 1000 },
 
     // The contract's vacation days when the request was made (Employee.annualVacationDays). `requestedDays`

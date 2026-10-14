@@ -16,7 +16,7 @@ const dayCount = z.coerce
 // The number of days is not asked of the requester (2026-10-14): it is the contract's, set by HR on the
 // employee record. A client that still sends one is ignored.
 const vacationFields = {
-  startDate: z.coerce.date({ error: 'Choose the first day of the vacation.' }),
+  startDate: z.coerce.date({ error: 'Choose the start date of the vacation.' }),
   reason: z.preprocess(emptyToUndef, z.string().trim().max(1000).optional()),
 };
 
@@ -29,7 +29,7 @@ export const submitAnnualVacationSchema = z.object({
   ...vacationFields,
 });
 
-/** HR changing the days at the HR step, with the reason (usually what the employee wrote in the notes). */
+/** HR changing the days at the HR step, with the reason (usually what the employee wrote in the remarks). */
 export const changeVacationDaysSchema = z.object({
   requestedDays: dayCount,
   note: z.preprocess(emptyToUndef, z.string().trim().max(500).optional()),
