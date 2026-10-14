@@ -88,7 +88,9 @@ const SPECIFIC = {
   ],
   'mobilisation.delete': (m) => [
     `Deleted mobilisation ${m.serialNumber ?? ''}${m.workerName ? ` for ${m.workerName}` : ''}.`.replace(/\s+\./, '.'),
-    `It had not been approved yet (it was ${statusText(m.status) || 'unconfirmed'}).`,
+    ['Approved', 'Completed'].includes(m.status)
+      ? `It was marked ${statusText(m.status)} but never got a deployment, so it was a broken leftover.`
+      : `It had not been approved yet (it was ${statusText(m.status) || 'unconfirmed'}).`,
   ],
   'mobilisation.documents.add': (m, { target }) => [
     `Added ${plural(m.count ?? 1, 'document')}${m.category ? ` (${m.category})` : ''} to ${target ?? 'a mobilisation'}.`,

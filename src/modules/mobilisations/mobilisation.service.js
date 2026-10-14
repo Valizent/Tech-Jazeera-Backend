@@ -2410,7 +2410,8 @@ export async function addDocuments(id, files, { category, documentName }, actor)
  * Pending review and Rejected. While it is still a Draft the people who made it (a
  * coordinator on it, or whoever created it) may delete it; once it has been sent for
  * review or was rejected only Admin may. Approved and Completed ones carry a deployment
- * and billing history and can never be deleted.
+ * and billing history and are never deleted, with one exception: an Admin may remove
+ * one that has NO deployment (a broken leftover, listed on Data Reconciliation).
  */
 const DELETABLE_STATUSES = ['Draft', 'PendingReview', 'Rejected'];
 
@@ -2427,10 +2428,17 @@ function canDeleteMobilisation(mobilisation, actor) {
 export async function deleteMobilisation(id, actor) {
   const mobilisation = await Mobilisation.findById(id);
   if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
-  if (!DELETABLE_STATUSES.includes(mobilisation.status)) {
-    throw new ApiError(409, 'An approved mobilisation cannot be deleted.');
-  }
-  if (!canDeleteMobilisation(mobilisation, actor)) {
+  if (['Approved', 'Completed'].includes(mobilisation.status)) {
+    // An approved mobilisation always has a deployment. One without it is a broken leftover
+    // (Data Reconciliation lists them): nothing depends on it, so an Admin may remove it. One
+    // that has a deployment carries billing history and is never deleted.
+    if (actor.role !== 'Admin') {
+      throw new ApiError(403, 'Only an Admin can delete an approved mobilisation, and only a broken one that has no deployment.');
+    }
+    if (await Deployment.exists({ mobilisation: mobilisation._id })) {
+      throw new ApiError(409, 'This mobilisation has a deployment, so it cannot be deleted.');
+    }
+  } else if (!canDeleteMobilisation(mobilisation, actor)) {
     throw new ApiError(
       403,
       mobilisation.status === 'Draft'
@@ -2445,8 +2453,11 @@ export async function deleteMobilisation(id, actor) {
   // Everything that pointed at it: the requirement candidate it was started from becomes free
   // to be mobilised again, its open transfer requests and its notifications go with it, and
   // its uploaded files are removed from storage (best effort, like removing one document).
+  // An approved leftover had marked its candidate Mobilised: back to "documents ready", so they can be started again.
+  const candidateReset = { 'candidates.$[c].mobilisation': null };
+  if (['Approved', 'Completed'].includes(mobilisation.status)) candidateReset['candidates.$[c].status'] = 'DocsReady';
   await Promise.all([
-    Requirement.updateMany({ 'candidates.mobilisation': mobilisation._id }, { $set: { 'candidates.$[c].mobilisation': null } }, { arrayFilters: [{ 'c.mobilisation': mobilisation._id }] }),
+    Requirement.updateMany({ 'candidates.mobilisation': mobilisation._id }, { $set: candidateReset }, { arrayFilters: [{ 'c.mobilisation': mobilisation._id }] }),
     SubcontractorTransfer.deleteMany({ mobilisation: mobilisation._id }),
     Notification.deleteMany({ url: new RegExp(`^/mobilisations/${mobilisation._id}`) }),
     ...(mobilisation.documents ?? []).map((doc) => destroyDocumentFile(doc.fileName, doc.resourceType).catch(() => {})),

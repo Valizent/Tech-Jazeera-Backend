@@ -1,8 +1,8 @@
 /**
  * mobilisation.delete.test.js - deleting a mobilisation before it is approved
  * (2026-10-14): the people who made a Draft may delete it, only Admin once it has
- * been sent for review or rejected, nobody once it is approved; what pointed at it
- * is cleaned up.
+ * been sent for review or rejected, nobody once it is approved (except an Admin removing
+ * a broken approved leftover that has no deployment); what pointed at it is cleaned up.
  */
 import mongoose from 'mongoose';
 import User from '../auth/user.model.js';
@@ -10,6 +10,7 @@ import Client from '../clients/client.model.js';
 import Mobilisation from './mobilisation.model.js';
 import SubcontractorTransfer from '../subcontractorTransfers/subcontractorTransfer.model.js';
 import Notification from '../notifications/notification.model.js';
+import Deployment from '../deployments/deployment.model.js';
 import { deleteMobilisation, getMobilisation } from './mobilisation.service.js';
 
 const unique = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -71,12 +72,41 @@ describe('deleting a mobilisation before approval', () => {
     expect(await Mobilisation.countDocuments({ _id: { $in: [pending._id, rejected._id] } })).toBe(0);
   });
 
-  it('never deletes an approved one, not even for Admin', async () => {
+  it('never deletes an approved one that has a deployment, not even for Admin', async () => {
     const admin = await login('Admin');
     const approved = await mobilisation(admin, 'Approved');
+    await Deployment.create({
+      mobilisation: approved._id,
+      workerType: 'Freelancer',
+      workerName: approved.workerName,
+      client: approved.client,
+      clientName: approved.clientName,
+      startDate: new Date(),
+    });
 
     await expect(deleteMobilisation(approved._id, admin)).rejects.toMatchObject({ statusCode: 409 });
     expect(await Mobilisation.findById(approved._id)).not.toBeNull();
+  });
+
+  it('lets Admin, and only Admin, remove an approved leftover that has no deployment', async () => {
+    const admin = await login('Admin');
+    const coordinator = await login('Coordinator');
+    const leftover = await mobilisation(coordinator, 'Approved');
+    const candidateId = new mongoose.Types.ObjectId();
+    const requirementId = new mongoose.Types.ObjectId();
+    await mongoose.connection.collection('requirements').insertOne({
+      _id: requirementId,
+      serialNumber: `REQ-${unique()}`,
+      clientName: 'Any',
+      candidates: [{ _id: candidateId, workerName: 'Candidate', status: 'Mobilised', mobilisation: leftover._id }],
+    });
+
+    await expect(deleteMobilisation(leftover._id, coordinator)).rejects.toMatchObject({ statusCode: 403 });
+    await deleteMobilisation(leftover._id, admin);
+
+    expect(await Mobilisation.findById(leftover._id)).toBeNull();
+    const requirement = await mongoose.connection.collection('requirements').findOne({ _id: requirementId });
+    expect(requirement.candidates[0]).toMatchObject({ mobilisation: null, status: 'DocsReady' });
   });
 
   it('frees the requirement candidate and removes its transfer request and notifications', async () => {

@@ -9,7 +9,7 @@ import Client from '../clients/client.model.js';
 import Employee from '../employees/employee.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import Deployment from './deployment.model.js';
-import { addMonthlyHours, updateMonthlyHours, computeMonthlyRevenueAndExpenses } from './deployment.service.js';
+import { addMonthlyHours, updateMonthlyHours, computeMonthlyRevenueAndExpenses, listDeployments } from './deployment.service.js';
 import { createMobilisation } from '../mobilisations/mobilisation.service.js';
 import { ownEmployeeOtRate } from '../../utils/employeeOt.js';
 
@@ -147,5 +147,28 @@ describe('mobilising an own employee needs contract hours', () => {
     });
     const created = await createMobilisation({ ...base, worker: String(withHours._id) }, admin());
     expect(created.otEmployeeRate).toBe(15); // 2400 / 240 x 1.5
+  });
+});
+
+describe('the Overview shows an Own employee\'s live OT rate', () => {
+  it('prices OT from the employee record even when the mobilisation stored an older rate', async () => {
+    const worker = await Employee.create({
+      employeeId: `EMP-${unique()}`,
+      fullName: 'Own Worker',
+      type: 'Own',
+      designation: 'Fitter',
+      joiningDate: new Date('2024-01-01'),
+      salary: 3000,
+      contractHours: 200,
+    });
+    const dep = await deployment('Employee', { worker: worker._id });
+    await Mobilisation.updateOne({ _id: dep.mobilisation }, { $set: { otEmployeeRate: 10, otProfitPerHour: 20, otClientRate: 30 } });
+
+    const { items } = await listDeployments({ page: 1, limit: 20 }, admin());
+    const row = items.find((d) => String(d._id) === String(dep._id));
+
+    expect(row.mobilisation.otEmployeeRate).toBe(22.5);
+    expect(row.mobilisation.otProfitPerHour).toBe(7.5);
+    expect(JSON.stringify(row)).not.toContain('3000');
   });
 });

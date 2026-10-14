@@ -1663,6 +1663,23 @@ async function findDeployments({ worker, client, site, status, sortBy = 'startDa
   for (const d of items) {
     d.recordedExpenses = expensesByDep.get(d._id.toString()) || 0;
   }
+
+  // An Own employee's OT hour costs salary / contract hours x 1.5 from their record (2026-10-13),
+  // the same live figure the monthly ledger prices OT with. The mobilisation's stored OT figures were
+  // worked out when it was saved, so a placement from before the rule, or an employee whose pay or
+  // contract hours changed since, would show a different number here than the ledger uses. Only the
+  // derived rate leaves this function, never the salary.
+  const ownIds = items.filter((d) => d.workerType === 'Employee' && d.worker?._id).map((d) => d.worker._id);
+  if (ownIds.length > 0) {
+    const people = await Employee.find({ _id: { $in: ownIds } }).select('salary contractHours').lean();
+    const rateById = new Map(people.map((p) => [String(p._id), ownEmployeeOtRate(p.salary, p.contractHours)]));
+    for (const d of items) {
+      const rate = rateById.get(String(d.worker?._id));
+      if (rate == null || !d.mobilisation) continue;
+      d.mobilisation.otEmployeeRate = money(rate);
+      d.mobilisation.otProfitPerHour = money((d.mobilisation.otClientRate ?? 0) - rate);
+    }
+  }
   // otAmount/mobilisation's own commercial fields are both commercial data
   // (see getDeployment's own doc comment) — this list isn't currently
   // rendered anywhere but the Overview modal/Excel export, but never send
