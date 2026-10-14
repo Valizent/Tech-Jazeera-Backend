@@ -324,7 +324,9 @@ export async function getDashboardInsights(actor) {
     tasks,
     decided,
   ] = await Promise.all([
-    systemHealth(access),
+    // Admin-level oversight (failed logins, grant changes, reconciliation): HR's own dashboard
+    // does not carry it, whatever Reads they hold (2026-10-14).
+    actor.role === 'HR' ? null : systemHealth(access),
     stuckApprovals(actor, access),
     canEmployees ? expiringByType(teamIds) : null,
     canEmployees ? contractsEnding(teamIds) : null,

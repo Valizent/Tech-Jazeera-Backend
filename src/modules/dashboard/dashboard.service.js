@@ -22,6 +22,7 @@
  */
 import mongoose from 'mongoose';
 import Employee, { WORKFORCE_TYPES } from '../employees/employee.model.js';
+import { EMPLOYEE_DEPARTMENTS, normalizeDepartment } from '../employees/departments.js';
 import Client from '../clients/client.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import Document from '../documents/document.model.js';
@@ -307,6 +308,26 @@ async function getMyPendingActions(actor, mySectionAccess) {
 }
 
 /**
+ * Internal staff (type Own, not exited) per department, for the HR dashboard. Records
+ * saved before Department became a fixed list may carry free text: the clear cases
+ * ("accounting" -> Accounts) are read, anything else is counted as `unset`.
+ */
+async function countInternalStaffByDepartment() {
+  const rows = await Employee.aggregate([
+    { $match: { type: 'Own', status: { $ne: 'Exited' } } },
+    { $group: { _id: '$department', count: { $sum: 1 } } },
+  ]);
+  const counts = Object.fromEntries(EMPLOYEE_DEPARTMENTS.map((d) => [d, 0]));
+  let unset = 0;
+  for (const row of rows) {
+    const department = normalizeDepartment(row._id);
+    if (department) counts[department] += row.count;
+    else unset += row.count;
+  }
+  return { counts, unset };
+}
+
+/**
  * @param {object} [opts]
  * @param {number} [opts.thresholdDays] override the 30-day alert window (P2-M2,
  *   customizable per viewer — mirrors the same param on the employee list)
@@ -355,6 +376,10 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
   // Coordinator, Office Secretary and Accounts get "Shared employees";
   // everyone else gets "Active employees" and the Attendance tile instead.
   const showsSharedEmployees = isCoordinator || actor?.role === 'Office Secretary' || actor?.role === 'Accounts';
+  // The HR desk (2026-10-14, the user's own layout for HR): the active-subcontractor count, the
+  // requests waiting across HR's modules and a headcount by department. Figures only, no
+  // commercial or personal detail, so they do not need the module Reads behind them.
+  const isHr = actor?.role === 'HR';
   const teamIds = isCoordinator
     ? await Employee.find({ coordinator: actor.userId, type: { $in: WORKFORCE_TYPES } }).distinct('_id')
     : null;
@@ -376,7 +401,8 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
   const canReadDeployments = canRead('deploymentsRelease');
   const canReadClients = canRead('clientsManage');
   const canSeeProfit = canRead('dashboardProfit');
-  const canReadAuditLog = canRead('auditLog');
+  // The activity feed and API-health card are admin-level oversight: HR's desk does not carry them.
+  const canReadAuditLog = canRead('auditLog') && !isHr;
   const canReadAttendance = canRead('attendanceRecords');
   const canReadDocuments = canRead('documentsManage');
   // activeSubcontractors/attendanceSummary/pendingLeave/pendingExit below
@@ -390,6 +416,9 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
   const canReadSubcontractors = canRead('subcontractorsManage');
   const canReadLeave = canRead('leaveRequests');
   const canReadExitDocuments = canRead('exitDocuments');
+  const canReadAnnualVacation = canRead('annualVacation');
+  const canReadTimesheets = canRead('timesheetRequests');
+  const canReadFinancialRequests = canRead('financialRequests');
   const canReadRequirementsOwn = canRead('requirementsOwn');
   // mobilisationsByStatus and activeMobilisationRevenue's company-wide
   // totals used to be computed and returned to EVERY viewer unconditionally
@@ -435,7 +464,11 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
     actualPerformance,
     myRequirementsSummary,
     activeEmployees,
-    sharedEmployees
+    sharedEmployees,
+    pendingAnnualVacation,
+    pendingTimesheets,
+    pendingFinancial,
+    departmentHeadcount
   ] = await Promise.all([
     // A Coordinator's own placements are their own work and stay ungated, like
     // their own mobilisation totals below; everyone else needs the grant.
@@ -496,7 +529,7 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
       : Promise.resolve([]),
     // Active subcontractors — gated on subcontractorsManage read, the same grant that
     // already governs the subcontractor directory itself.
-    canReadSubcontractors ? Subcontractor.countDocuments({ status: 'Active' }) : Promise.resolve(0),
+    canReadSubcontractors || isHr ? Subcontractor.countDocuments({ status: 'Active' }) : Promise.resolve(0),
     // Attendance summary — canReadAttendance (attendanceRecords), already computed above
     // for markedToday; not a second, narrower role check.
     canReadAttendance ? Attendance.find({ date: toUtcDay(new Date()) }).select('employee').lean() : Promise.resolve([]),
@@ -532,7 +565,14 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
     // workforce-only `activeWorkers` below). Not computed for the audience
     // that gets "Shared employees" instead.
     canReadEmployees && !showsSharedEmployees ? Employee.countDocuments({ status: 'Active' }) : Promise.resolve(null),
-    showsSharedEmployees ? countSharedEmployees(actor, isCoordinator) : Promise.resolve(null)
+    showsSharedEmployees ? countSharedEmployees(actor, isCoordinator) : Promise.resolve(null),
+    // Requests still waiting in HR's other modules, each behind the Read of its own module.
+    canReadAnnualVacation ? AnnualVacationRequest.countDocuments({ status: 'PendingReview' }) : Promise.resolve(null),
+    canReadTimesheets ? Timesheet.countDocuments({ status: 'Submitted' }) : Promise.resolve(null),
+    canReadFinancialRequests
+      ? Promise.all([SalaryAdvance.countDocuments({ status: 'Pending' }), ReimbursementClaim.countDocuments({ status: 'Pending' })]).then(([a, r]) => a + r)
+      : Promise.resolve(null),
+    isHr && canReadEmployees ? countInternalStaffByDepartment() : Promise.resolve(null)
   ]);
 
   // Workforce by status
@@ -620,7 +660,7 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
     // FIX (2026-09-22): these four used to gate on a hardcoded actor.role check — see the
     // matching doc comment on the canAccessSection batch above for why each now reuses the
     // grant that already governs its own underlying module instead.
-    activeSubcontractors: canReadSubcontractors ? activeSubcontractorsCount : null,
+    activeSubcontractors: canReadSubcontractors || isHr ? activeSubcontractorsCount : null,
     attendanceSummary: canReadAttendance && attendanceAgg ? await (async () => {
       const empIds = attendanceAgg.map(a => a.employee);
       const emps = await Employee.find({ _id: { $in: empIds } }).select('type designation currentClient').lean();
@@ -639,6 +679,10 @@ export async function getDashboard({ thresholdDays, actor } = {}) {
     })() : null,
     pendingLeave: canReadLeave ? pendingLeave : null,
     pendingExit: canReadExitDocuments ? pendingExit : null,
+    pendingAnnualVacation,
+    pendingTimesheets,
+    pendingFinancial,
+    departmentHeadcount,
     myRequirementsSummary
   };
 }
