@@ -18,6 +18,7 @@ import {
   attachTickets,
   uploadVisa,
   decideAnnualVacation,
+  listOwnAnnualVacation,
 } from './annualVacation.service.js';
 
 const unique = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -140,5 +141,18 @@ describe('Accounts: tickets, re-entry visa, then FM', () => {
     expect(String((await ExitReentryRequest.findById(done.visaRequest)).linkedLeaveRequest)).toBe(String(leave._id));
     const told = await Notification.find({ user: marketingManager.id });
     expect(told.map((n) => n.title).join(' ')).toContain('is going on annual leave');
+  });
+});
+
+describe('own request list shows the approval stages', () => {
+  it('returns the step role names and who decided each step', async () => {
+    const request = await submit();
+    await decideAnnualVacation(request._id, { status: 'Approved' }, hr);
+
+    const { items } = await listOwnAnnualVacation(employee._id, { page: 1, limit: 10 });
+
+    expect(items[0].steps.map((s) => s.label)).toEqual(['HR', 'Accounts', 'FM']);
+    expect(items[0].steps[0].roles[0].name).toMatch(/^HR /);
+    expect(items[0].approvalTrail[0].approvedBy.name).toBe(hr.userId ? (await User.findById(hr.userId)).name : '');
   });
 });

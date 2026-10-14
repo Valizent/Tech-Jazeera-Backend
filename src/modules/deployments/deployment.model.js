@@ -38,6 +38,7 @@
  *    never sees what it bills to the client.
  */
 import mongoose from 'mongoose';
+import { approvalFields } from '../approvals/approvalFields.js';
 
 export const MONTHLY_HOURS_STATUSES = ['Pending', 'Approved', 'Rejected'];
 export const DEPLOYMENT_STATUSES = ['Active', 'Ended'];
@@ -197,6 +198,8 @@ const monthlyHoursSchema = new mongoose.Schema(
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     decidedAt: { type: Date, default: null },
     decisionNote: { type: String, trim: true, maxlength: 500, default: null },
+    // The hierarchy set up for Monthly Hours, fixed when the entry is submitted (and again when a rejected one is resubmitted).
+    ...approvalFields(),
 
     // --- Real-revenue billing lifecycle (2026-09-27, the user's own ask) ---
     // Only reachable once `status === 'Approved'` above — the client bill is

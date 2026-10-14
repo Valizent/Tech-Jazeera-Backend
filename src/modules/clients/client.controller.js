@@ -9,13 +9,13 @@ const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip }
 
 /** GET /api/clients — 200 → data: { items, total, page, pages } */
 export async function list(req, res) {
-  const data = await clientService.listClients(req.query);
+  const data = await clientService.listClients(req.query, actor(req));
   res.json(new ApiResponse('Clients.', data));
 }
 
 /** GET /api/clients/:id — 200 → data: client · 400 bad id · 404 unknown */
 export async function get(req, res) {
-  const client = await clientService.getClient(req.params.id);
+  const client = await clientService.getClient(req.params.id, actor(req));
   res.json(new ApiResponse('Client.', client));
 }
 

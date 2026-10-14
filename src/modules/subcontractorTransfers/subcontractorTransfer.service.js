@@ -2,10 +2,10 @@
  * Subcontractor transfers (2026-10-12, milestone 5): moving a subcontractor's
  * employee to a different subcontractor, decided by the Marketing Manager.
  *
- * Who decides: nothing new to configure. The approvers are the members of the
- * approval roles on the FINAL step of the Mobilisation workflow (the Marketing
- * Manager today), plus Admin - the same people who give a mobilisation its
- * final approval, resolved through the same step-authority check.
+ * Who decides: with a hierarchy set up for Subcontractor Transfer (2026-10-14), the members of the current
+ * step's roles. With none, nothing new to configure: the members of the approval roles on the FINAL step of
+ * the Mobilisation workflow (the Marketing Manager today), plus Admin - the same people who give a
+ * mobilisation its final approval, resolved through the same step-authority check.
  *
  * The employee's "record" is the outsourced register (OutsourcedEmployee, by
  * Iqama): its subcontractor is what "in our records he is with X" means, and
@@ -17,14 +17,18 @@ import SubcontractorTransfer from './subcontractorTransfer.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import OutsourcedEmployee from '../employees/outsourcedEmployee.model.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
-import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
-import { resolveStepAuthority, membersOfRoles } from '../approvals/approvalEngine.service.js';
+import { resolveApprovalWorkflow, startApproval } from '../approvals/approvals.service.js';
+import { resolveStepAuthority, membersOfRoles, decideApprovalStep, annotateCanDecide } from '../approvals/approvalEngine.service.js';
+import { populateTrail } from '../approvals/approvalFields.js';
 import { notifyUser } from '../notifications/notification.service.js';
 import { logAudit } from '../audit/audit.service.js';
 import ApiError from '../../utils/ApiError.js';
 
-/** Role ids on the last step of the active Mobilisation workflow (none configured: Admin only). */
+/** Role ids that may decide a transfer: every step of the Subcontractor Transfer hierarchy when one is set up,
+ *  else the last step of the active Mobilisation workflow (none configured: Admin only). */
 async function approverRoleIds() {
+  const own = await resolveApprovalWorkflow({}, 'SubcontractorTransfer');
+  if (own) return own.steps.flatMap((step) => step.roles ?? []);
   const workflow = await resolveApprovalWorkflow({ approvalWorkflow: null }, 'Mobilisation');
   const steps = workflow?.steps ?? [];
   return steps.length ? steps[steps.length - 1].roles ?? [] : [];
@@ -92,12 +96,19 @@ export async function syncTransferRequest(mobilisation, wanted, actor) {
   if (existing) {
     const same = String(existing.to.subcontractor) === String(payload.to.subcontractor);
     Object.assign(existing, payload);
+    // Re-pointed at another subcontractor: the hierarchy starts again from its first step.
+    if (!same) Object.assign(existing, await startApproval('SubcontractorTransfer'));
     await existing.save();
     if (same) return existing.toObject();
     await notifyApprovers(existing.toObject());
     return existing.toObject();
   }
-  const created = await SubcontractorTransfer.create({ mobilisation: mobilisation._id, requestedBy: actor.userId, ...payload });
+  const created = await SubcontractorTransfer.create({
+    mobilisation: mobilisation._id,
+    requestedBy: actor.userId,
+    ...payload,
+    ...(await startApproval('SubcontractorTransfer')),
+  });
   await logAudit({
     user: actor.userId,
     action: 'subcontractorTransfer.request',
@@ -110,19 +121,18 @@ export async function syncTransferRequest(mobilisation, wanted, actor) {
   return created.toObject();
 }
 
+const buildApprovalNotification = (transfer, userId) => ({
+  type: 'Task',
+  title: `Subcontractor transfer to approve: ${transfer.workerName}`,
+  body: `${transfer.workerName} is with ${transfer.from.name}; ${transfer.mobilisationSerial} puts him with ${transfer.to.name}.`,
+  url: '/subcontractor-transfers',
+  dedupeKey: `subcontractorTransfer:${transfer._id}:${transfer.to.subcontractor}:${userId}`,
+});
+
 async function notifyApprovers(transfer) {
-  const ids = await approverUserIds();
-  await Promise.all(
-    ids.map((userId) =>
-      notifyUser(userId, {
-        type: 'Task',
-        title: `Subcontractor transfer to approve: ${transfer.workerName}`,
-        body: `${transfer.workerName} is with ${transfer.from.name}; ${transfer.mobilisationSerial} puts him with ${transfer.to.name}.`,
-        url: '/subcontractor-transfers',
-        dedupeKey: `subcontractorTransfer:${transfer._id}:${transfer.to.subcontractor}:${userId}`,
-      })
-    )
-  );
+  // With a hierarchy set up, whoever holds its first step; otherwise the original approvers.
+  const ids = transfer.workflow ? await membersOfRoles(transfer.steps?.[transfer.currentStep ?? 0]?.roles) : await approverUserIds();
+  await Promise.all(ids.map((userId) => notifyUser(userId, buildApprovalNotification(transfer, userId))));
 }
 
 /** A mobilisation's final approval waits while a transfer request on it is Pending. */
@@ -163,76 +173,83 @@ export async function listTransfers({ status }, actor) {
     .limit(200)
     .populate('requestedBy', 'name')
     .populate('decidedBy', 'name')
+    .populate(populateTrail())
     .lean();
-  return { canDecide, items };
+  // Per request: with a hierarchy, only the members of its current step (and Admin) may decide.
+  const annotated = await annotateCanDecide(items, actor, { pendingStatus: 'Pending', legacyCanDecide: canDecide });
+  return { canDecide, items: annotated };
 }
 
 export async function countPendingTransfersFor(actor) {
   if (!(await canDecideTransfers(actor))) return 0;
-  return SubcontractorTransfer.countDocuments({ status: 'Pending' });
+  const pending = await SubcontractorTransfer.find({ status: 'Pending' }).select('workflow currentStep steps status').lean();
+  // On a hierarchy, only the ones whose current step this viewer sits on.
+  const annotated = await annotateCanDecide(pending, actor, { pendingStatus: 'Pending', legacyCanDecide: true });
+  return annotated.filter((t) => t.canDecideCurrentStep).length;
 }
 
 export async function decideTransfer(id, { decision, decisionNote }, actor) {
-  if (!(await canDecideTransfers(actor))) {
-    throw new ApiError(403, 'Only the Marketing Manager can decide a subcontractor transfer.');
-  }
   const transfer = await SubcontractorTransfer.findById(id);
   if (!transfer) throw new ApiError(404, 'Transfer request not found.');
   if (transfer.status !== 'Pending') throw new ApiError(409, 'This transfer has already been decided or withdrawn.');
-
+  // Before anything changes: the subcontractor he is moving to must still exist.
   if (decision === 'Approved') {
-    // The employee's record now says he is with the new subcontractor.
     const target = await Subcontractor.findById(transfer.to.subcontractor).select('_id').lean();
     if (!target) throw new ApiError(404, 'The subcontractor this request moves him to no longer exists.');
-    await OutsourcedEmployee.findOneAndUpdate(
-      { iqamaNumber: transfer.iqamaNumber },
-      {
-        $set: { subcontractor: transfer.to.subcontractor, workerType: 'SupplierEmployee' },
-        $setOnInsert: { name: transfer.workerName, createdBy: actor.userId },
-      },
-      { upsert: true }
-    );
   }
 
-  transfer.status = decision;
-  transfer.decidedBy = actor.userId;
-  transfer.decidedAt = new Date();
-  transfer.decisionNote = decisionNote ?? null;
-  await transfer.save();
-
-  const mobilisation = await Mobilisation.findById(transfer.mobilisation).select('coordinators status serialNumber').lean();
-  if (decision === 'Rejected' && mobilisation) {
-    // Back to the coordinators with the reason. A mobilisation already in
-    // review is returned in full (their Section 1 change affects the
-    // subcontractor paper the first reviewer handled); a Draft just keeps
-    // the note.
-    const reason = `Subcontractor transfer rejected: ${decisionNote}`;
-    const set = { decisionNote: reason };
-    if (mobilisation.status === 'PendingReview') {
-      Object.assign(set, { status: 'Rejected', rejectionTarget: 'Both', decidedBy: actor.userId, decidedAt: new Date() });
-    }
-    await Mobilisation.updateOne({ _id: transfer.mobilisation }, { $set: set });
-  }
-
-  await logAudit({
-    user: actor.userId,
-    action: `subcontractorTransfer.${decision === 'Approved' ? 'approve' : 'reject'}`,
-    targetType: 'SubcontractorTransfer',
-    targetId: transfer._id,
-    meta: { worker: transfer.workerName, from: transfer.from.name, to: transfer.to.name, decisionNote },
-    ip: actor.ip,
+  // Through the shared approval engine (2026-10-14): with a hierarchy set up the request walks its steps; with
+  // none, only the people who finally approve a mobilisation (canDecideTransfers), as before.
+  const decided = await decideApprovalStep({
+    Model: SubcontractorTransfer,
+    id,
+    decision,
+    note: decisionNote ?? null,
+    actor,
+    pendingStatus: 'Pending',
+    authorizeLegacy: async (who) => {
+      if (!(await canDecideTransfers(who))) throw new ApiError(403, 'Only the Marketing Manager can decide a subcontractor transfer.');
+    },
+    notFoundMessage: 'Transfer request not found.',
+    auditAction: 'subcontractorTransfer',
+    buildFinalNotification: (t) => ({
+      type: 'RequestStatus',
+      title: `Subcontractor transfer ${t.status.toLowerCase()}: ${t.workerName}`,
+      body: t.status === 'Rejected' ? t.decisionNote : `${t.workerName} now moves to ${t.to.name}.`,
+      url: `/mobilisations/${t.mobilisation}`,
+    }),
+    buildStepNotification: (t) => buildApprovalNotification(t, 'step'),
+    // The coordinators on the mobilisation, not an employee login.
+    notifyFinal: async (t, notification) => {
+      const mobilisation = await Mobilisation.findById(t.mobilisation).select('coordinators').lean();
+      await Promise.all((mobilisation?.coordinators ?? []).map((c) => notifyUser(c.user, notification)));
+    },
+    // The employee's record now says he is with the new subcontractor.
+    onApproved: async (t) => {
+      await OutsourcedEmployee.findOneAndUpdate(
+        { iqamaNumber: t.iqamaNumber },
+        {
+          $set: { subcontractor: t.to.subcontractor, workerType: 'SupplierEmployee' },
+          $setOnInsert: { name: t.workerName, createdBy: actor.userId },
+        },
+        { upsert: true }
+      );
+    },
   });
-  if (mobilisation) {
-    await Promise.all(
-      mobilisation.coordinators.map((c) =>
-        notifyUser(c.user, {
-          type: 'RequestStatus',
-          title: `Subcontractor transfer ${decision.toLowerCase()}: ${transfer.workerName}`,
-          body: decision === 'Rejected' ? decisionNote : `${transfer.workerName} now moves to ${transfer.to.name}.`,
-          url: `/mobilisations/${transfer.mobilisation}`,
-        })
-      )
-    );
+
+  // A rejection sends the mobilisation back to its coordinators with the reason (the final decision only; a
+  // step approved on the way leaves it alone).
+  if (decided.status === 'Rejected') {
+    const mobilisation = await Mobilisation.findById(decided.mobilisation).select('status').lean();
+    if (mobilisation) {
+      // A mobilisation already in review is returned in full (their Section 1 change affects the subcontractor
+      // paper the first reviewer handled); a Draft just keeps the note.
+      const set = { decisionNote: `Subcontractor transfer rejected: ${decisionNote}` };
+      if (mobilisation.status === 'PendingReview') {
+        Object.assign(set, { status: 'Rejected', rejectionTarget: 'Both', decidedBy: actor.userId, decidedAt: new Date() });
+      }
+      await Mobilisation.updateOne({ _id: decided.mobilisation }, { $set: set });
+    }
   }
-  return transfer.toObject();
+  return decided;
 }

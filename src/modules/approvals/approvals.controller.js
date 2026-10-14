@@ -37,6 +37,16 @@ export async function updateWorkflow(req, res) {
   res.json(new ApiResponse('Approval workflow updated.', workflow));
 }
 
+export async function listEmployeeApprovals(req, res) {
+  const data = await approvalsService.listEmployeeApprovals(req.query);
+  res.json(new ApiResponse('Employees approval hierarchy.', data));
+}
+
+export async function setEmployeeOverride(req, res) {
+  const data = await approvalsService.setEmployeeApprovalOverride(req.params.id, req.body, actor(req));
+  res.json(new ApiResponse('Approval hierarchy updated.', data));
+}
+
 /**
  * GET /api/approvals/log — visible to Admin or any real ApprovalRole
  * member (a dynamic, DB-checked gate, not a static role list) — "so the

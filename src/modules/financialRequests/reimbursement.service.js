@@ -10,7 +10,7 @@ import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.
 import { logAudit } from '../audit/audit.service.js';
 import { notifyEmployeeUser } from '../notifications/notification.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
-import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 /** The ORIGINAL decide-route role gate for a ReimbursementClaim — preserved
@@ -75,7 +75,7 @@ export async function listOwnReimbursements(employeeId, { page, limit, status })
   const filter = { employee: employeeId };
   if (status) filter.status = status;
   const [items, total] = await Promise.all([
-    ReimbursementClaim.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    withApprovalTrail(ReimbursementClaim.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)).lean(),
     ReimbursementClaim.countDocuments(filter),
   ]);
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };

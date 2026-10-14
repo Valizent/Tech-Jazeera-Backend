@@ -16,6 +16,7 @@
  * a client instead of one worker's one month.
  */
 import mongoose from 'mongoose';
+import { approvalFields } from '../approvals/approvalFields.js';
 
 export const CLIENT_PAYMENT_DECISION_STATUSES = ['Pending', 'Approved', 'Rejected'];
 
@@ -47,6 +48,8 @@ const clientPaymentSchema = new mongoose.Schema(
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     decidedAt: { type: Date, default: null },
     decisionNote: { type: String, trim: true, maxlength: 500, default: null },
+    // The hierarchy set up for this payment type, fixed when it is recorded.
+    ...approvalFields(),
   },
   { timestamps: true }
 );

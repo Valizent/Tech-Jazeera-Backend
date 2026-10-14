@@ -15,6 +15,7 @@
  *    list screen filters on it. It is not speculative.
  */
 import mongoose from 'mongoose';
+import { approvalFields } from '../approvals/approvalFields.js';
 import { companyProfileFields } from '../companyProfile/companyProfile.model.js';
 
 /** Single source of truth for status values — validation and UI import it. */
@@ -62,6 +63,8 @@ const clientSchema = new mongoose.Schema(
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     decidedAt: { type: Date, default: null },
     decisionNote: { type: String, trim: true, maxlength: 500 },
+    // The approval hierarchy set up for 'ClientApproval', fixed when the client is submitted.
+    ...approvalFields(),
   },
   { timestamps: true }
 );

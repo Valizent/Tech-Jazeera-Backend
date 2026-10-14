@@ -27,6 +27,7 @@ import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import {
   decideApprovalStep,
   annotateCanDecide,
+  withApprovalTrail,
   notifySubmission,
   resolveStepAuthority,
   membersOfRoles,
@@ -243,12 +244,13 @@ export async function listOwnAnnualVacation(employeeId, { page, limit, status })
   const filter = { employee: employeeId };
   if (status) filter.status = status;
   const [items, total] = await Promise.all([
-    AnnualVacationRequest.find(filter)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .populate('visaRequest', VISA_SUMMARY_FIELDS)
-      .lean(),
+    withApprovalTrail(
+      AnnualVacationRequest.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('visaRequest', VISA_SUMMARY_FIELDS)
+    ).lean(),
     AnnualVacationRequest.countDocuments(filter),
   ]);
   return { items: items.map(publicVacation), total, page, pages: Math.max(1, Math.ceil(total / limit)) };

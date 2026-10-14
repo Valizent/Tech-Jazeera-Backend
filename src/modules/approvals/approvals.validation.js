@@ -3,7 +3,7 @@
  * configuration (Admin-only — see approvals.routes.js).
  */
 import { z } from 'zod';
-import { APPROVAL_REQUEST_TYPES, STEP_DUTIES } from './approvalWorkflow.model.js';
+import { APPROVAL_REQUEST_TYPES, EMPLOYEE_APPROVAL_TYPES, STEP_DUTIES } from './approvalWorkflow.model.js';
 import { EMPLOYEE_DEPARTMENTS } from '../employees/departments.js';
 
 const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
@@ -60,6 +60,20 @@ export const updateApprovalWorkflowSchema = z.object({
 });
 
 export const approvalWorkflowIdParamSchema = z.object({ id: objectId('approval workflow') });
+
+export const employeeApprovalsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  search: z.preprocess(emptyToUndef, z.string().trim().max(80).optional()),
+});
+
+export const employeeIdParamSchema = z.object({ id: objectId('employee') });
+
+/** `workflow: null` puts the employee back on the company default for that module. */
+export const setEmployeeOverrideSchema = z.object({
+  requestType: z.enum(EMPLOYEE_APPROVAL_TYPES),
+  workflow: z.preprocess(emptyToUndef, objectId('approval hierarchy').nullable().optional()).transform((v) => v ?? null),
+});
 
 // Fixed 2026-09-15, a real QA-audit-found gap — F9: this hardcoded
 // 'PendingReview' — Leave's own literal pending status — as THE pending

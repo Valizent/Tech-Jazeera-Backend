@@ -9,6 +9,29 @@ import { logAudit } from '../audit/audit.service.js';
 import { notifyUser } from '../notifications/notification.service.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { withMissingDetails } from '../companyProfile/companyProfile.service.js';
+import { startApproval } from '../approvals/approvals.service.js';
+import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { populateTrail } from '../approvals/approvalFields.js';
+
+const LEGACY_DECIDE_ROLES = ['Admin', 'Manager'];
+
+/** Pending-client buttons: whoever sits at the current step, or (no hierarchy set up) the Admin or the
+ *  coordinator's own manager - the original rule. */
+async function withCanDecide(items, actor) {
+  if (!actor) return items;
+  return annotateCanDecide(items, actor, {
+    pendingStatus: 'Pending',
+    statusField: 'approvalStatus',
+    legacyAllowedRoles: LEGACY_DECIDE_ROLES,
+    isInLegacyScope: (item) => actor.role === 'Admin' || String(item.createdBy?.employee?.manager ?? '') === actor.userId,
+  });
+}
+
+const buildStepNotification = (doc) => ({
+  type: 'RequestStatus',
+  title: `Client submission waiting for your approval: ${doc.companyName}`,
+  url: `/clients/${doc._id}`,
+});
 
 /**
  * Paginated, searchable, sortable listing.
@@ -18,7 +41,7 @@ import { withMissingDetails } from '../companyProfile/companyProfile.service.js'
  * createdByRole  → 'Coordinator' narrows to clients a Coordinator submitted
  * industry       → case-insensitive partial match
  */
-export async function listClients({ page, limit, search, status, approvalStatus, industry, createdByRole, sortBy, sortOrder }) {
+export async function listClients({ page, limit, search, status, approvalStatus, industry, createdByRole, sortBy, sortOrder }, actor = null) {
   const conditions = [];
   if (search) {
     const rx = { $regex: escapeRegex(search), $options: 'i' };
@@ -44,19 +67,23 @@ export async function listClients({ page, limit, search, status, approvalStatus,
       .skip((page - 1) * limit)
       .limit(limit)
       .populate({ path: 'createdBy', select: 'name role employee', populate: { path: 'employee', select: 'manager' } })
+      .populate(populateTrail())
       .lean(),
     Client.countDocuments(filter),
   ]);
-  return { items: await withMissingDetails('Client', items), total, page, pages: Math.max(1, Math.ceil(total / limit)) };
+  const annotated = await withCanDecide(await withMissingDetails('Client', items), actor);
+  return { items: annotated, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
-export async function getClient(id) {
+export async function getClient(id, actor = null) {
   const client = await Client.findById(id)
     .populate({ path: 'createdBy', select: 'name role employee', populate: { path: 'employee', select: 'manager' } })
     .populate('decidedBy', 'name')
+    .populate(populateTrail())
     .lean();
   if (!client) throw new ApiError(404, 'Client not found.');
-  return withMissingDetails('Client', client);
+  const [annotated] = await withCanDecide([await withMissingDetails('Client', client)], actor);
+  return annotated;
 }
 
 /**
@@ -69,8 +96,14 @@ export async function createClient(data, actor) {
   // A new client is incomplete by definition (it has no documents yet), so the
   // missing-details clock starts now (see notifications/companyDetails.job.js).
   const payload = { ...data, createdBy: actor.userId, missingDetailsSince: new Date() };
-  if (actor.role === 'Coordinator') payload.approvalStatus = 'Pending';
+  if (actor.role === 'Coordinator') {
+    payload.approvalStatus = 'Pending';
+    Object.assign(payload, await startApproval('ClientApproval'));
+  }
   const client = await Client.create(payload);
+  if (client.approvalStatus === 'Pending' && client.workflow) {
+    await notifySubmission(client.toObject(), buildStepNotification, LEGACY_DECIDE_ROLES);
+  }
   await logAudit({
     user: actor.userId,
     action: 'client.create',
@@ -106,8 +139,11 @@ export async function updateClient(id, data, actor) {
     data.decidedBy = null;
     data.decidedAt = null;
     data.decisionNote = '';
+    // A resubmission starts the hierarchy again from the first step (the hierarchy in force now).
+    Object.assign(data, await startApproval('ClientApproval'));
     Object.assign(client, data);
     await client.save({ validateModifiedOnly: true });
+    if (client.workflow) await notifySubmission(client.toObject(), buildStepNotification, LEGACY_DECIDE_ROLES);
     await logAudit({
       user: actor.userId,
       action: wasRejected ? 'client.resubmit' : 'client.update',
@@ -133,57 +169,42 @@ export async function updateClient(id, data, actor) {
 }
 
 /**
- * Approve or reject a Pending client. Admin may always decide; a Manager may
- * only decide submissions from a Coordinator who actually reports to them
- * (Employee.manager, via the Coordinator's own linked Employee record) — not
- * just any pending client. Approving flips the client live for deployment/
- * quotation pickers; rejecting requires a note (enforced by
- * decideClientSchema) so the Coordinator knows what to fix.
+ * Approve or reject a Pending client, through the shared approval engine (2026-10-14). With a hierarchy set up
+ * for Client Approval the request walks its steps and only a member of the current step's roles (or an Admin)
+ * may decide; with none, the original rule stands: the Admin, or a Manager who is this coordinator's manager
+ * (Employee.manager, via the coordinator's own linked Employee record). Approving flips the client live for
+ * deployment/quotation pickers; rejecting requires a note (decideClientSchema) so the Coordinator knows what to fix.
  */
 export async function decideClient(id, { status, decisionNote }, actor) {
-  const client = await Client.findById(id);
-  if (!client) throw new ApiError(404, 'Client not found.');
-  if (client.approvalStatus !== 'Pending') {
-    throw new ApiError(400, 'Only a client pending approval can be decided.');
-  }
-
-  if (actor.role !== 'Admin') {
-    // "Is this Manager actually this Coordinator's manager" now reads
-    // through the Coordinator's own Employee record — Employee.manager
-    // replaced User.managedBy as the hierarchy field.
-    const submitter = await User.findById(client.createdBy).select('employee').lean();
-    const submitterEmployee = submitter?.employee
-      ? await Employee.findById(submitter.employee).select('manager').lean()
-      : null;
-    if (!submitterEmployee || submitterEmployee.manager?.toString() !== actor.userId) {
-      throw new ApiError(403, "You are not this coordinator's manager.");
-    }
-  }
-
-  client.approvalStatus = status;
-  client.decidedBy = actor.userId;
-  client.decidedAt = new Date();
-  client.decisionNote = decisionNote ?? '';
-  await client.save();
-
-  await logAudit({
-    user: actor.userId,
-    action: status === 'Approved' ? 'client.approved' : 'client.rejected',
-    targetType: 'Client',
-    targetId: client._id,
-    meta: { companyName: client.companyName, decisionNote },
-    ip: actor.ip,
+  return decideApprovalStep({
+    Model: Client,
+    id,
+    decision: status,
+    note: decisionNote ?? '',
+    actor,
+    pendingStatus: 'Pending',
+    statusField: 'approvalStatus',
+    legacyAllowedRoles: LEGACY_DECIDE_ROLES,
+    assertScope: async (who, _employee, client) => {
+      if (who.role === 'Admin') return;
+      const submitter = await User.findById(client.createdBy).select('employee').lean();
+      const submitterEmployee = submitter?.employee ? await Employee.findById(submitter.employee).select('manager').lean() : null;
+      if (!submitterEmployee || submitterEmployee.manager?.toString() !== who.userId) {
+        throw new ApiError(403, "You are not this coordinator's manager.");
+      }
+    },
+    notFoundMessage: 'Client not found.',
+    auditAction: 'client',
+    buildFinalNotification: (client) => ({
+      type: 'RequestStatus',
+      title: `${client.companyName} client submission ${client.approvalStatus.toLowerCase()}`,
+      body: client.decisionNote || undefined,
+      url: `/clients/${client._id}`,
+    }),
+    buildStepNotification,
+    // The submitter is a User (a Coordinator's own login), not an Employee to resolve through.
+    notifyFinal: (client, notification) => notifyUser(client.createdBy, notification),
   });
-  // The submitter (`createdBy`) is already a User id — a Coordinator's own
-  // login, not an Employee to resolve through, unlike every other
-  // notifyEmployeeUser() call in this module.
-  await notifyUser(client.createdBy, {
-    type: 'RequestStatus',
-    title: `${client.companyName} client submission ${status.toLowerCase()}`,
-    body: decisionNote || undefined,
-    url: `/clients/${client._id}`,
-  });
-  return client.toObject();
 }
 
 export async function deleteClient(id, actor) {

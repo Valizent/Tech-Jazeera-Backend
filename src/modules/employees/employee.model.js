@@ -22,6 +22,7 @@
  *    hard delete stays for records created by mistake.
  */
 import mongoose from 'mongoose';
+import { EMPLOYEE_APPROVAL_TYPES } from '../approvals/approvalWorkflow.model.js';
 
 /** Single source of truth for status values — validation and UI import it. */
 export const EMPLOYEE_STATUSES = ['Active', 'On Leave', 'Exited'];
@@ -189,7 +190,21 @@ const employeeSchema = new mongoose.Schema(
     // default if one exists, otherwise the original single-level flow.
     // Referential integrity (must be a real, active workflow) is checked in
     // the service layer, same as coordinator/manager above.
-    approvalWorkflow: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalWorkflow', default: null },
+    // 2026-10-14: per MODULE now (Approval Hierarchy > Employees): [{ requestType, workflow }]. A module with no
+    // entry uses the company default. The old single `approvalWorkflow` field was converted at boot
+    // (approvals.service.js, migrateLegacyEmployeeOverrides) and is gone.
+    approvalOverrides: {
+      type: [
+        new mongoose.Schema(
+          {
+            requestType: { type: String, enum: EMPLOYEE_APPROVAL_TYPES, required: true },
+            workflow: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalWorkflow', required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
     // Who created this record — null for records predating this field. Lets
     // Admin/Manager/HR see, at a glance, which employees a Coordinator added
     // themselves (self-service, no approval — see docs/PHASE2-PLAN.md).

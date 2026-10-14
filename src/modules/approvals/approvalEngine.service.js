@@ -70,10 +70,10 @@ export async function resolveStepAuthority(actor, stepRoleIds) {
  *  ONE module's items — extracted so a caller juggling several modules
  *  (getMyPendingActions) can union them across all of its calls first and
  *  resolve membership once, instead of once per module. */
-export function roleIdsNeededAcross(items, pendingStatus) {
+export function roleIdsNeededAcross(items, pendingStatus, statusField = 'status') {
   const roleIdsNeeded = new Set();
   for (const item of items) {
-    if (item.status === pendingStatus && item.workflow) {
+    if (item[statusField] === pendingStatus && item.workflow) {
       const step = item.steps?.[item.currentStep];
       for (const roleId of step?.roles ?? []) roleIdsNeeded.add((roleId._id ?? roleId).toString());
     }
@@ -105,14 +105,25 @@ export function roleIdsNeededAcross(items, pendingStatus) {
  *   roles is this actor in" question up to once per module. Computed with
  *   roleIdsNeededAcross(), below, over the UNION of every module's items.
  */
+/**
+ * The population every list that shows a request's approval stages needs: step role names, and who decided
+ * each step. The own-request lists ("My requests") use it so the requester sees the same stages a reviewer does.
+ */
+export function withApprovalTrail(query) {
+  return query
+    .populate('steps.roles', 'name')
+    .populate('approvalTrail.approvalRole', 'name')
+    .populate('approvalTrail.approvedBy', 'name role');
+}
+
 export async function annotateCanDecide(
   items,
   actor,
-  { pendingStatus, legacyAllowedRoles, memberRoleIds: providedMemberRoleIds, isInLegacyScope } = {}
+  { pendingStatus, legacyAllowedRoles, memberRoleIds: providedMemberRoleIds, isInLegacyScope, legacyCanDecide, statusField = 'status' } = {}
 ) {
   let memberRoleIds = providedMemberRoleIds;
   if (!memberRoleIds) {
-    const roleIdsNeeded = roleIdsNeededAcross(items, pendingStatus);
+    const roleIdsNeeded = roleIdsNeededAcross(items, pendingStatus, statusField);
     memberRoleIds = new Set();
     if (roleIdsNeeded.size > 0) {
       const roles = await ApprovalRole.find({ _id: { $in: [...roleIdsNeeded] }, members: actor.userId, isActive: true })
@@ -123,7 +134,7 @@ export async function annotateCanDecide(
   }
 
   return items.map((item) => {
-    if (item.status !== pendingStatus) return { ...item, canDecideCurrentStep: false };
+    if (item[statusField] !== pendingStatus) return { ...item, canDecideCurrentStep: false };
     if (!item.workflow) {
       // Fixed 2026-09-29, a real audit finding: this had no way to apply the
       // same per-item scope check `decideApprovalStep`'s own legacy path
@@ -136,7 +147,9 @@ export async function annotateCanDecide(
       // never consulted on the workflow branch below, same reasoning
       // `assertScope` itself documents — step-role membership IS the scope
       // there.
-      const roleOk = legacyAllowedRoles.includes(actor.role);
+      // `legacyCanDecide` (a boolean worked out once by the caller) is for a request whose original rule is a
+      // Section Access grant rather than a role list.
+      const roleOk = legacyCanDecide ?? legacyAllowedRoles.includes(actor.role);
       const scopeOk = isInLegacyScope ? isInLegacyScope(item) : true;
       return { ...item, canDecideCurrentStep: roleOk && scopeOk };
     }
@@ -221,6 +234,9 @@ export async function notifySubmission(doc, buildStepNotification, legacyAllowed
  * @param {(doc:object, stepIndex:number) => {type:string,title:string,body?:string,url?:string}} [buildStepNotification]  sent to every member of the NEXT step's role pool
  * @param {(doc:object) => Promise<void>} [onApproved]  awaited right after a request becomes Approved and BEFORE the requester is told — for a request type whose approval must do more work to take effect (Mobilisation creates its Deployment). If it throws, the error propagates and nobody is notified, so a success message is never left behind for an approval that did not complete (2026-10-10, QA audit V2-F07). The hook owns any compensation of its own.
  * @param {(doc:object, notification:object) => Promise<void>} [notifyFinal]  how to deliver buildFinalNotification's result — defaults to notifyEmployeeUser(doc.employee, ...), the shape every existing caller (Leave/SalaryAdvance/Reimbursement/Timesheet) uses. Override for a request type whose "who submitted this" isn't an Employee login — e.g. Mobilisation, whose `coordinators[]` are Users directly, not an Employee to resolve through.
+ * @param {string} [statusField]  the field holding the request's status (default 'status'; a Client uses 'approvalStatus', a payment 'decisionStatus')
+ * @param {{path:string, id:string}} [subdocument]  decide one element of an array on the parent document (a deployment's monthly-hours entry) instead of the document itself; `id` is the parent, `subdocument.id` the element
+ * @param {(actor:object, doc:object) => Promise<void>} [authorizeLegacy]  replaces the legacy role-list + assertScope check when the original rule is not a role list (a Section Access grant); throws a 403 itself
  */
 export async function decideApprovalStep({
   Model,
@@ -229,8 +245,11 @@ export async function decideApprovalStep({
   note,
   actor,
   pendingStatus,
-  legacyAllowedRoles,
+  legacyAllowedRoles = [],
   assertScope,
+  authorizeLegacy,
+  statusField = 'status',
+  subdocument = null,
   notFoundMessage,
   auditAction,
   buildFinalNotification,
@@ -238,65 +257,52 @@ export async function decideApprovalStep({
   onApproved,
   notifyFinal = (doc, notification) => notifyEmployeeUser(doc.employee, notification),
 }) {
-  const doc = await Model.findById(id);
+  const parent = await Model.findById(id);
+  if (!parent) throw new ApiError(404, notFoundMessage);
+  const doc = subdocument ? parent[subdocument.path]?.id(subdocument.id) : parent;
   if (!doc) throw new ApiError(404, notFoundMessage);
 
-  // Deliberately NOT throwing here on `doc.status !== pendingStatus` (fixed
-  // 2026-09-22, a real QA-audit finding — F1's own flaky test, reconciled).
-  // A stale advisory check like that against this READ raced against every
-  // branch's own atomic conditional update below (all of which already,
-  // consistently, return 409 on a lost race — the `findOneAndUpdate`
-  // filters two lines down are the real, single source of truth for "is
-  // this still decidable"). Depending on exactly how two concurrent
-  // decisions interleaved, the loser could either lose HERE (this doc read
-  // landing after the winner's write already committed → 400) or lose AT
-  // the atomic update (this read landing before the winner's write → 409)
-  // — the same request, the same two racing actors, two different status
-  // codes purely from scheduling. The intended contract is simpler and now
-  // deterministic: 409 Conflict, always, for "this request is not pending
-  // review anymore" — whether that's because someone else decided it a
-  // millisecond ago in a live race or three days ago from a stale-open UI
-  // tab. (Authorization below still runs against this doc regardless of
-  // its status, which is correct — a non-authorized actor gets 403 rather
-  // than being told anything about the request's current state.)
+  // Where the request's own fields live: on the document, or inside one element of an array on it.
+  const field = (name) => (subdocument ? `${subdocument.path}.$.${name}` : name);
+  const match = (extra = {}) =>
+    subdocument
+      ? { _id: id, [subdocument.path]: { $elemMatch: { _id: subdocument.id, [statusField]: pendingStatus, ...extra } } }
+      : { _id: id, [statusField]: pendingStatus, ...extra };
+  const pick = (updatedParent) => (subdocument ? updatedParent?.[subdocument.path]?.find((e) => String(e._id) === String(subdocument.id)) : updatedParent);
 
-  // ---- Legacy path: no workflow governs this request — today's original,
-  // single-level behavior. ----
+  // Deliberately NOT throwing here on `doc[statusField] !== pendingStatus` (fixed 2026-09-22, a real QA-audit
+  // finding): the atomic conditional updates below are the single source of truth for "is this still
+  // decidable", and always answer 409 for a request that is not pending anymore.
+
+  // ---- Legacy path: no workflow governs this request — today's original, single-level behavior. ----
   if (!doc.workflow) {
-    if (assertScope) await assertScope(actor, doc.employee);
-    if (!legacyAllowedRoles.includes(actor.role)) {
-      throw new ApiError(403, 'You do not have permission to perform this action.');
+    if (authorizeLegacy) {
+      await authorizeLegacy(actor, doc);
+    } else {
+      if (assertScope) await assertScope(actor, doc.employee, doc);
+      if (!legacyAllowedRoles.includes(actor.role)) {
+        throw new ApiError(403, 'You do not have permission to perform this action.');
+      }
     }
-    // Atomic update, not read-then-save (fixed 2026-09-15, a real QA-audit-
-    // found race — F1): two concurrent decisions (even a contradictory
-    // Approved + Rejected pair) could both pass the `doc.status !==
-    // pendingStatus` check above against the same stale read, then both
-    // `.save()` — both returning 200 with their own decision, whichever
-    // write landed last silently overwriting the other's, audit log and
-    // notification included for both. This is the exact same class of race
-    // the WORKFLOW path just below already atomically guards (its own
-    // `findOneAndUpdate({status, currentStep}, ...)`) — this legacy branch
-    // predates that fix and was never brought in line with it. The filter
-    // re-checks `status: pendingStatus` against the CURRENT document at
-    // write time; only the first of two concurrent requests can match it —
-    // the loser gets `null` back instead of silently succeeding.
-    const updated = await Model.findOneAndUpdate(
-      { _id: id, status: pendingStatus },
-      { $set: { status: decision, decidedBy: actor.userId, decidedAt: new Date(), decisionNote: note } },
+    // Atomic update, not read-then-save (fixed 2026-09-15, F1): only the first of two concurrent decisions matches.
+    const updatedParent = await Model.findOneAndUpdate(
+      match(),
+      { $set: { [field(statusField)]: decision, [field('decidedBy')]: actor.userId, [field('decidedAt')]: new Date(), [field('decisionNote')]: note } },
       { new: true }
     ).lean();
+    const updated = pick(updatedParent);
     if (!updated) throw new ApiError(409, 'This request was already decided by someone else.');
 
     await logAudit({
       user: actor.userId,
       action: `${auditAction}.${decision.toLowerCase()}`,
       targetType: Model.modelName,
-      targetId: updated._id,
+      targetId: updatedParent._id,
       meta: { decisionNote: note },
       ip: actor.ip,
     });
-    if (decision === 'Approved' && onApproved) await onApproved(updated);
-    await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated)));
+    if (decision === 'Approved' && onApproved) await onApproved(updated, updatedParent);
+    await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated, updatedParent), updatedParent));
     return updated;
   }
 
@@ -318,20 +324,20 @@ export async function decideApprovalStep({
     note,
     decidedAt: new Date(),
   };
+  const atThisStep = match({ currentStep: stepIndex });
 
-  // Reject at any step → immediate overall rejection, chain stops.
+  // Reject at any step → immediate overall rejection, chain stops. The atomic guard on {status, currentStep}
+  // closes the race between two pool members deciding the same step at once.
   if (decision === 'Rejected') {
-    // Atomic guard on {status, currentStep} closes the race between two pool
-    // members deciding the same step at once — the loser gets a clean 409
-    // instead of silently overwriting the winner's decision.
-    const updated = await Model.findOneAndUpdate(
-      { _id: id, status: pendingStatus, currentStep: stepIndex },
+    const updatedParent = await Model.findOneAndUpdate(
+      atThisStep,
       {
-        $push: { approvalTrail: trailEntry },
-        $set: { status: 'Rejected', decidedBy: actor.userId, decidedAt: new Date(), decisionNote: note },
+        $push: { [field('approvalTrail')]: trailEntry },
+        $set: { [field(statusField)]: 'Rejected', [field('decidedBy')]: actor.userId, [field('decidedAt')]: new Date(), [field('decisionNote')]: note },
       },
       { new: true }
     ).lean();
+    const updated = pick(updatedParent);
     if (!updated) throw new ApiError(409, 'This request was already decided by someone else.');
 
     await logAudit({
@@ -342,7 +348,7 @@ export async function decideApprovalStep({
       meta: { decisionNote: note, step: stepIndex, viaAdminOverride },
       ip: actor.ip,
     });
-    await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated)));
+    await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated, updatedParent), updatedParent));
     return updated;
   }
 
@@ -350,11 +356,12 @@ export async function decideApprovalStep({
 
   // Approve, not the last step → advance to the next step and notify it.
   if (!isLastStep) {
-    const updated = await Model.findOneAndUpdate(
-      { _id: id, status: pendingStatus, currentStep: stepIndex },
-      { $push: { approvalTrail: trailEntry }, $inc: { currentStep: 1 } },
+    const updatedParent = await Model.findOneAndUpdate(
+      atThisStep,
+      { $push: { [field('approvalTrail')]: trailEntry }, $inc: { [field('currentStep')]: 1 } },
       { new: true }
     ).lean();
+    const updated = pick(updatedParent);
     if (!updated) throw new ApiError(409, 'This request was already decided by someone else.');
 
     await logAudit({
@@ -368,21 +375,22 @@ export async function decideApprovalStep({
     if (buildStepNotification) {
       const nextStep = updated.steps[updated.currentStep];
       const memberIds = await membersOfRoles(nextStep?.roles);
-      const notification = buildStepNotification(updated, updated.currentStep);
+      const notification = buildStepNotification(updated, updated.currentStep, updatedParent);
       await notifyBestEffort(() => Promise.all(memberIds.map((userId) => notifyUser(userId, notification))));
     }
     return updated;
   }
 
   // Approve, last step → terminal Approved.
-  const updated = await Model.findOneAndUpdate(
-    { _id: id, status: pendingStatus, currentStep: stepIndex },
+  const updatedParent = await Model.findOneAndUpdate(
+    atThisStep,
     {
-      $push: { approvalTrail: trailEntry },
-      $set: { status: 'Approved', decidedBy: actor.userId, decidedAt: new Date(), decisionNote: note },
+      $push: { [field('approvalTrail')]: trailEntry },
+      $set: { [field(statusField)]: 'Approved', [field('decidedBy')]: actor.userId, [field('decidedAt')]: new Date(), [field('decisionNote')]: note },
     },
     { new: true }
   ).lean();
+  const updated = pick(updatedParent);
   if (!updated) throw new ApiError(409, 'This request was already decided by someone else.');
 
   await logAudit({
@@ -393,7 +401,7 @@ export async function decideApprovalStep({
     meta: { decisionNote: note, step: stepIndex, viaAdminOverride },
     ip: actor.ip,
   });
-  if (onApproved) await onApproved(updated);
-  await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated)));
+  if (onApproved) await onApproved(updated, updatedParent);
+  await notifyBestEffort(() => notifyFinal(updated, buildFinalNotification(updated, updatedParent), updatedParent));
   return updated;
 }

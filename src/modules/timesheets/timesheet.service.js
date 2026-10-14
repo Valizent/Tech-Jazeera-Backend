@@ -18,7 +18,7 @@ import { resolveWeeklyCap } from '../ramadan/ramadanPeriod.service.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
-import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -168,7 +168,7 @@ export async function submitTimesheet(employeeId, data, actor) {
 export async function listOwnTimesheets(employeeId, { page, limit }) {
   const filter = { employee: employeeId };
   const [items, total] = await Promise.all([
-    Timesheet.find(filter).sort({ periodStart: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    withApprovalTrail(Timesheet.find(filter).sort({ periodStart: -1 }).skip((page - 1) * limit).limit(limit)).lean(),
     Timesheet.countDocuments(filter),
   ]);
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };

@@ -24,7 +24,9 @@ import ApiError from '../../utils/ApiError.js';
 import { allocatePayments } from './paymentAllocation.js';
 import { logAudit } from '../audit/audit.service.js';
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
-import { membersOfRoles } from '../approvals/approvalEngine.service.js';
+import { membersOfRoles, decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { startApproval } from '../approvals/approvals.service.js';
+import { populateTrail } from '../approvals/approvalFields.js';
 import { notifyUser } from '../notifications/notification.service.js';
 
 async function decidersOfDeploymentsPayment() {
@@ -94,6 +96,7 @@ export async function getSubcontractorPaymentHistory(subcontractorId) {
     .sort({ recordedAt: -1 })
     .populate('recordedBy', 'name')
     .populate('decidedBy', 'name')
+    .populate(populateTrail())
     .lean();
 }
 
@@ -103,11 +106,13 @@ export async function getPendingPaymentsQueue(actor) {
   if (!allowed && actor.role !== 'Admin') {
     throw new ApiError(403, 'You do not have permission to view the payments approval queue.');
   }
-  return SubcontractorPayment.find({ decisionStatus: 'Pending' })
+  const pending = await SubcontractorPayment.find({ decisionStatus: 'Pending' })
     .sort({ recordedAt: 1 })
     .populate('subcontractor', 'name')
     .populate('recordedBy', 'name')
+    .populate(populateTrail())
     .lean();
+  return annotateCanDecide(pending, actor, { pendingStatus: 'Pending', statusField: 'decisionStatus', legacyCanDecide: true });
 }
 
 /**
@@ -136,6 +141,7 @@ export async function recordSubcontractorPayment(subcontractorId, data, actor, p
     ...(data.paymentDate && { paymentDate: data.paymentDate }),
     ...(picked && { allocated: true, allocations: picked.allocations }),
     recordedBy: actor.userId,
+    ...(await startApproval('SubcontractorPayment')),
   });
 
   await logAudit({
@@ -147,14 +153,17 @@ export async function recordSubcontractorPayment(subcontractorId, data, actor, p
     ip: actor.ip,
   });
 
-  const deciders = await decidersOfDeploymentsPayment();
-  for (const userId of deciders) {
-    await notifyUser(userId, {
-      type: 'RequestStatus',
-      title: `A payment for ${subcontractor.name} needs your approval`,
-      body: `SAR ${data.amount} recorded as paid.`,
-      url: '/financial/sub-payments-review',
-    });
+  const needsApproval = {
+    type: 'RequestStatus',
+    title: `A payment for ${subcontractor.name} needs your approval`,
+    body: `SAR ${data.amount} recorded as paid.`,
+    url: '/financial/sub-payments-review',
+  };
+  if (payment.workflow) {
+    await notifySubmission(payment.toObject(), () => needsApproval);
+  } else {
+    const deciders = await decidersOfDeploymentsPayment();
+    for (const userId of deciders) await notifyUser(userId, needsApproval);
   }
   return payment.toObject();
 }
@@ -168,55 +177,47 @@ export async function decideSubcontractorPayment(paymentId, data, actor) {
   const allowed = await canAccessSection('deploymentsPaymentDecide', actor);
   if (!allowed) throw new ApiError(403, 'You do not have permission to approve a received payment.');
 
-  const existing = await SubcontractorPayment.findById(paymentId);
+  const existing = await SubcontractorPayment.findById(paymentId).select('subcontractor').lean();
   if (!existing) throw new ApiError(404, 'Payment not found.');
-  if (existing.decisionStatus !== 'Pending') throw new ApiError(400, 'Only a pending payment can be decided.');
-
   const subcontractor = await Subcontractor.findById(existing.subcontractor).select('name').lean();
+  const subName = subcontractor?.name ?? 'a subcontractor';
 
-  // Atomic transition (2026-09-29, a real audit finding): the old
-  // read-then-save let two concurrent deciders on the same Pending payment
-  // race — the second save would silently overwrite the first's decision.
-  // Filtering the update on `decisionStatus: 'Pending'` means only the
-  // first of two concurrent requests can match; the loser gets a clean 400.
-  const payment = await SubcontractorPayment.findOneAndUpdate(
-    { _id: paymentId, decisionStatus: 'Pending' },
-    { decisionStatus: data.decision, decidedBy: actor.userId, decidedAt: new Date(), decisionNote: data.note || null },
-    { new: true }
-  );
-  if (!payment) throw new ApiError(400, 'Only a pending payment can be decided.');
-
-  await logAudit({
-    user: actor.userId,
-    action: 'subcontractorPayment.decide',
-    targetType: 'SubcontractorPayment',
-    targetId: payment._id,
-    meta: { subcontractor: payment.subcontractor, decision: data.decision, amount: payment.amount },
-    ip: actor.ip,
+  // Through the shared approval engine (2026-10-14), same shape as decideClientPayment.
+  return decideApprovalStep({
+    Model: SubcontractorPayment,
+    id: paymentId,
+    decision: data.decision,
+    note: data.note || null,
+    actor,
+    pendingStatus: 'Pending',
+    statusField: 'decisionStatus',
+    authorizeLegacy: async () => {},
+    notFoundMessage: 'Payment not found.',
+    auditAction: 'subcontractorPayment',
+    buildFinalNotification: (payment) => ({
+      type: 'RequestStatus',
+      title: `Payment for ${subName} ${payment.decisionStatus === 'Approved' ? 'approved' : 'rejected'}`,
+      body: payment.decisionNote || undefined,
+      url: '/financial/sub-payments-due',
+    }),
+    buildStepNotification: (payment) => ({
+      type: 'RequestStatus',
+      title: `A payment for ${subName} needs your approval`,
+      body: `SAR ${payment.amount} recorded as paid.`,
+      url: '/financial/sub-payments-review',
+    }),
+    notifyFinal: (payment, notification) => notifyUser(payment.recordedBy.toString(), notification),
+    onApproved: async (payment) => {
+      const audience = await subcontractorPaymentAudience(payment.subcontractor);
+      for (const userId of audience) {
+        if (userId === payment.recordedBy.toString()) continue;
+        await notifyUser(userId, {
+          type: 'RequestStatus',
+          title: `A payment for ${subName} was approved`,
+          body: `SAR ${payment.amount} now credited against outstanding invoices.`,
+          url: '/financial/sub-payments-due',
+        });
+      }
+    },
   });
-
-  await notifyUser(payment.recordedBy.toString(), {
-    type: 'RequestStatus',
-    title:
-      data.decision === 'Approved'
-        ? `Payment for ${subcontractor?.name ?? 'a subcontractor'} approved`
-        : `Payment for ${subcontractor?.name ?? 'a subcontractor'} rejected`,
-    body: data.note || undefined,
-    url: '/financial/sub-payments-due',
-  });
-
-  if (data.decision === 'Approved') {
-    const audience = await subcontractorPaymentAudience(payment.subcontractor);
-    for (const userId of audience) {
-      if (userId === payment.recordedBy.toString()) continue;
-      await notifyUser(userId, {
-        type: 'RequestStatus',
-        title: `A payment for ${subcontractor?.name ?? 'a subcontractor'} was approved`,
-        body: `SAR ${payment.amount} now credited against outstanding invoices.`,
-        url: '/financial/sub-payments-due',
-      });
-    }
-  }
-
-  return payment.toObject();
 }

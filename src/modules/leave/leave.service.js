@@ -18,7 +18,7 @@ import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import { createLeaveTypeSchema } from './leave.validation.js';
-import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import { signedDownloadUrl } from '../../middleware/upload.js';
 
@@ -604,11 +604,12 @@ export async function listOwnLeaveRequests(employeeId, { page, limit, status }) 
   const filter = { employee: employeeId };
   if (status) filter.status = status;
   const [items, total] = await Promise.all([
-    LeaveRequest.find(filter)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean(),
+    withApprovalTrail(
+      LeaveRequest.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+    ).lean(),
     LeaveRequest.countDocuments(filter),
   ]);
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };

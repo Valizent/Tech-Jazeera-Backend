@@ -174,7 +174,6 @@ const employeeObjectSchema = z
     // Configurable Approval Hierarchy: overrides the company-wide default
     // ApprovalWorkflow for this employee's requests. "" clears it (null),
     // not "leave unchanged" — same rule as manager/weeklyOffDay.
-    approvalWorkflow: nullableObjectId('approval workflow'),
     // Who supplied this worker — required only when type is 'Subcontracted'
     // (see the superRefine below); referential integrity (must be a real
     // Subcontractor) is checked in the service, same as manager.

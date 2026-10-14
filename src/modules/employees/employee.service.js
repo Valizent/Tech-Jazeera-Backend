@@ -6,7 +6,6 @@ import Employee from './employee.model.js';
 import User, { MANAGER_ELIGIBLE_ROLES } from '../auth/user.model.js';
 import Attendance from '../attendance/attendance.model.js';
 import { activeMobilisationWorkerIds } from '../mobilisations/mobilisation.service.js';
-import ApprovalWorkflow from '../approvals/approvalWorkflow.model.js';
 import Subcontractor from '../subcontractors/subcontractor.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { hashPassword, generateTempPassword, revokeAllSessions } from '../auth/auth.service.js';
@@ -220,7 +219,6 @@ export async function getEmployee(id, actor) {
     .populate('currentClient', 'companyName')
     .populate('coordinator', 'name email')
     .populate('manager', 'name email')
-    .populate('approvalWorkflow', 'name isActive')
     .populate('subcontractor', 'name')
     .populate('createdBy', 'name role')
     .lean();
@@ -241,15 +239,6 @@ async function assertValidManager(managerId) {
   const manager = await User.findById(managerId).lean();
   if (!manager || !MANAGER_ELIGIBLE_ROLES.includes(manager.role)) {
     throw new ApiError(400, 'Selected manager must be an Admin or Manager account.');
-  }
-}
-
-/** The assigned approval-workflow override, if any, must actually exist and be active. */
-async function assertValidApprovalWorkflow(workflowId) {
-  if (!workflowId) return;
-  const workflow = await ApprovalWorkflow.findById(workflowId).lean();
-  if (!workflow || !workflow.isActive) {
-    throw new ApiError(400, 'Selected approval workflow is not valid or is inactive.');
   }
 }
 
@@ -405,7 +394,6 @@ export async function createEmployee(data, actor) {
   // override is gone (the user's decision) - a Coordinator may add any type.
   const payload = { ...data, createdBy: actor.userId };
   await assertValidManager(payload.manager);
-  await assertValidApprovalWorkflow(payload.approvalWorkflow);
   await assertValidSubcontractor(payload.subcontractor);
   const employee = await Employee.create(payload);
   await logAudit({
@@ -445,7 +433,6 @@ export async function updateEmployee(id, rawData, actor) {
   // free-text value is replaced only by picking one from the list, never wiped.
   if ('department' in data && data.department === undefined) delete data.department;
   if ('manager' in data) await assertValidManager(data.manager);
-  if ('approvalWorkflow' in data) await assertValidApprovalWorkflow(data.approvalWorkflow);
   if ('subcontractor' in data) await assertValidSubcontractor(data.subcontractor);
   // Fetch + assign + save, NOT findByIdAndUpdate (fixed 2026-09-14, a real
   // QA-audit-found gap): Mongoose's update validators (`runValidators`)

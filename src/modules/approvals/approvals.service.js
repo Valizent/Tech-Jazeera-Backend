@@ -6,7 +6,9 @@
  * workflow, if any, governs a given employee/request-type combination.
  */
 import ApprovalRole from './approvalRole.model.js';
-import ApprovalWorkflow from './approvalWorkflow.model.js';
+import ApprovalWorkflow, { EMPLOYEE_APPROVAL_TYPES } from './approvalWorkflow.model.js';
+import Employee from '../employees/employee.model.js';
+import { escapeRegex } from '../../utils/escapeRegex.js';
 import { normalizeDepartment } from '../employees/departments.js';
 import User from '../auth/user.model.js';
 import LeaveRequest from '../leave/leaveRequest.model.js';
@@ -16,6 +18,11 @@ import CertificateRequest from '../exitDocuments/certificate.model.js';
 import Timesheet from '../timesheets/timesheet.model.js';
 import SalaryAdvance from '../financialRequests/advance.model.js';
 import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
+import Client from '../clients/client.model.js';
+import ClientPayment from '../deployments/clientPayment.model.js';
+import SubcontractorPayment from '../deployments/subcontractorPayment.model.js';
+import Deployment from '../deployments/deployment.model.js';
+import SubcontractorTransfer from '../subcontractorTransfers/subcontractorTransfer.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { SELF_SERVICE_ROLE_NAMES } from '../sectionAccess/selfService.constants.js';
@@ -227,8 +234,9 @@ export async function updateApprovalWorkflow(id, data, actor) {
  * never breaks submission for employees still pointed at it.
  */
 export async function resolveApprovalWorkflow(employee, requestType) {
-  if (employee.approvalWorkflow) {
-    const override = await ApprovalWorkflow.findById(employee.approvalWorkflow).lean();
+  const own = employee.approvalOverrides?.find((o) => o.requestType === requestType);
+  if (own) {
+    const override = await ApprovalWorkflow.findById(own.workflow).lean();
     if (override?.isActive) return override;
   }
   const companyDefault = await ApprovalWorkflow.findOne({ appliesTo: requestType, isActive: true }).lean();
@@ -242,6 +250,107 @@ export async function resolveApprovalWorkflow(employee, requestType) {
     if (routed?.isActive) return routed;
   }
   return companyDefault;
+}
+
+/**
+ * The fields that put a new (or resubmitted) request at the first step of the hierarchy set up for
+ * `requestType`, or the empty set when none is (then the original single-step rule applies unchanged).
+ * `approvalTrail: []` clears a previous round on a resubmission. For requests with no employee behind them
+ * (client approval, payments, monthly hours, subcontractor transfers).
+ */
+export async function startApproval(requestType) {
+  const workflow = await resolveApprovalWorkflow({}, requestType);
+  if (!workflow) return { workflow: null, workflowName: null, steps: undefined, currentStep: 0, approvalTrail: [] };
+  return {
+    workflow: workflow._id,
+    workflowName: workflow.name,
+    steps: workflow.steps.map(({ label, roles }) => ({ label, roles })),
+    currentStep: 0,
+    approvalTrail: [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Employees' approval hierarchy: who uses the default chain for which module, and who has their own.
+// ---------------------------------------------------------------------------
+
+export async function listEmployeeApprovals({ search, page = 1, limit = 25 }) {
+  const filter = { status: { $ne: 'Exited' } };
+  if (search) {
+    const pattern = new RegExp(escapeRegex(search), 'i');
+    filter.$or = [{ fullName: pattern }, { employeeId: pattern }];
+  }
+  const [items, total] = await Promise.all([
+    Employee.find(filter)
+      .select('fullName employeeId department designation approvalOverrides')
+      .sort({ fullName: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .populate('approvalOverrides.workflow', 'name isActive')
+      .lean(),
+    Employee.countDocuments(filter),
+  ]);
+  return {
+    items: items.map((e) => ({
+      _id: e._id,
+      fullName: e.fullName,
+      employeeId: e.employeeId,
+      department: e.department ?? null,
+      designation: e.designation,
+      overrides: (e.approvalOverrides ?? []).filter((o) => o.workflow).map((o) => ({ requestType: o.requestType, workflow: o.workflow })),
+    })),
+    total,
+    page,
+    pages: Math.max(1, Math.ceil(total / limit)),
+  };
+}
+
+/** Give one employee their own hierarchy for one module, or (workflow null) put them back on the default. */
+export async function setEmployeeApprovalOverride(employeeId, { requestType, workflow }, actor) {
+  if (!EMPLOYEE_APPROVAL_TYPES.includes(requestType)) {
+    throw new ApiError(400, 'This module is not set per employee.');
+  }
+  const employee = await Employee.findById(employeeId).select('fullName employeeId approvalOverrides');
+  if (!employee) throw new ApiError(404, 'Employee not found.');
+  let chosen = null;
+  if (workflow) {
+    chosen = await ApprovalWorkflow.findById(workflow).select('name isActive').lean();
+    if (!chosen || !chosen.isActive) throw new ApiError(400, 'Selected approval hierarchy is not valid or is inactive.');
+  }
+  employee.approvalOverrides = employee.approvalOverrides.filter((o) => o.requestType !== requestType);
+  if (chosen) employee.approvalOverrides.push({ requestType, workflow: chosen._id });
+  await employee.save();
+  await logAudit({
+    user: actor.userId,
+    action: 'employee.approvalOverride',
+    targetType: 'Employee',
+    targetId: employee._id,
+    meta: { employeeId: employee.employeeId, fullName: employee.fullName, requestType, workflow: chosen?.name ?? null },
+    ip: actor.ip,
+  });
+  return {
+    _id: employee._id,
+    overrides: employee.approvalOverrides.map((o) => ({ requestType: o.requestType, workflow: o.workflow })),
+  };
+}
+
+/**
+ * One-off, idempotent: the single per-employee override that existed before 2026-10-14 applied to every module
+ * the employee files, so it becomes one entry per employee-filed module (existing entries are kept), then the
+ * old field is removed. Runs at boot; does nothing once converted.
+ */
+export async function migrateLegacyEmployeeOverrides() {
+  const legacy = await Employee.collection.find({ approvalWorkflow: { $exists: true, $ne: null } }).toArray();
+  for (const e of legacy) {
+    const have = new Set((e.approvalOverrides ?? []).map((o) => o.requestType));
+    const added = EMPLOYEE_APPROVAL_TYPES.filter((t) => !have.has(t)).map((requestType) => ({ requestType, workflow: e.approvalWorkflow }));
+    await Employee.collection.updateOne(
+      { _id: e._id },
+      { $set: { approvalOverrides: [...(e.approvalOverrides ?? []), ...added] }, $unset: { approvalWorkflow: '' } }
+    );
+  }
+  await Employee.collection.updateMany({ approvalWorkflow: null }, { $unset: { approvalWorkflow: '' } });
+  return legacy.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +393,39 @@ const LOG_SOURCES = {
   Timesheet: { Model: Timesheet, typeNameField: null, pendingStatus: 'Submitted' },
   SalaryAdvance: { Model: SalaryAdvance, typeNameField: null, pendingStatus: 'Pending' },
   Reimbursement: { Model: ReimbursementClaim, typeNameField: 'category', pendingStatus: 'Pending' },
+  // 2026-10-14: decisions that are not tied to one employee. `subject` says who/what it is about; their
+  // status lives in `statusField` (the log hands the UI a normalised `status`).
+  ClientApproval: {
+    Model: Client,
+    typeNameField: null,
+    pendingStatus: 'Pending',
+    statusField: 'approvalStatus',
+    subject: (i) => ({ subject: i.companyName, subjectRef: null }),
+  },
+  ClientPayment: {
+    Model: ClientPayment,
+    typeNameField: null,
+    pendingStatus: 'Pending',
+    statusField: 'decisionStatus',
+    populate: [{ path: 'client', select: 'companyName' }],
+    subject: (i) => ({ subject: i.client?.companyName ?? '-', subjectRef: `SAR ${i.amount}` }),
+  },
+  SubcontractorPayment: {
+    Model: SubcontractorPayment,
+    typeNameField: null,
+    pendingStatus: 'Pending',
+    statusField: 'decisionStatus',
+    populate: [{ path: 'subcontractor', select: 'name' }],
+    subject: (i) => ({ subject: i.subcontractor?.name ?? '-', subjectRef: `SAR ${i.amount}` }),
+  },
+  SubcontractorTransfer: {
+    Model: SubcontractorTransfer,
+    typeNameField: null,
+    pendingStatus: 'Pending',
+    subject: (i) => ({ subject: i.workerName, subjectRef: `${i.from?.name} → ${i.to?.name}` }),
+  },
+  // Entries inside a deployment: flattened below.
+  MonthlyHours: { Model: Deployment, embedded: 'monthlyHours', typeNameField: 'month', pendingStatus: 'Pending' },
 };
 
 /** Is this user a member of ANY approval role — the dynamic "sits somewhere
@@ -328,12 +470,43 @@ export async function listApprovalLog({ type, status, employee, from, to, page, 
   for (const requestType of typesToQuery) {
     const source = LOG_SOURCES[requestType];
     if (!source) continue;
+    // The employee filter only makes sense for requests an employee filed.
+    if (employee && (source.statusField || source.embedded || requestType === 'SubcontractorTransfer')) continue;
+    const statusField = source.statusField ?? 'status';
+    const wanted = status === 'Pending' ? source.pendingStatus : status;
+    const inRange = (date) => (!from || date >= from) && (!to || date <= to);
 
-    // Only requests actually governed by a workflow carry a real trail —
-    // this log is about the configurable hierarchy, not the legacy
-    // single-decision flow (which every review screen already shows).
+    // Entries inside a deployment (monthly hours): one result per entry that sits on a hierarchy.
+    if (source.embedded) {
+      const deployments = await source.Model.find({ [`${source.embedded}.workflow`]: { $ne: null } })
+        .populate('monthlyHours.steps.roles', 'name')
+        .populate('monthlyHours.approvalTrail.approvalRole', 'name')
+        .populate('monthlyHours.approvalTrail.approvedBy', 'name role')
+        .populate('monthlyHours.decidedBy', 'name role')
+        .lean();
+      for (const dep of deployments) {
+        for (const entry of dep.monthlyHours) {
+          if (!entry.workflow) continue;
+          if (wanted && entry.status !== wanted) continue;
+          if (!inRange(new Date(entry.enteredAt))) continue;
+          results.push({
+            ...entry,
+            requestType,
+            typeName: entry.month,
+            createdAt: entry.enteredAt,
+            workflow: { _id: entry.workflow, name: entry.workflowName },
+            subject: dep.workerName,
+            subjectRef: entry.month,
+          });
+        }
+      }
+      continue;
+    }
+
+    // Only requests actually governed by a workflow carry a real trail — this log is about the configurable
+    // hierarchy, not the legacy single-decision flow (which every review screen already shows).
     const filter = { workflow: { $ne: null } };
-    if (status) filter.status = status === 'Pending' ? source.pendingStatus : status;
+    if (wanted) filter[statusField] = wanted;
     if (employee) filter.employee = employee;
     if (from || to) {
       filter.createdAt = {};
@@ -341,8 +514,10 @@ export async function listApprovalLog({ type, status, employee, from, to, page, 
       if (to) filter.createdAt.$lte = to;
     }
 
-    const items = await source.Model.find(filter)
-      .populate('employee', 'fullName employeeId')
+    let query = source.Model.find(filter);
+    if (!source.subject) query = query.populate('employee', 'fullName employeeId');
+    for (const populate of source.populate ?? []) query = query.populate(populate);
+    const items = await query
       .populate('workflow', 'name')
       .populate('steps.roles', 'name')
       .populate('approvalTrail.approvalRole', 'name')
@@ -351,7 +526,17 @@ export async function listApprovalLog({ type, status, employee, from, to, page, 
       .lean();
 
     for (const item of items) {
-      results.push({ requestType, typeName: item[source.typeNameField], ...item });
+      const who = source.subject
+        ? source.subject(item)
+        : { subject: item.employee?.fullName, subjectRef: item.employee?.employeeId };
+      results.push({
+        requestType,
+        typeName: source.typeNameField ? item[source.typeNameField] : undefined,
+        ...item,
+        // One normalised status for the UI, whatever field this request type keeps it in.
+        status: item[statusField],
+        ...who,
+      });
     }
   }
 

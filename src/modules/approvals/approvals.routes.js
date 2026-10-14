@@ -36,6 +36,9 @@ import {
   updateApprovalWorkflowSchema,
   approvalWorkflowIdParamSchema,
   approvalLogQuerySchema,
+  employeeApprovalsQuerySchema,
+  employeeIdParamSchema,
+  setEmployeeOverrideSchema,
 } from './approvals.validation.js';
 import * as approvalsController from './approvals.controller.js';
 
@@ -72,6 +75,21 @@ router.patch(
   canManageApprovalHierarchy,
   validate({ params: approvalWorkflowIdParamSchema, body: updateApprovalWorkflowSchema }),
   asyncHandler(approvalsController.updateWorkflow)
+);
+
+// Each employee's own hierarchy per module (the default unless changed here).
+router.get(
+  '/employees',
+  requireStaffOrExecutive,
+  canReadApprovalHierarchy,
+  validate({ query: employeeApprovalsQuerySchema }),
+  asyncHandler(approvalsController.listEmployeeApprovals)
+);
+router.put(
+  '/employees/:id/override',
+  canManageApprovalHierarchy,
+  validate({ params: employeeIdParamSchema, body: setEmployeeOverrideSchema }),
+  asyncHandler(approvalsController.setEmployeeOverride)
 );
 
 // Open to any staff member (or Executive) — the controller applies the

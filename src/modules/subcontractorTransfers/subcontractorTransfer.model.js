@@ -14,6 +14,7 @@
  * become Cancelled rather than being deleted, so the history stays.
  */
 import mongoose from 'mongoose';
+import { approvalFields } from '../approvals/approvalFields.js';
 
 export const TRANSFER_STATUSES = ['Pending', 'Approved', 'Rejected', 'Cancelled'];
 
@@ -38,6 +39,8 @@ const transferSchema = new mongoose.Schema(
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     decidedAt: { type: Date, default: null },
     decisionNote: { type: String, trim: true, maxlength: 500, default: null },
+    // The hierarchy set up for Subcontractor Transfer, fixed when the request is raised.
+    ...approvalFields(),
   },
   { timestamps: true }
 );

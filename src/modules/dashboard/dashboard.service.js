@@ -33,6 +33,8 @@ import AnnualVacationRequest from '../annualVacation/annualVacation.model.js';
 import Timesheet from '../timesheets/timesheet.model.js';
 import SalaryAdvance from '../financialRequests/advance.model.js';
 import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
+import ClientPayment from '../deployments/clientPayment.model.js';
+import SubcontractorPayment from '../deployments/subcontractorPayment.model.js';
 import Mobilisation from '../mobilisations/mobilisation.model.js';
 import { toUtcDay } from '../attendance/attendance.service.js';
 import { annotateCanDecide, roleIdsNeededAcross } from '../approvals/approvalEngine.service.js';
@@ -225,6 +227,26 @@ const PENDING_ACTION_MODULES = [
   { label: 'Salary advances', url: '/financial-requests', Model: SalaryAdvance, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'financialRequests' },
   { label: 'Reimbursements', url: '/financial-requests', Model: ReimbursementClaim, pendingStatus: 'Pending', legacyAllowedRoles: ['Admin', 'Manager', 'HR'], sectionKey: 'financialRequests' },
   { label: 'Mobilisations', url: '/mobilisations', Model: Mobilisation, pendingStatus: 'PendingReview', legacyAllowedRoles: ['Admin'], sectionKey: null },
+  // 2026-10-14: the decisions brought onto the hierarchy. `workflowOnly`: before one is set up for the type they
+  // were never listed here (a single Section Access holder decides them), so only requests on a hierarchy count.
+  { label: 'Client approvals', url: '/clients', Model: Client, statusField: 'approvalStatus', pendingStatus: 'Pending', legacyAllowedRoles: [], sectionKey: 'clientsManage', workflowOnly: true },
+  { label: 'Client payments', url: '/financial/payments-review', Model: ClientPayment, statusField: 'decisionStatus', pendingStatus: 'Pending', legacyAllowedRoles: [], sectionKey: 'deploymentsPaymentDecide', workflowOnly: true },
+  { label: 'Subcontractor payments', url: '/financial/sub-payments-review', Model: SubcontractorPayment, statusField: 'decisionStatus', pendingStatus: 'Pending', legacyAllowedRoles: [], sectionKey: 'deploymentsPaymentDecide', workflowOnly: true },
+  // Months inside deployments: flattened to one item per pending month that sits on a hierarchy.
+  {
+    label: 'Monthly hours',
+    url: '/deployments/hours-review',
+    pendingStatus: 'Pending',
+    legacyAllowedRoles: [],
+    sectionKey: 'deploymentsHoursDecide',
+    workflowOnly: true,
+    load: async () => {
+      const deployments = await Deployment.find({ monthlyHours: { $elemMatch: { status: 'Pending', workflow: { $ne: null } } } })
+        .select('monthlyHours.status monthlyHours.workflow monthlyHours.currentStep monthlyHours.steps')
+        .lean();
+      return deployments.flatMap((d) => d.monthlyHours.filter((e) => e.status === 'Pending' && e.workflow));
+    },
+  },
 ];
 
 // FIX (2026-09-22, a real QA-audit finding — P3, two parts):
@@ -264,15 +286,17 @@ async function getMyPendingActions(actor, mySectionAccess) {
     countDeploymentsMissingTimesheets(actor),
     countPendingTransfersFor(actor),
     Promise.all(
-      PENDING_ACTION_MODULES.map(({ Model, pendingStatus }) =>
-        Model.find({ status: pendingStatus }).select('workflow currentStep steps status employee').lean()
+      PENDING_ACTION_MODULES.map(({ Model, pendingStatus, statusField = 'status', load }) =>
+        load
+          ? load()
+          : Model.find({ [statusField]: pendingStatus }).select(`workflow currentStep steps ${statusField} employee`).lean()
       )
     ),
   ]);
 
   const allRoleIdsNeeded = new Set();
-  PENDING_ACTION_MODULES.forEach(({ pendingStatus }, i) => {
-    for (const id of roleIdsNeededAcross(itemsByModule[i], pendingStatus)) allRoleIdsNeeded.add(id);
+  PENDING_ACTION_MODULES.forEach(({ pendingStatus, statusField = 'status' }, i) => {
+    for (const id of roleIdsNeededAcross(itemsByModule[i], pendingStatus, statusField)) allRoleIdsNeeded.add(id);
   });
   let memberRoleIds = new Set();
   if (allRoleIdsNeeded.size > 0) {
@@ -283,16 +307,17 @@ async function getMyPendingActions(actor, mySectionAccess) {
   }
 
   const perModule = await Promise.all(
-    PENDING_ACTION_MODULES.map(async ({ label, url, pendingStatus, legacyAllowedRoles, sectionKey, scopeToCoordinatorTeam }, i) => {
+    PENDING_ACTION_MODULES.map(async ({ label, url, pendingStatus, statusField = 'status', legacyAllowedRoles, sectionKey, scopeToCoordinatorTeam, workflowOnly }, i) => {
       const items = itemsByModule[i];
       if (items.length === 0) return { label, url, count: 0 };
       const isInLegacyScope =
         scopeToCoordinatorTeam && teamIdStrings
           ? (item) => teamIdStrings.has((item.employee?._id ?? item.employee)?.toString())
           : undefined;
-      const annotated = await annotateCanDecide(items, actor, { pendingStatus, legacyAllowedRoles, memberRoleIds, isInLegacyScope });
+      // An embedded entry (monthly hours) has no status field of its own name: it is always 'status'.
+      const annotated = await annotateCanDecide(items, actor, { pendingStatus, statusField, legacyAllowedRoles, memberRoleIds, isInLegacyScope });
       const hasSectionWrite = sectionKey ? mySectionAccess.write.includes(sectionKey) : true;
-      const count = hasSectionWrite ? annotated.filter((i2) => i2.canDecideCurrentStep).length : 0;
+      const count = hasSectionWrite ? annotated.filter((i2) => i2.canDecideCurrentStep && (!workflowOnly || i2.workflow)).length : 0;
       return { label, url, count };
     })
   );

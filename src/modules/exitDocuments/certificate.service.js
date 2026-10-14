@@ -12,7 +12,7 @@ import { CERTIFICATE_TYPES_WITH_PDF } from './certificate.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
-import { decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail } from '../approvals/approvalEngine.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
@@ -58,7 +58,7 @@ export async function listOwnCertificates(employeeId, { page, limit, status }) {
   const filter = { employee: employeeId };
   if (status) filter.status = status;
   const [items, total] = await Promise.all([
-    CertificateRequest.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+    withApprovalTrail(CertificateRequest.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)).lean(),
     CertificateRequest.countDocuments(filter),
   ]);
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };

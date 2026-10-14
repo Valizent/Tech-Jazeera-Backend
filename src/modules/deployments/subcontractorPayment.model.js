@@ -3,6 +3,7 @@
  * OUTSTANDING invoiced months. Analogous to ClientPayment.
  */
 import mongoose from 'mongoose';
+import { approvalFields } from '../approvals/approvalFields.js';
 
 export const SUBCONTRACTOR_PAYMENT_DECISION_STATUSES = ['Pending', 'Approved', 'Rejected'];
 
@@ -33,6 +34,8 @@ const subcontractorPaymentSchema = new mongoose.Schema(
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     decidedAt: { type: Date, default: null },
     decisionNote: { type: String, trim: true, maxlength: 500, default: null },
+    // The hierarchy set up for this payment type, fixed when it is recorded.
+    ...approvalFields(),
   },
   { timestamps: true }
 );

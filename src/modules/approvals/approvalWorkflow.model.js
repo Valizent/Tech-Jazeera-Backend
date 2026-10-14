@@ -33,6 +33,24 @@ export const APPROVAL_REQUEST_TYPES = [
   'ExitReentry',
   'Certificate',
   'AnnualVacation',
+  // 2026-10-14: decisions that used to be a single Section Access holder (not tied to one employee).
+  'ClientApproval',
+  'ClientPayment',
+  'SubcontractorPayment',
+  'MonthlyHours',
+  'SubcontractorTransfer',
+];
+
+/** The request types an individual EMPLOYEE files, so the ones that can have a per-employee hierarchy
+ *  (Mobilisation and the deployment/client approvals are not tied to one employee). */
+export const EMPLOYEE_APPROVAL_TYPES = [
+  'Leave',
+  'SalaryAdvance',
+  'Reimbursement',
+  'Timesheet',
+  'ExitReentry',
+  'Certificate',
+  'AnnualVacation',
 ];
 
 const workflowStepSchema = new mongoose.Schema(

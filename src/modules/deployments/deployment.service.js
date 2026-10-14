@@ -24,7 +24,9 @@ import User from '../auth/user.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
-import { membersOfRoles } from '../approvals/approvalEngine.service.js';
+import { membersOfRoles, decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { startApproval } from '../approvals/approvals.service.js';
+import { populateTrail } from '../approvals/approvalFields.js';
 import { notifyUser } from '../notifications/notification.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 import { signedDownloadUrl } from '../../middleware/upload.js';
@@ -101,6 +103,7 @@ export async function getPendingHoursQueue(actor) {
     .select('workerName clientName site workerType monthlyHours mobilisation worker')
     .populate('mobilisation')
     .populate('worker', 'salary contractHours')
+    .populate(populateTrail('monthlyHours'))
     .lean();
 
   const rows = [];
@@ -133,12 +136,20 @@ export async function getPendingHoursQueue(actor) {
         revenue: revExp ? revExp.revenue : null,
         profit: revExp ? revExp.profit : null,
         profitBreakdown: revExp ? revExp.breakdown : null,
+        // The approval stages (when a hierarchy governs this entry) and where it stands.
+        status: entry.status,
+        workflow: entry.workflow ?? null,
+        workflowName: entry.workflowName ?? null,
+        steps: entry.steps,
+        currentStep: entry.currentStep ?? 0,
+        approvalTrail: entry.approvalTrail ?? [],
       });
     }
   }
   // Newest entry first
   rows.sort((a, b) => new Date(b.enteredAt) - new Date(a.enteredAt));
-  return rows;
+  // Opening the queue already needed the Section Access grant, so with no hierarchy set up everyone here may decide.
+  return annotateCanDecide(rows, actor, { pendingStatus: 'Pending', legacyCanDecide: true });
 }
 
 async function decidersOfDeploymentsHours() {
@@ -428,6 +439,7 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     employeeAdditionalAmountNote: data.employeeAdditionalAmountNote || null,
     notes: data.notes,
     enteredBy: actor.userId,
+    ...(await startApproval('MonthlyHours')),
   };
 
   // Atomic push, not read-.some()-then-push-then-save (fixed 2026-09-14, a
@@ -455,16 +467,17 @@ export async function addMonthlyHours(deploymentId, data, actor) {
     ip: actor.ip,
   });
 
-  const deciderIds = await decidersOfDeploymentsHours();
-  await Promise.all(
-    deciderIds.map((userId) =>
-      notifyUser(userId, {
-        type: 'RequestStatus',
-        title: `${data.month} hours for ${updated.workerName} need your review`,
-        url: `/deployments/${updated._id}`,
-      })
-    )
-  );
+  const needsReview = {
+    type: 'RequestStatus',
+    title: `${data.month} hours for ${updated.workerName} need your review`,
+    url: `/deployments/${updated._id}`,
+  };
+  if (newEntry.workflow) {
+    await notifySubmission({ workflow: newEntry.workflow, steps: newEntry.steps, currentStep: 0 }, () => needsReview);
+  } else {
+    const deciderIds = await decidersOfDeploymentsHours();
+    await Promise.all(deciderIds.map((userId) => notifyUser(userId, needsReview)));
+  }
   // 'read' (fixed 2026-09-15, the user's own ask — a Coordinator/Manager/HR
   // cost-and-profit view): visibility no longer requires the WRITE grant
   // that also carries decide power — a Read-only grant on this same key now
@@ -554,11 +567,15 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   // Editing a Rejected entry is an implicit resubmit — back to Pending,
   // decision cleared, so it reappears for the decider rather than sitting
   // rejected forever. An Approved entry stays Approved (see doc comment).
+  let restarted = null;
   if (wasRejected) {
     entry.status = 'Pending';
     entry.decidedBy = null;
     entry.decidedAt = null;
     entry.decisionNote = null;
+    // The hierarchy in force now, from its first step.
+    restarted = await startApproval('MonthlyHours');
+    entry.set(restarted);
   }
   await deployment.save();
 
@@ -587,16 +604,17 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
   // routine edit of an already-Pending entry doesn't need to ping anyone
   // again, they already have it in their queue.
   if (wasRejected) {
-    const deciderIds = await decidersOfDeploymentsHours();
-    await Promise.all(
-      deciderIds.map((userId) =>
-        notifyUser(userId, {
-          type: 'RequestStatus',
-          title: `${entry.month} hours for ${deployment.workerName} resubmitted for review`,
-          url: `/deployments/${deployment._id}`,
-        })
-      )
-    );
+    const resubmitted = {
+      type: 'RequestStatus',
+      title: `${entry.month} hours for ${deployment.workerName} resubmitted for review`,
+      url: `/deployments/${deployment._id}`,
+    };
+    if (restarted?.workflow) {
+      await notifySubmission({ workflow: restarted.workflow, steps: restarted.steps, currentStep: 0 }, () => resubmitted);
+    } else {
+      const deciderIds = await decidersOfDeploymentsHours();
+      await Promise.all(deciderIds.map((userId) => notifyUser(userId, resubmitted)));
+    }
   }
   // A post-approval correction is the one other case worth a proactive
   // notification — the original enterer should know an already-approved
@@ -623,10 +641,8 @@ export async function updateMonthlyHours(deploymentId, entryId, data, actor) {
 export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
   const deployment = await Deployment.findById(deploymentId);
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
-  // Fixed 2026-09-17, a follow-up QA-audit gap: addMonthlyHours/
-  // updateMonthlyHours both already carry this same team-ownership check
-  // (see their own 2026-09-15 fix comments) — this sibling was missed, so a
-  // Coordinator granted 'deploymentsHoursDecide' could decide a foreign
+  // Fixed 2026-09-17, a follow-up QA-audit gap: addMonthlyHours/updateMonthlyHours both already carry this same
+  // team-ownership check - a Coordinator granted 'deploymentsHoursDecide' could otherwise decide a foreign
   // team's entry. A no-op for any non-Coordinator role.
   await assertDeploymentVisibleToActor(deployment, actor);
   const entry = deployment.monthlyHours.id(entryId);
@@ -635,69 +651,49 @@ export async function decideMonthlyHours(deploymentId, entryId, data, actor) {
     throw new ApiError(400, 'Only a pending entry can be decided.');
   }
 
-  // Atomic transition (2026-09-29, a real audit finding): the old
-  // read-then-save let two concurrent Approve/Reject calls on the same
-  // entry both pass the in-memory `status !== 'Pending'` check above, and
-  // the second `.save()` would silently overwrite the first's decision.
-  // `$elemMatch` re-checks BOTH the entry id and its status against the
-  // CURRENT document at write time — only the first of two concurrent
-  // requests can match, same pattern addMonthlyHours' own 2026-09-14 fix
-  // already uses for its duplicate-month race.
-  const updated = await Deployment.findOneAndUpdate(
-    { _id: deploymentId, monthlyHours: { $elemMatch: { _id: entryId, status: 'Pending' } } },
-    {
-      $set: {
-        'monthlyHours.$.status': data.decision,
-        'monthlyHours.$.decidedBy': actor.userId,
-        'monthlyHours.$.decidedAt': new Date(),
-        'monthlyHours.$.decisionNote': data.note || null,
-      },
+  // Through the shared approval engine (2026-10-14) on this one array element: with a hierarchy set up for
+  // Monthly Hours the entry walks its steps; with none, the route's Section Access check ('deploymentsHoursDecide')
+  // is the whole rule, exactly as before. Atomic on the entry id + status + step (a lost race answers 409).
+  await decideApprovalStep({
+    Model: Deployment,
+    id: deploymentId,
+    subdocument: { path: 'monthlyHours', id: entryId },
+    decision: data.decision,
+    note: data.note || null,
+    actor,
+    pendingStatus: 'Pending',
+    authorizeLegacy: async () => {},
+    notFoundMessage: 'Monthly hours entry not found.',
+    auditAction: 'deployment.monthlyHours',
+    buildFinalNotification: (decided, parent) => ({
+      type: 'RequestStatus',
+      title: `${decided.month} hours for ${parent.workerName} ${decided.status === 'Approved' ? 'approved' : 'rejected'}`,
+      body: decided.decisionNote || undefined,
+      url: `/deployments/${parent._id}`,
+    }),
+    buildStepNotification: (decided, _step, parent) => ({
+      type: 'RequestStatus',
+      title: `${decided.month} hours for ${parent.workerName} need your review`,
+      url: `/deployments/${parent._id}`,
+    }),
+    notifyFinal: (decided, notification) => notifyUser(decided.enteredBy.toString(), notification),
+    // 2026-09-27 follow-up, the user's own ask: the Clerk shouldn't have to go looking for newly-Approved
+    // months to invoice - notify the moment hours clear this step.
+    onApproved: async (decided, parent) => {
+      const clerks = await decidersOfDeploymentsInvoicing();
+      await Promise.all(
+        clerks.map((userId) =>
+          notifyUser(userId, {
+            type: 'RequestStatus',
+            title: `${decided.month} hours ready to invoice for ${parent.workerName}`,
+            body: `${parent.clientName} approved and ready for a client invoice.`,
+            url: `/deployments/${parent._id}`,
+          })
+        )
+      );
     },
-    { new: true }
-  );
-  if (!updated) {
-    throw new ApiError(400, 'Only a pending entry can be decided.');
-  }
-  const updatedEntry = updated.monthlyHours.id(entryId);
-
-  await logAudit({
-    user: actor.userId,
-    action: 'deployment.monthlyHours.decide',
-    targetType: 'Deployment',
-    targetId: updated._id,
-    meta: { month: updatedEntry.month, decision: data.decision },
-    ip: actor.ip,
   });
-
-  await notifyUser(updatedEntry.enteredBy.toString(), {
-    type: 'RequestStatus',
-    title:
-      data.decision === 'Approved'
-        ? `${updatedEntry.month} hours for ${updated.workerName} approved`
-        : `${updatedEntry.month} hours for ${updated.workerName} rejected`,
-    body: data.note || undefined,
-    url: `/deployments/${updated._id}`,
-  });
-
-  // 2026-09-27 follow-up, the user's own ask: the Clerk shouldn't have to go
-  // looking for newly-Approved months to invoice — notify the moment hours
-  // clear this step.
-  if (data.decision === 'Approved') {
-    const clerks = await decidersOfDeploymentsInvoicing();
-    // 2026-10-03, a real code-review finding: fire these concurrently, same
-    // as the perf fix already applied to this file's other notification
-    // fan-outs — independent writes, no reason to await one at a time.
-    await Promise.all(
-      clerks.map((userId) =>
-        notifyUser(userId, {
-          type: 'RequestStatus',
-          title: `${updatedEntry.month} hours ready to invoice for ${updated.workerName}`,
-          body: `${updated.clientName} approved and ready for a client invoice.`,
-          url: `/deployments/${updated._id}`,
-        })
-      )
-    );
-  }
+  const updated = await Deployment.findById(deploymentId);
   return updated.toObject();
 }
 
@@ -1952,6 +1948,7 @@ export async function getDeployment(id, actor) {
   const deployment = await Deployment.findById(id)
     .populate('worker', 'fullName employeeId salary contractHours')
     .populate('mobilisation', PROFIT_RATE_FIELDS)
+    .populate(populateTrail('monthlyHours'))
     .lean();
   if (!deployment) throw new ApiError(404, 'Deployment not found.');
   // Coordinator team-scoping (2026-09-14, a real QA-audit-found gap; widened
@@ -1977,6 +1974,14 @@ export async function getDeployment(id, actor) {
   // commercial.
   // 'read' — see the sibling comment in updateMonthlyHours above.
   const canSeeCommercial = actor ? await canAccessSection('deploymentsHoursDecide', actor, 'read') : false;
+  // Which pending months this viewer may decide now: with a hierarchy set up for Monthly Hours, the members of
+  // the entry's current step (and Admin); with none, the original 'deploymentsHoursDecide' Write grant. Either
+  // way the grant is the floor (the decide route needs it).
+  if (actor) {
+    const mayDecide = await canAccessSection('deploymentsHoursDecide', actor);
+    const annotated = await annotateCanDecide(deployment.monthlyHours, actor, { pendingStatus: 'Pending', legacyCanDecide: mayDecide });
+    deployment.monthlyHours = annotated.map((e) => ({ ...e, canDecideCurrentStep: e.canDecideCurrentStep && mayDecide }));
+  }
   // How much of THIS entry's invoice has actually been paid (2026-09-27
   // bulk-payment redesign) — same visibility tier `amountReceived` had
   // before this redesign (never commercial-gated: whoever can see billing

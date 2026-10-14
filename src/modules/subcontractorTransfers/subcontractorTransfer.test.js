@@ -215,3 +215,37 @@ describe('listing', () => {
     expect(asRequester.items.length).toBe(1);
   });
 });
+
+describe('with a Subcontractor Transfer hierarchy set up (2026-10-14)', () => {
+  it('walks its own steps instead of the Mobilisation final step, and shows who may decide it now', async () => {
+    const [stepOne, stepTwo] = await Promise.all([login('Manager'), login('Executive')]);
+    const [r1, r2] = await Promise.all([
+      ApprovalRole.create({ name: `Transfer one ${unique()}`, members: [stepOne.id] }),
+      ApprovalRole.create({ name: `Transfer two ${unique()}`, members: [stepTwo.id] }),
+    ]);
+    await ApprovalWorkflow.create({
+      name: `Transfer flow ${unique()}`,
+      appliesTo: ['SubcontractorTransfer'],
+      steps: [{ label: 'One', roles: [r1._id] }, { label: 'Two', roles: [r2._id] }],
+    });
+    const { subB, number, mobilisation } = await scenario();
+    const transfer = await SubcontractorTransfer.findOne({ mobilisation: mobilisation._id });
+    expect(transfer.steps).toHaveLength(2);
+    expect(await Notification.countDocuments({ user: stepOne.id, url: '/subcontractor-transfers' })).toBeGreaterThan(0);
+
+    // the Mobilisation final-step member (mm) is not in this hierarchy
+    await expect(decideTransfer(String(transfer._id), { decision: 'Approved' }, mm)).rejects.toMatchObject({ statusCode: 403 });
+    await expect(decideTransfer(String(transfer._id), { decision: 'Approved' }, stepTwo)).rejects.toMatchObject({ statusCode: 403 });
+
+    const first = await decideTransfer(String(transfer._id), { decision: 'Approved' }, stepOne);
+    expect(first).toMatchObject({ status: 'Pending', currentStep: 1 });
+    expect((await OutsourcedEmployee.findOne({ iqamaNumber: number })).subcontractor.toString()).not.toBe(String(subB._id));
+
+    const listed = await listTransfers({ status: 'Pending' }, stepTwo);
+    expect(listed.items[0].canDecideCurrentStep).toBe(true);
+
+    const final = await decideTransfer(String(transfer._id), { decision: 'Approved' }, stepTwo);
+    expect(final.status).toBe('Approved');
+    expect((await OutsourcedEmployee.findOne({ iqamaNumber: number })).subcontractor.toString()).toBe(String(subB._id));
+  });
+});

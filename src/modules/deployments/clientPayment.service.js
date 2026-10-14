@@ -24,7 +24,9 @@ import ApiError from '../../utils/ApiError.js';
 import { allocatePayments } from './paymentAllocation.js';
 import { logAudit } from '../audit/audit.service.js';
 import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAccess.service.js';
-import { membersOfRoles } from '../approvals/approvalEngine.service.js';
+import { membersOfRoles, decideApprovalStep, annotateCanDecide, notifySubmission } from '../approvals/approvalEngine.service.js';
+import { startApproval } from '../approvals/approvals.service.js';
+import { populateTrail } from '../approvals/approvalFields.js';
 import { notifyUser } from '../notifications/notification.service.js';
 
 async function decidersOfDeploymentsPayment() {
@@ -94,6 +96,7 @@ export async function getClientPaymentHistory(clientId) {
     .sort({ recordedAt: -1 })
     .populate('recordedBy', 'name')
     .populate('decidedBy', 'name')
+    .populate(populateTrail())
     .lean();
 }
 
@@ -103,11 +106,14 @@ export async function getPendingPaymentsQueue(actor) {
   if (!allowed && actor.role !== 'Admin') {
     throw new ApiError(403, 'You do not have permission to view the payments approval queue.');
   }
-  return ClientPayment.find({ decisionStatus: 'Pending' })
+  const pending = await ClientPayment.find({ decisionStatus: 'Pending' })
     .sort({ recordedAt: 1 })
     .populate('client', 'companyName')
     .populate('recordedBy', 'name')
+    .populate(populateTrail())
     .lean();
+  // Opening the queue already needed the Section Access grant, so with no hierarchy set up everyone here may decide.
+  return annotateCanDecide(pending, actor, { pendingStatus: 'Pending', statusField: 'decisionStatus', legacyCanDecide: true });
 }
 
 /**
@@ -137,6 +143,7 @@ export async function recordClientPayment(clientId, data, actor, planAllocations
     ...(data.paymentDate && { paymentDate: data.paymentDate }),
     ...(picked && { allocated: true, allocations: picked.allocations }),
     recordedBy: actor.userId,
+    ...(await startApproval('ClientPayment')),
   });
 
   await logAudit({
@@ -148,14 +155,17 @@ export async function recordClientPayment(clientId, data, actor, planAllocations
     ip: actor.ip,
   });
 
-  const deciders = await decidersOfDeploymentsPayment();
-  for (const userId of deciders) {
-    await notifyUser(userId, {
-      type: 'RequestStatus',
-      title: `A payment for ${client.companyName} needs your approval`,
-      body: `SAR ${data.amount} recorded as received.`,
-      url: '/financial/payments-due',
-    });
+  const needsApproval = {
+    type: 'RequestStatus',
+    title: `A payment for ${client.companyName} needs your approval`,
+    body: `SAR ${data.amount} recorded as received.`,
+    url: '/financial/payments-due',
+  };
+  if (payment.workflow) {
+    await notifySubmission(payment.toObject(), () => needsApproval);
+  } else {
+    const deciders = await decidersOfDeploymentsPayment();
+    for (const userId of deciders) await notifyUser(userId, needsApproval);
   }
   return payment.toObject();
 }
@@ -169,55 +179,49 @@ export async function decideClientPayment(paymentId, data, actor) {
   const allowed = await canAccessSection('deploymentsPaymentDecide', actor);
   if (!allowed) throw new ApiError(403, 'You do not have permission to approve a received payment.');
 
-  const existing = await ClientPayment.findById(paymentId);
+  const existing = await ClientPayment.findById(paymentId).select('client').lean();
   if (!existing) throw new ApiError(404, 'Payment not found.');
-  if (existing.decisionStatus !== 'Pending') throw new ApiError(400, 'Only a pending payment can be decided.');
-
   const client = await Client.findById(existing.client).select('companyName').lean();
+  const clientName = client?.companyName ?? 'a client';
 
-  // Atomic transition (2026-09-29, a real audit finding): the old
-  // read-then-save let two concurrent deciders on the same Pending payment
-  // race — the second save would silently overwrite the first's decision.
-  // Filtering the update on `decisionStatus: 'Pending'` means only the
-  // first of two concurrent requests can match; the loser gets a clean 400.
-  const payment = await ClientPayment.findOneAndUpdate(
-    { _id: paymentId, decisionStatus: 'Pending' },
-    { decisionStatus: data.decision, decidedBy: actor.userId, decidedAt: new Date(), decisionNote: data.note || null },
-    { new: true }
-  );
-  if (!payment) throw new ApiError(400, 'Only a pending payment can be decided.');
-
-  await logAudit({
-    user: actor.userId,
-    action: 'clientPayment.decide',
-    targetType: 'ClientPayment',
-    targetId: payment._id,
-    meta: { client: payment.client, decision: data.decision, amount: payment.amount },
-    ip: actor.ip,
+  // Through the shared approval engine (2026-10-14): with a hierarchy set up for Client Payment the payment walks
+  // its steps; with none, the Section Access check above is the whole rule, exactly as before. The decision is
+  // atomic on `decisionStatus: 'Pending'` (a lost race answers 409).
+  return decideApprovalStep({
+    Model: ClientPayment,
+    id: paymentId,
+    decision: data.decision,
+    note: data.note || null,
+    actor,
+    pendingStatus: 'Pending',
+    statusField: 'decisionStatus',
+    authorizeLegacy: async () => {},
+    notFoundMessage: 'Payment not found.',
+    auditAction: 'clientPayment',
+    buildFinalNotification: (payment) => ({
+      type: 'RequestStatus',
+      title: `Payment for ${clientName} ${payment.decisionStatus === 'Approved' ? 'approved' : 'rejected'}`,
+      body: payment.decisionNote || undefined,
+      url: '/financial/payments-due',
+    }),
+    buildStepNotification: (payment) => ({
+      type: 'RequestStatus',
+      title: `A payment for ${clientName} needs your approval`,
+      body: `SAR ${payment.amount} recorded as received.`,
+      url: '/financial/payments-due',
+    }),
+    notifyFinal: (payment, notification) => notifyUser(payment.recordedBy.toString(), notification),
+    onApproved: async (payment) => {
+      const audience = await clientPaymentAudience(payment.client);
+      for (const userId of audience) {
+        if (userId === payment.recordedBy.toString()) continue;
+        await notifyUser(userId, {
+          type: 'RequestStatus',
+          title: `A payment for ${clientName} was approved`,
+          body: `SAR ${payment.amount} now credited against outstanding invoices.`,
+          url: '/financial/payments-due',
+        });
+      }
+    },
   });
-
-  await notifyUser(payment.recordedBy.toString(), {
-    type: 'RequestStatus',
-    title:
-      data.decision === 'Approved'
-        ? `Payment for ${client?.companyName ?? 'a client'} approved`
-        : `Payment for ${client?.companyName ?? 'a client'} rejected`,
-    body: data.note || undefined,
-    url: '/financial/payments-due',
-  });
-
-  if (data.decision === 'Approved') {
-    const audience = await clientPaymentAudience(payment.client);
-    for (const userId of audience) {
-      if (userId === payment.recordedBy.toString()) continue;
-      await notifyUser(userId, {
-        type: 'RequestStatus',
-        title: `A payment for ${client?.companyName ?? 'a client'} was approved`,
-        body: `SAR ${payment.amount} now credited against outstanding invoices.`,
-        url: '/financial/payments-due',
-      });
-    }
-  }
-
-  return payment.toObject();
 }

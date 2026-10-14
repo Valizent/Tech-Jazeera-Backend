@@ -58,7 +58,10 @@ describe('resolveApprovalWorkflow with department routes', () => {
   it('a per-employee override still wins over a department route', async () => {
     const { standard } = await setup();
     const other = await ApprovalWorkflow.create({ name: `Override ${unique()}`, steps: standard.steps, appliesTo: [] });
-    const w = await resolveApprovalWorkflow({ department: 'Accounts', approvalWorkflow: other._id }, 'AnnualVacation');
+    const w = await resolveApprovalWorkflow(
+      { department: 'Accounts', approvalOverrides: [{ requestType: 'AnnualVacation', workflow: other._id }] },
+      'AnnualVacation'
+    );
     expect(String(w._id)).toBe(String(other._id));
   });
 
