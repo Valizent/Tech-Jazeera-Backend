@@ -31,6 +31,9 @@ import { canAccessSection, getSectionAccess } from '../sectionAccess/sectionAcce
 import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.js';
 import { nextSequence } from '../shared/counter.model.js';
 import Deployment from '../deployments/deployment.model.js';
+import Requirement from '../requirements/requirement.model.js';
+import SubcontractorTransfer from '../subcontractorTransfers/subcontractorTransfer.model.js';
+import Notification from '../notifications/notification.model.js';
 import { createDeploymentFromMobilisation } from '../deployments/deployment.service.js';
 import MobilisationSubmissionLock from './mobilisationSubmissionLock.model.js';
 import { mobilisationDocumentName } from './documentName.js';
@@ -1273,6 +1276,7 @@ export async function getMobilisation(id, actor) {
     legacyAllowedRoles: ['Admin'],
   });
   annotated.canEditSection1 = canEditSection1;
+  annotated.canDelete = canDeleteMobilisation(mobilisation, actor);
 
   // Approved (or later, Completed) always has exactly one Deployment, born
   // automatically at approval. Surfaced here so the detail page can show it as
@@ -2398,6 +2402,66 @@ export async function addDocuments(id, files, { category, documentName }, actor)
     ip: actor.ip,
   });
   return mobilisation.toObject();
+}
+
+/**
+ * Deleting a mobilisation (2026-10-14, the user's own ask: "before mobilisation is
+ * confirmed have an option to delete it"). Only until it is approved: Draft,
+ * Pending review and Rejected. While it is still a Draft the people who made it (a
+ * coordinator on it, or whoever created it) may delete it; once it has been sent for
+ * review or was rejected only Admin may. Approved and Completed ones carry a deployment
+ * and billing history and can never be deleted.
+ */
+const DELETABLE_STATUSES = ['Draft', 'PendingReview', 'Rejected'];
+
+function canDeleteMobilisation(mobilisation, actor) {
+  if (!DELETABLE_STATUSES.includes(mobilisation.status)) return false;
+  if (actor.role === 'Admin') return true;
+  if (mobilisation.status !== 'Draft') return false;
+  const idOf = (ref) => String(ref?._id ?? ref);
+  return (
+    (mobilisation.coordinators ?? []).some((c) => idOf(c.user) === actor.userId) || idOf(mobilisation.createdBy) === actor.userId
+  );
+}
+
+export async function deleteMobilisation(id, actor) {
+  const mobilisation = await Mobilisation.findById(id);
+  if (!mobilisation) throw new ApiError(404, 'Mobilisation not found.');
+  if (!DELETABLE_STATUSES.includes(mobilisation.status)) {
+    throw new ApiError(409, 'An approved mobilisation cannot be deleted.');
+  }
+  if (!canDeleteMobilisation(mobilisation, actor)) {
+    throw new ApiError(
+      403,
+      mobilisation.status === 'Draft'
+        ? 'Only the people who created this mobilisation, or an Admin, can delete it.'
+        : 'Once a mobilisation has been sent for review, only an Admin can delete it.'
+    );
+  }
+  if (await SubcontractorTransfer.exists({ mobilisation: mobilisation._id, status: 'Approved' })) {
+    throw new ApiError(409, 'This mobilisation has an approved subcontractor transfer, so it cannot be deleted.');
+  }
+
+  // Everything that pointed at it: the requirement candidate it was started from becomes free
+  // to be mobilised again, its open transfer requests and its notifications go with it, and
+  // its uploaded files are removed from storage (best effort, like removing one document).
+  await Promise.all([
+    Requirement.updateMany({ 'candidates.mobilisation': mobilisation._id }, { $set: { 'candidates.$[c].mobilisation': null } }, { arrayFilters: [{ 'c.mobilisation': mobilisation._id }] }),
+    SubcontractorTransfer.deleteMany({ mobilisation: mobilisation._id }),
+    Notification.deleteMany({ url: new RegExp(`^/mobilisations/${mobilisation._id}`) }),
+    ...(mobilisation.documents ?? []).map((doc) => destroyDocumentFile(doc.fileName, doc.resourceType).catch(() => {})),
+  ]);
+  await Mobilisation.deleteOne({ _id: mobilisation._id });
+
+  await logAudit({
+    user: actor.userId,
+    action: 'mobilisation.delete',
+    targetType: 'Mobilisation',
+    targetId: mobilisation._id,
+    meta: { serialNumber: mobilisation.serialNumber, workerName: mobilisation.workerName, status: mobilisation.status },
+    ip: actor.ip,
+  });
+  return { _id: mobilisation._id, serialNumber: mobilisation.serialNumber };
 }
 
 export async function removeDocument(id, fileId, actor) {

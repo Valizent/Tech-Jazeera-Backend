@@ -99,6 +99,11 @@ router.patch(
   validate({ params: mobilisationIdParamSchema, body: updateMobilisationSchema }),
   asyncHandler(mobilisationController.update)
 );
+router.delete(
+  '/:id',
+  validate({ params: mobilisationIdParamSchema }),
+  asyncHandler(mobilisationController.remove)
+);
 // --- M2: joint coordinators + submit ---
 router.post(
   '/:id/coordinators',

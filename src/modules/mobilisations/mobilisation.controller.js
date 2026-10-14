@@ -181,6 +181,12 @@ export async function addDocuments(req, res) {
   res.status(201).json(new ApiResponse('Document(s) uploaded.', mobilisation));
 }
 
+/** DELETE /api/mobilisations/:id — only before approval; see deleteMobilisation. */
+export async function remove(req, res) {
+  const deleted = await mobilisationService.deleteMobilisation(req.params.id, actor(req));
+  res.json(new ApiResponse(`${deleted.serialNumber} deleted.`, deleted));
+}
+
 /** DELETE /api/mobilisations/:id/documents/:fileId */
 export async function removeDocument(req, res) {
   const mobilisation = await mobilisationService.removeDocument(req.params.id, req.params.fileId, actor(req));

@@ -60,9 +60,11 @@ const candidateSchema = new mongoose.Schema({
   subcontractorName: { type: String, default: null },
   status: { type: String, enum: CANDIDATE_STATUSES, default: 'Identified' },
   docsNote: { type: String, trim: true, maxlength: 300, default: null }, // e.g. "passport received, medical pending"
-  // The Mobilisation started for this candidate. Mobilisations can't be deleted,
-  // so this never dangles; a REJECTED one is still the candidate's (the coordinator
-  // fixes and resubmits the same record), which is why it isn't cleared.
+  // The Mobilisation started for this candidate. Only an unapproved one can be
+  // deleted, and deleting it clears this link (mobilisation.service.js's
+  // deleteMobilisation), so it never dangles; a REJECTED one is still the
+  // candidate's (the coordinator fixes and resubmits the same record), which is why
+  // it isn't cleared.
   mobilisation: { type: mongoose.Schema.Types.ObjectId, ref: 'Mobilisation', default: null },
   addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   addedAt: { type: Date, default: Date.now },
