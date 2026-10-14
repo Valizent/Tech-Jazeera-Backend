@@ -9,7 +9,9 @@
  * "Accounting", "Finance" -> Accounts) and anything else is treated as "no
  * department yet" for routing until HR picks one from the list.
  */
-export const EMPLOYEE_DEPARTMENTS = ['Accounts', 'Marketing', 'HR', 'Operations', 'Coordination', 'Management', 'IT'];
+// 'Coordination' was dropped from the list on 2026-10-14 (the user's decision); anyone saved with it is read as "no
+// department yet" until HR picks one of these.
+export const EMPLOYEE_DEPARTMENTS = ['Accounts', 'Marketing', 'HR', 'Operations', 'Management', 'IT'];
 
 const SYNONYMS = {
   accounts: 'Accounts',
@@ -28,9 +30,6 @@ const SYNONYMS = {
   operations: 'Operations',
   operation: 'Operations',
   ops: 'Operations',
-  coordination: 'Coordination',
-  coordinator: 'Coordination',
-  coordinators: 'Coordination',
   management: 'Management',
   admin: 'Management',
   administration: 'Management',

@@ -121,8 +121,10 @@ const employeeSchema = new mongoose.Schema(
     // these only once the real Basic/HRA/Transport split for this employee
     // is known — never inferred from a standard-looking ratio.
     basicSalary: { type: Number, default: null, min: 0 },
-    housingAllowance: { type: Number, default: null, min: 0 },
-    transportAllowance: { type: Number, default: null, min: 0 },
+    // The three allowances start at 0 on a new employee (2026-10-14); a record saved before that keeps null.
+    housingAllowance: { type: Number, default: 0, min: 0 },
+    transportAllowance: { type: Number, default: 0, min: 0 },
+    foodAllowance: { type: Number, default: 0, min: 0 },
     accommodation: { type: String, trim: true },
 
     // The minimum shift length before My Attendance warns this Worker on an

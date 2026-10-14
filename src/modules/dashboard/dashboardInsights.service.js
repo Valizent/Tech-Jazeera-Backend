@@ -186,6 +186,25 @@ async function contractsEnding(teamIds) {
   };
 }
 
+/** Contracts whose end date has passed with no new end date entered: the ones nobody is reminded about any more
+ *  (the list above only looks ahead). They leave this list the moment HR enters the renewed dates. */
+async function contractsEnded(teamIds) {
+  const today = toUtcDay(new Date());
+  const filter = { status: { $ne: 'Exited' }, contractEndDate: { $ne: null, $lt: today } };
+  if (teamIds) filter._id = { $in: teamIds };
+  const employees = await Employee.find(filter).select('fullName employeeId contractEndDate').sort({ contractEndDate: 1 }).lean();
+  return {
+    count: employees.length,
+    items: employees.slice(0, LIST_LIMIT).map((e) => ({
+      _id: e._id,
+      name: e.fullName,
+      employeeId: e.employeeId,
+      endDate: e.contractEndDate,
+      daysOverdue: Math.max(1, daysSince(e.contractEndDate)),
+    })),
+  };
+}
+
 /** Who is on approved leave today, and who comes back within the next 7 days. */
 async function leavePicture(teamIds) {
   const today = toUtcDay(new Date());
@@ -315,6 +334,7 @@ export async function getDashboardInsights(actor) {
     stuck,
     expiring,
     contracts,
+    ended,
     leave,
     signedIn,
     billing,
@@ -330,6 +350,7 @@ export async function getDashboardInsights(actor) {
     stuckApprovals(actor, access),
     canEmployees ? expiringByType(teamIds) : null,
     canEmployees ? contractsEnding(teamIds) : null,
+    canEmployees ? contractsEnded(teamIds) : null,
     canLeave ? leavePicture(teamIds) : null,
     canAttendance ? signedInToday(teamIds) : null,
     billingSnapshot(actor, access),
@@ -345,6 +366,7 @@ export async function getDashboardInsights(actor) {
     stuckApprovals: stuck,
     expiringByType: expiring,
     contractsEnding: contracts,
+    contractsEnded: ended,
     leavePicture: leave,
     signedInToday: signedIn,
     billing,

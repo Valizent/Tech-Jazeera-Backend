@@ -52,6 +52,8 @@ router.use(requireStaffOrExecutive);
 const canReadEmployees = requireSectionAccess('employeeCreate', 'read');
 
 router.get('/', canReadEmployees, validate({ query: listEmployeesSchema }), asyncHandler(employeeController.list));
+// The Designation pick-list: the roles used in Approval Hierarchy / Section Access.
+router.get('/designations', canReadEmployees, asyncHandler(employeeController.designations));
 router.get(
   '/:id',
   canReadEmployees,

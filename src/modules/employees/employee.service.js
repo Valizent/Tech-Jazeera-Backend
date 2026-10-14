@@ -12,6 +12,7 @@ import ApiError from '../../utils/ApiError.js';
 import { hashPassword, generateTempPassword, revokeAllSessions } from '../auth/auth.service.js';
 import { logAudit } from '../audit/audit.service.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
+import { syncLoginToDesignation } from './designationSync.service.js';
 
 /**
  * A document counts as "needs attention" when it expires within this many
@@ -28,7 +29,7 @@ export const EXPIRY_WARNING_DAYS = 30;
  * can say "salary recorded" without the number. Stripped here, in the service,
  * so the web, the phone and any future client all get the same answer.
  */
-export const FINANCIAL_FIELDS = ['salary', 'basicSalary', 'housingAllowance', 'transportAllowance'];
+export const FINANCIAL_FIELDS = ['salary', 'basicSalary', 'housingAllowance', 'transportAllowance', 'foodAllowance'];
 
 export function redactFinancial(employee, actor) {
   if (actor?.canSeeFinancial) return employee;
@@ -309,6 +310,7 @@ export async function createEmployeeLogin(employeeId, { email, role }, actor) {
     role,
     employee: employee._id,
   });
+  await syncLoginToDesignation(employee);
 
   await logAudit({
     user: actor.userId,
@@ -442,6 +444,7 @@ export async function updateEmployee(id, rawData, actor) {
   const before = employee.toObject();
   Object.assign(employee, data);
   await employee.save();
+  if (before.designation !== employee.designation) await syncLoginToDesignation(employee, before.designation);
   const after = employee.toObject();
   await logAudit({
     user: actor.userId,

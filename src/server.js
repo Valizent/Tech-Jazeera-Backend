@@ -20,6 +20,7 @@ import { runExpiryAlertCheck } from './modules/notifications/expiryAlert.job.js'
 import { runMobilisationStaleCheck } from './modules/notifications/mobilisationStale.job.js';
 import { runDeploymentBillingCheck } from './modules/notifications/deploymentBilling.job.js';
 import { runCompanyDetailsCheck } from './modules/notifications/companyDetails.job.js';
+import { runContractEndCheck } from './modules/notifications/contractEnd.job.js';
 
 // Without these, a stray unhandled promise rejection or thrown error outside
 // Express's own request handling (e.g. inside a setInterval job's own bug,
@@ -93,6 +94,13 @@ const companyDetailsInterval = setInterval(
   ONE_DAY_MS
 );
 
+// Contract-end alerts to HR, offset by 45s.
+setTimeout(() => runContractEndCheck().catch((err) => logger.error(`[contractEndJob] failed: ${err.message}`)), 45_000);
+const contractEndInterval = setInterval(
+  () => runContractEndCheck().catch((err) => logger.error(`[contractEndJob] failed: ${err.message}`)),
+  ONE_DAY_MS
+);
+
 /**
  * Graceful shutdown: stop accepting new connections, let in-flight requests
  * finish, then close the DB connection. Without this, a deploy/restart can
@@ -104,6 +112,7 @@ async function shutdown(signal) {
   clearInterval(mobilisationStaleInterval);
   clearInterval(deploymentBillingInterval);
   clearInterval(companyDetailsInterval);
+  clearInterval(contractEndInterval);
   clearInterval(monitoringInterval);
   server.close(async () => {
     const { default: mongoose } = await import('mongoose');

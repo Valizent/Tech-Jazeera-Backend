@@ -5,6 +5,7 @@
  */
 import ApiResponse from '../../utils/ApiResponse.js';
 import * as employeeService from './employee.service.js';
+import { listDesignationRoles } from './designationSync.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 /** Who performed the action, for the audit trail — `role` also drives P2-M2
@@ -27,6 +28,11 @@ const actorWithPay = async (req) => ({
 export async function list(req, res) {
   const data = await employeeService.listEmployees(req.query, await actorWithPay(req));
   res.json(new ApiResponse('Employees.', data));
+}
+
+/** GET /api/employees/designations - 200 -> data: string[] (active approval role names) */
+export async function designations(req, res) {
+  res.json(new ApiResponse('Designations.', await listDesignationRoles()));
 }
 
 /**

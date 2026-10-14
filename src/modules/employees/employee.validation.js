@@ -139,6 +139,7 @@ const employeeObjectSchema = z
     basicSalary: nullableAmount,
     housingAllowance: nullableAmount,
     transportAllowance: nullableAmount,
+    foodAllowance: nullableAmount,
     accommodation: optionalStr(100),
     // Early-sign-out warning threshold for this employee (My Attendance). "" means
     // "no threshold" (null), not "leave unchanged" — same rule as manager.

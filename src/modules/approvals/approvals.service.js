@@ -19,6 +19,7 @@ import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { SELF_SERVICE_ROLE_NAMES } from '../sectionAccess/selfService.constants.js';
+import { renameDesignation, syncDesignationsToRoleChange } from '../employees/designationSync.service.js';
 
 // Not STAFF_ROLES (rbac.js) — that constant also excludes Executive, who is
 // still a legitimate ApprovalRole member (in fact it's their ONLY route into
@@ -88,15 +89,16 @@ export async function createApprovalRole(data, actor) {
 }
 
 export async function updateApprovalRole(id, data, actor) {
-  if (data.members) {
-    const existing = await ApprovalRole.findById(id).select('allowsSelfService').lean();
-    if (!existing) throw new ApiError(404, 'Approval role not found.');
-    await assertValidMembers(data.members, { allowsSelfService: Boolean(existing.allowsSelfService) });
-  }
+  const existing = await ApprovalRole.findById(id).select('name members allowsSelfService').lean();
+  if (!existing) throw new ApiError(404, 'Approval role not found.');
+  if (data.members) await assertValidMembers(data.members, { allowsSelfService: Boolean(existing.allowsSelfService) });
   const role = await ApprovalRole.findByIdAndUpdate(id, data, { new: true, runValidators: true })
     .populate('members', 'name email role')
     .lean();
   if (!role) throw new ApiError(404, 'Approval role not found.');
+  // Designation on the employee record is the other half of role membership (employees/designationSync.service.js).
+  if (data.name && data.name !== existing.name && !existing.allowsSelfService) await renameDesignation(existing.name, role.name);
+  if (data.members) await syncDesignationsToRoleChange(role, existing.members, role.members.map((m) => m._id));
   await logAudit({
     user: actor.userId,
     action: 'approvalRole.update',
