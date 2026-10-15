@@ -9,6 +9,7 @@ import ApprovalRole from './approvalRole.model.js';
 import ApprovalWorkflow from './approvalWorkflow.model.js';
 import Notification from '../notifications/notification.model.js';
 import { createClient, decideClient, listClients } from '../clients/client.service.js';
+import { updateApprovalRole } from './approvals.service.js';
 
 const unique = () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -61,5 +62,18 @@ describe('assigned approver', () => {
     const second = await createClient({ companyName: `Client ${unique()}` }, coordinator);
     const admin = { userId: new mongoose.Types.ObjectId().toString(), role: 'Admin', ip: '127.0.0.1' };
     expect((await decideClient(String(second._id), { status: 'Approved' }, admin)).approvalStatus).toBe('Approved');
+  });
+
+  it('gives a waiting stage to the remaining member when its assignee is taken out of the role', async () => {
+    const { assignee, other, role, client } = await setup();
+    const admin = { userId: new mongoose.Types.ObjectId().toString(), role: 'Admin', ip: '127.0.0.1' };
+
+    await updateApprovalRole(String(role._id), { members: [other.userId] }, admin);
+
+    const query = { page: 1, limit: 10, sortBy: 'createdAt', sortOrder: 'desc', search: client.companyName };
+    const after = (await listClients(query, other)).items[0];
+    expect(String(after.steps[0].assignee._id)).toBe(other.userId);
+    expect(after.canDecideCurrentStep).toBe(true);
+    expect(assignee.userId).not.toBe(other.userId);
   });
 });

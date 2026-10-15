@@ -106,7 +106,11 @@ export async function updateApprovalRole(id, data, actor) {
   if (!role) throw new ApiError(404, 'Approval role not found.');
   // Designation on the employee record is the other half of role membership (employees/designationSync.service.js).
   if (data.name && data.name !== existing.name && !existing.allowsSelfService) await renameDesignation(existing.name, role.name);
-  if (data.members) await syncDesignationsToRoleChange(role, existing.members, role.members.map((m) => m._id));
+  if (data.members) {
+    await syncDesignationsToRoleChange(role, existing.members, role.members.map((m) => m._id));
+    const now = new Set(role.members.map((m) => String(m._id)));
+    await reassignRemovedApprovers(existing.members.map(String).filter((id) => !now.has(id)));
+  }
   await logAudit({
     user: actor.userId,
     action: 'approvalRole.update',
@@ -116,6 +120,61 @@ export async function updateApprovalRole(id, data, actor) {
     ip: actor.ip,
   });
   return role;
+}
+
+/** Requests still waiting, with the field that holds their status and its "pending" value. */
+const PENDING_SOURCES = [
+  { Model: LeaveRequest, statusField: 'status', pending: 'PendingReview' },
+  { Model: AnnualVacationRequest, statusField: 'status', pending: 'PendingReview' },
+  { Model: Timesheet, statusField: 'status', pending: 'Submitted' },
+  { Model: SalaryAdvance, statusField: 'status', pending: 'Pending' },
+  { Model: ReimbursementClaim, statusField: 'status', pending: 'Pending' },
+  { Model: ExitReentryRequest, statusField: 'status', pending: 'Pending' },
+  { Model: CertificateRequest, statusField: 'status', pending: 'Pending' },
+  { Model: Client, statusField: 'approvalStatus', pending: 'Pending' },
+  { Model: ClientPayment, statusField: 'decisionStatus', pending: 'Pending' },
+  { Model: SubcontractorPayment, statusField: 'decisionStatus', pending: 'Pending' },
+  { Model: SubcontractorTransfer, statusField: 'status', pending: 'Pending' },
+];
+
+/**
+ * People were taken out of a role: every still-waiting request that had a stage given to one of them gives that
+ * stage to another current member of the role (picked at random, like at filing). A decided request keeps its
+ * trail. Returns how many requests changed.
+ */
+export async function reassignRemovedApprovers(removedIds) {
+  if (!removedIds?.length) return 0;
+  const gone = new Set(removedIds.map(String));
+  const regive = async (steps) => {
+    const fresh = await assignStepApprovers(steps);
+    return steps.map((step, i) => (step.assignee && gone.has(String(step.assignee)) ? { ...step, assignee: fresh[i].assignee } : step));
+  };
+  let changed = 0;
+  for (const { Model, statusField, pending } of PENDING_SOURCES) {
+    const docs = await Model.find({ [statusField]: pending, workflow: { $ne: null }, 'steps.assignee': { $in: removedIds } })
+      .select('steps')
+      .lean();
+    for (const doc of docs) {
+      await Model.updateOne({ _id: doc._id }, { $set: { steps: await regive(doc.steps) } });
+      changed += 1;
+    }
+  }
+  // Months waiting inside a deployment.
+  const deployments = await Deployment.find({ monthlyHours: { $elemMatch: { status: 'Pending', 'steps.assignee': { $in: removedIds } } } })
+    .select('monthlyHours')
+    .lean();
+  for (const deployment of deployments) {
+    for (const entry of deployment.monthlyHours) {
+      if (entry.status !== 'Pending' || !entry.steps?.some((s) => s.assignee && gone.has(String(s.assignee)))) continue;
+      await Deployment.updateOne(
+        { _id: deployment._id },
+        { $set: { 'monthlyHours.$[entry].steps': await regive(entry.steps) } },
+        { arrayFilters: [{ 'entry._id': entry._id }] }
+      );
+      changed += 1;
+    }
+  }
+  return changed;
 }
 
 // ---------------------------------------------------------------------------
