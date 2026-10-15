@@ -22,7 +22,7 @@
 import mongoose from 'mongoose';
 import { EMPLOYEE_DEPARTMENTS } from '../employees/departments.js';
 
-export const STEP_DUTIES = ['HrReview', 'TravelDocuments'];
+export const STEP_DUTIES = ['HrReview'];
 
 export const APPROVAL_REQUEST_TYPES = [
   'Leave',
@@ -63,9 +63,8 @@ const workflowStepSchema = new mongoose.Schema(
         message: 'Each step needs at least one role.',
       },
     },
-    // A step's special duty (2026-10-14, annual vacation only): 'HrReview' lets whoever holds the step
-    // change the number of days; 'TravelDocuments' makes it the step that attaches the air tickets and
-    // uploads the re-entry visa, and it moves on by itself once both are done.
+    // A step's special duty (annual vacation only): 'HrReview' lets whoever holds the step change the number
+    // of days. (The 'TravelDocuments' duty was retired 2026-10-15; documents are attached while approving.)
     duty: { type: String, enum: STEP_DUTIES, default: null },
   },
   { _id: false }
@@ -123,6 +122,16 @@ const ApprovalWorkflow = mongoose.model('ApprovalWorkflow', approvalWorkflowSche
 
 /** Drops the pre-2026-10-13 `appliesTo_1` unique index if a database still has
  *  it. Idempotent and safe to run on every boot (called from server.js). */
+/** Clears the retired 'TravelDocuments' duty from stored workflows (2026-10-15). Idempotent; runs at boot. */
+export async function retireTravelDocumentsDuty() {
+  const result = await ApprovalWorkflow.updateMany(
+    { 'steps.duty': 'TravelDocuments' },
+    { $set: { 'steps.$[step].duty': null } },
+    { arrayFilters: [{ 'step.duty': 'TravelDocuments' }] }
+  );
+  return result.modifiedCount;
+}
+
 export async function retireLegacyWorkflowIndex() {
   try {
     await ApprovalWorkflow.collection.dropIndex('appliesTo_1');

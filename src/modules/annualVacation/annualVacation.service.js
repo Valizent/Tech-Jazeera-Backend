@@ -36,7 +36,8 @@ import {
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 import { notifyUser, notifyEmployeeUser } from '../notifications/notification.service.js';
-import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.js';
+import { signedDownloadUrl } from '../../middleware/upload.js';
+import { addRestrictedStoredDocument } from '../documents/document.service.js';
 
 /** The ORIGINAL decide-route role gate, used whenever no ApprovalWorkflow governs a request. */
 const LEGACY_DECIDE_ROLES = ['Admin', 'Manager', 'HR'];
@@ -55,10 +56,9 @@ function utcDay(date) {
 /** Shared by submit (notifySubmission) and decide (buildStepNotification) so the text can't drift. */
 function buildStepNotification(doc, stepIndex) {
   const step = doc.steps?.[stepIndex];
-  const travel = step?.duty === 'TravelDocuments';
   return {
     type: 'RequestStatus',
-    title: travel ? 'Annual vacation: attach the air tickets and the re-entry visa' : 'An annual vacation request needs your approval',
+    title: 'An annual vacation request needs your approval',
     body: step?.label ? `Step: ${step.label}` : undefined,
     url: '/annual-vacation',
   };
@@ -236,7 +236,16 @@ function publicVacation(item) {
   const { visaFile, ...visaRest } = visa ?? {};
   return {
     ...item,
-    tickets: (item.tickets ?? []).map(({ _id, originalName, mimeType, size, uploadedAt }) => ({ _id, originalName, mimeType, size, uploadedAt })),
+    tickets: (item.tickets ?? []).map(({ _id, originalName, mimeType, size, uploadedAt, uploadedBy, step, stage }) => ({
+      _id,
+      originalName,
+      mimeType,
+      size,
+      uploadedAt,
+      step,
+      stage,
+      uploadedBy: uploadedBy && typeof uploadedBy === 'object' ? uploadedBy.name ?? null : null,
+    })),
     visaRequest: visa ? { ...visaRest, hasFile: Boolean(visaFile?.originalName), fileName: visaFile?.originalName ?? null } : item.visaRequest ?? null,
   };
 }
@@ -251,6 +260,7 @@ export async function listOwnAnnualVacation(employeeId, { page, limit, status })
         .skip((page - 1) * limit)
         .limit(limit)
         .populate('visaRequest', VISA_SUMMARY_FIELDS)
+        .populate('tickets.uploadedBy', 'name')
     ).lean(),
     AnnualVacationRequest.countDocuments(filter),
   ]);
@@ -301,6 +311,7 @@ export async function listAnnualVacation({ page, limit, status, employee }, acto
       .populate('decidedBy', 'name')
       .populate('steps.roles', 'name')
       .populate('steps.assignee', 'name')
+      .populate('tickets.uploadedBy', 'name')
       .populate('approvalTrail.approvalRole', 'name')
       .populate('approvalTrail.approvedBy', 'name role')
       .populate('visaRequest', VISA_SUMMARY_FIELDS)
@@ -355,7 +366,7 @@ async function recordApprovedLeave(vacation) {
       decidedAt: vacation.decidedAt,
     });
     await AnnualVacationRequest.updateOne({ _id: vacation._id }, { $set: { linkedLeaveRequest: leave._id } });
-    // The re-entry visa request raised from this vacation points at the approved leave, as its own field expects.
+    // A re-entry visa request raised by the retired travel step points at the approved leave.
     if (vacation.visaRequest) {
       await ExitReentryRequest.updateOne({ _id: vacation.visaRequest }, { $set: { linkedLeaveRequest: leave._id } });
     }
@@ -372,9 +383,32 @@ async function recordApprovedLeave(vacation) {
     throw new ApiError(500, 'Approval could not be completed because recording the leave failed. It was reverted, please try again.');
   }
   await pushContractEnd(vacation);
+  await copyAttachmentsToDocuments(vacation);
   // Only once the leave is really recorded: tell the roles the workflow lists (the Marketing Manager, or the
   // Financial Manager for an Accounts person) that this person is going on annual leave.
   await notifyInformed(vacation, 'approved');
+}
+
+/**
+ * The documents attached while approving become the employee's own (restricted) documents once the vacation
+ * is finally approved: only that employee and an Admin can open them from Documents. Best effort: the leave is
+ * already recorded, and the files stay on the request either way.
+ */
+async function copyAttachmentsToDocuments(vacation) {
+  try {
+    const label = `Annual vacation ${fmtDay(vacation.startDate)} to ${fmtDay(vacation.endDate)}`;
+    for (const file of vacation.tickets ?? []) {
+      await addRestrictedStoredDocument({
+        title: `${label}: ${file.originalName}`,
+        owner: vacation.employee,
+        stored: file,
+        uploadedBy: file.uploadedBy ?? vacation.decidedBy,
+        source: { kind: 'AnnualVacation', ref: vacation._id },
+      });
+    }
+  } catch (err) {
+    logger.error(`[annualVacation] copying documents to the employee failed: ${err.message}`);
+  }
 }
 
 /**
@@ -405,28 +439,67 @@ async function pushContractEnd(vacation) {
   }
 }
 
-/** The air tickets are attached and the re-entry visa uploaded: the TravelDocuments step may move on. */
-async function travelDocumentsDone(doc) {
-  if (!doc.tickets?.length || !doc.visaRequest) return false;
-  const visa = await ExitReentryRequest.findById(doc.visaRequest).select('status visaFile').lean();
-  return visa?.status === 'Issued' && Boolean(visa.visaFile?.fileName);
-}
+/** The most documents one request may carry (each upload is also capped per file by the upload middleware). */
+const MAX_ATTACHMENTS = 20;
 
-export async function decideAnnualVacation(id, { status, decisionNote }, actor) {
+const asStored = (file) => ({
+  fileName: file.filename,
+  resourceType: 'raw',
+  originalName: file.originalname,
+  mimeType: file.mimetype,
+  size: file.size,
+});
+
+/**
+ * Approve or reject. While approving, the approver may attach documents (air tickets and the like): they are
+ * kept on the request for everyone in the chain and copied to the employee's restricted documents on final
+ * approval. The remark (`decisionNote`) goes into the approval trail and is shown with the stage.
+ * Files are stored before the decision runs, so the final approval sees them; if the decision then fails they
+ * are taken off again.
+ */
+export async function decideAnnualVacation(id, { status, decisionNote }, actor, files = []) {
   if (!(await canAccessSection('annualVacation', actor, 'write'))) {
     throw new ApiError(403, 'You do not have permission to decide annual vacation requests.');
   }
-  if (status === 'Approved') {
-    const doc = await AnnualVacationRequest.findById(id).lean();
-    const step = doc?.workflow ? doc.steps?.[doc.currentStep] : null;
-    if (doc?.status === 'PendingReview' && step?.duty === 'TravelDocuments' && !(await travelDocumentsDone(doc))) {
-      throw new ApiError(
-        400,
-        'Attach the air tickets and upload the re-entry visa first. The request moves on by itself once both are done.'
-      );
-    }
+  if (!files?.length) return runDecision(id, status, decisionNote, actor);
+  if (status !== 'Approved') throw new ApiError(400, 'Documents can only be attached when approving.');
+
+  const doc = await AnnualVacationRequest.findById(id).lean();
+  if (!doc) throw new ApiError(404, 'Annual vacation request not found.');
+  if (doc.status !== 'PendingReview') throw new ApiError(409, 'This request is no longer waiting for review.');
+  // Authorised first, so a person who may not decide it never gets anything stored.
+  const step = doc.workflow ? doc.steps?.[doc.currentStep] : null;
+  if (step) {
+    const { authorized } = await resolveStepAuthority(actor, step.roles, step);
+    if (!authorized) throw new ApiError(403, 'You are not an approver for the current step of this request.');
+  } else {
+    if (!LEGACY_DECIDE_ROLES.includes(actor.role)) throw new ApiError(403, 'You do not have permission to perform this action.');
+    await assertEmployeeVisibleToActor(doc.employee, actor);
   }
-  return runDecision(id, status, decisionNote, actor);
+  if ((doc.tickets?.length ?? 0) + files.length > MAX_ATTACHMENTS) {
+    throw new ApiError(400, `A request can carry at most ${MAX_ATTACHMENTS} documents.`);
+  }
+
+  const stage = step?.label || null;
+  const added = files.map((file) => ({
+    ...asStored(file),
+    uploadedBy: actor.userId,
+    uploadedAt: new Date(),
+    step: doc.currentStep ?? 0,
+    stage,
+  }));
+  const pushed = await AnnualVacationRequest.updateOne(
+    { _id: id, status: 'PendingReview', currentStep: doc.currentStep ?? 0 },
+    { $push: { tickets: { $each: added } } }
+  );
+  if (!pushed.modifiedCount) throw new ApiError(409, 'This request was already decided by someone else.');
+
+  try {
+    return await runDecision(id, status, decisionNote, actor);
+  } catch (err) {
+    await AnnualVacationRequest.updateOne({ _id: id }, { $pull: { tickets: { fileName: { $in: added.map((a) => a.fileName) } } } });
+    throw err;
+  }
 }
 
 function runDecision(id, status, decisionNote, actor) {
@@ -453,7 +526,7 @@ function runDecision(id, status, decisionNote, actor) {
 }
 
 // ---------------------------------------------------------------------------
-// HR's days, Accounts' tickets and re-entry visa (2026-10-14)
+// HR's days (2026-10-14)
 // ---------------------------------------------------------------------------
 
 /** The request at the step that carries `duty`, and the actor really holds that step (or is Admin). */
@@ -463,7 +536,7 @@ async function loadAtDutyStep(id, duty, actor) {
   if (doc.status !== 'PendingReview') throw new ApiError(409, 'This request is no longer waiting for review.');
   const step = doc.workflow ? doc.steps?.[doc.currentStep] : null;
   if (step?.duty !== duty) {
-    throw new ApiError(409, duty === 'HrReview' ? 'The days can only be changed at the HR step.' : 'Tickets and the re-entry visa belong to the Accounts step.');
+    throw new ApiError(409, 'The days can only be changed at the HR step.');
   }
   const { authorized } = await resolveStepAuthority(actor, step.roles, step);
   if (!authorized) throw new ApiError(403, 'You are not an approver for the current step of this request.');
@@ -499,130 +572,6 @@ export async function changeVacationDays(id, { requestedDays, note }, actor) {
     body: `From ${from} to ${requestedDays} days${note ? `: ${note}` : ''}.`,
     url: '/me/annual-vacation',
   }).catch(() => {});
-  const item = await AnnualVacationRequest.findById(id).populate('visaRequest', VISA_SUMMARY_FIELDS).lean();
-  return publicVacation(item);
-}
-
-/**
- * The visa request raised from the day of travel: a single re-entry visa that starts on the day of travel
- * and covers the vacation days plus one more, already cleared (the vacation approval is the only approval)
- * and waiting in Accounts' pool for the visa document. Re-run whenever the day of travel or the days change.
- */
-async function ensureVisaRequest(doc, actor) {
-  const departureDate = utcDay(doc.travelDate);
-  // The travel day is day 1: vacation days + 1 days on the visa ends vacation days after the travel day.
-  const expectedReturnDate = new Date(departureDate.getTime() + doc.requestedDays * MS_PER_DAY);
-  if (doc.visaRequest) {
-    const existing = await ExitReentryRequest.findById(doc.visaRequest);
-    if (existing && existing.status !== 'Issued') {
-      existing.departureDate = departureDate;
-      existing.expectedReturnDate = expectedReturnDate;
-      await existing.save();
-    }
-    return;
-  }
-  const visa = await ExitReentryRequest.create({
-    employee: doc.employee,
-    visaType: 'Single',
-    departureDate,
-    expectedReturnDate,
-    reason: 'Annual vacation',
-    status: 'Approved',
-    decidedBy: actor.userId,
-    decidedAt: new Date(),
-    decisionNote: 'Raised automatically from the annual vacation request.',
-    annualVacation: doc._id,
-  });
-  doc.visaRequest = visa._id;
-  await doc.save();
-}
-
-/** If both the tickets and the visa are in, hand the request on to the next step on behalf of whoever just finished. */
-async function advanceWhenReady(id, actor) {
-  const doc = await AnnualVacationRequest.findById(id).lean();
-  if (!doc || doc.status !== 'PendingReview') return;
-  const step = doc.workflow ? doc.steps?.[doc.currentStep] : null;
-  if (step?.duty !== 'TravelDocuments' || !(await travelDocumentsDone(doc))) return;
-  await runDecision(id, 'Approved', 'Air tickets attached and re-entry visa uploaded.', actor);
-}
-
-const asStored = (file) => ({
-  fileName: file.filename,
-  resourceType: 'raw',
-  originalName: file.originalname,
-  mimeType: file.mimetype,
-  size: file.size,
-});
-
-/** Accounts attaching the air tickets with the day of travel; the re-entry visa request is raised from that day. */
-export async function attachTickets(id, files, { travelDate }, actor) {
-  const doc = await loadAtDutyStep(id, 'TravelDocuments', actor);
-  if (!files?.length && doc.tickets.length === 0) throw new ApiError(400, 'Attach at least one air ticket.');
-  const travel = utcDay(travelDate);
-  if (travel > utcDay(doc.endDate)) throw new ApiError(400, 'The day of travel cannot be after the vacation ends.');
-
-  for (const file of files ?? []) doc.tickets.push({ ...asStored(file), uploadedBy: actor.userId, uploadedAt: new Date() });
-  doc.travelDate = travel;
-  await doc.save();
-  await ensureVisaRequest(doc, actor);
-
-  await logAudit({
-    user: actor.userId,
-    action: 'annualVacation.ticketsAttached',
-    targetType: 'AnnualVacationRequest',
-    targetId: doc._id,
-    meta: { files: files?.length ?? 0, travelDate: travel.toISOString().slice(0, 10) },
-    ip: actor.ip,
-  });
-  await advanceWhenReady(id, actor);
-  const item = await AnnualVacationRequest.findById(id).populate('visaRequest', VISA_SUMMARY_FIELDS).lean();
-  return publicVacation(item);
-}
-
-export async function removeTicket(id, fileId, actor) {
-  const doc = await loadAtDutyStep(id, 'TravelDocuments', actor);
-  const ticket = doc.tickets.id(fileId);
-  if (!ticket) throw new ApiError(404, 'Ticket not found.');
-  await destroyDocumentFile(ticket.fileName, ticket.resourceType).catch(() => {});
-  doc.tickets = doc.tickets.filter((t) => String(t._id) !== String(fileId));
-  await doc.save();
-  await logAudit({
-    user: actor.userId,
-    action: 'annualVacation.ticketRemoved',
-    targetType: 'AnnualVacationRequest',
-    targetId: doc._id,
-    meta: { originalName: ticket.originalName },
-    ip: actor.ip,
-  });
-  const item = await AnnualVacationRequest.findById(id).populate('visaRequest', VISA_SUMMARY_FIELDS).lean();
-  return publicVacation(item);
-}
-
-/** Accounts uploading the issued re-entry visa; it closes the visa request, and the step moves on once tickets are in too. */
-export async function uploadVisa(id, file, { visaReferenceNumber }, actor) {
-  const doc = await loadAtDutyStep(id, 'TravelDocuments', actor);
-  if (!doc.visaRequest) throw new ApiError(400, 'Attach the air tickets first: the re-entry visa request is raised from the day of travel.');
-  if (!file) throw new ApiError(400, 'Choose the re-entry visa document to upload.');
-  const visa = await ExitReentryRequest.findById(doc.visaRequest);
-  if (!visa) throw new ApiError(404, 'The re-entry visa request was not found.');
-
-  if (visa.visaFile?.fileName) await destroyDocumentFile(visa.visaFile.fileName, visa.visaFile.resourceType).catch(() => {});
-  visa.visaFile = { ...asStored(file), uploadedAt: new Date() };
-  visa.status = 'Issued';
-  visa.issuedAt = new Date();
-  visa.issuedBy = actor.userId;
-  if (visaReferenceNumber) visa.visaReferenceNumber = visaReferenceNumber;
-  await visa.save();
-
-  await logAudit({
-    user: actor.userId,
-    action: 'annualVacation.visaUploaded',
-    targetType: 'AnnualVacationRequest',
-    targetId: doc._id,
-    meta: { originalName: file.originalname, visaReferenceNumber },
-    ip: actor.ip,
-  });
-  await advanceWhenReady(id, actor);
   const item = await AnnualVacationRequest.findById(id).populate('visaRequest', VISA_SUMMARY_FIELDS).lean();
   return publicVacation(item);
 }

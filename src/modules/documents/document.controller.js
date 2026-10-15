@@ -15,7 +15,7 @@ import ApiResponse from '../../utils/ApiResponse.js';
 import { contentDisposition } from '../../utils/contentDisposition.js';
 import * as documentService from './document.service.js';
 
-const actor = (req) => ({ userId: req.user.id, role: req.user.role, ip: req.ip });
+const actor = (req) => ({ userId: req.user.id, role: req.user.role, employee: req.user.employee ?? null, ip: req.ip });
 
 /** POST /api/documents (multipart: file + fields) — 201 → data: document */
 export async function create(req, res) {

@@ -16,7 +16,7 @@ import { requireAuth } from '../../middleware/auth.js';
 import { requireStaffOrExecutive } from '../../middleware/rbac.js';
 import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.js';
 import { validate } from '../../middleware/validate.js';
-import { uploadMultiple, uploadSingle, destroyDocumentFile } from '../../middleware/upload.js';
+import { uploadMultiple, destroyDocumentFile } from '../../middleware/upload.js';
 import logger from '../../config/logger.js';
 import {
   submitAnnualVacationSchema,
@@ -25,8 +25,6 @@ import {
   listMyAnnualVacationSchema,
   annualVacationIdParamSchema,
   changeVacationDaysSchema,
-  attachTicketsSchema,
-  visaDocumentSchema,
   vacationTicketParamSchema,
   eligibilityQuerySchema,
 } from './annualVacation.validation.js';
@@ -45,34 +43,20 @@ router.patch(
   validate({ params: annualVacationIdParamSchema }),
   asyncHandler(controller.cancel)
 );
-// HR's days and Accounts' tickets/visa: Can change on the section, then the step's own roles (see the service).
-// The two file downloads decide access in the service (the employee's own, or a reader of the section).
+// HR's days: Can change on the section, then the step's own roles (see the service).
+// The file downloads decide access in the service (the employee's own, or a reader of the section).
 const canChange = requireSectionAccess('annualVacation', 'write');
 router.patch('/:id/days', canChange, validate({ params: annualVacationIdParamSchema, body: changeVacationDaysSchema }), asyncHandler(controller.changeDays));
-router.post(
-  '/:id/tickets',
-  canChange,
-  validate({ params: annualVacationIdParamSchema }),
-  uploadMultiple,
-  validate({ body: attachTicketsSchema }),
-  asyncHandler(controller.attachTickets)
-);
-router.delete('/:id/tickets/:fileId', canChange, validate({ params: vacationTicketParamSchema }), asyncHandler(controller.removeTicket));
-router.post(
-  '/:id/visa',
-  canChange,
-  validate({ params: annualVacationIdParamSchema }),
-  uploadSingle,
-  validate({ body: visaDocumentSchema }),
-  asyncHandler(controller.uploadVisa)
-);
 router.get('/:id/tickets/:fileId/file', validate({ params: vacationTicketParamSchema }), asyncHandler(controller.ticketFile));
 router.get('/:id/visa/file', validate({ params: annualVacationIdParamSchema }), asyncHandler(controller.visaFile));
 
+// Multipart when documents are attached while approving (field `files`), plain JSON otherwise.
 router.patch(
   '/:id/decide',
   requireSectionAccess('annualVacation', 'write'),
-  validate({ params: annualVacationIdParamSchema, body: decideAnnualVacationSchema }),
+  validate({ params: annualVacationIdParamSchema }),
+  uploadMultiple,
+  validate({ body: decideAnnualVacationSchema }),
   asyncHandler(controller.decide)
 );
 

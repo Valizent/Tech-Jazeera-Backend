@@ -35,15 +35,6 @@ export const changeVacationDaysSchema = z.object({
   note: z.preprocess(emptyToUndef, z.string().trim().max(500).optional()),
 });
 
-/** Accounts attaching the air tickets: the day of travel (the files travel as multipart). */
-export const attachTicketsSchema = z.object({
-  travelDate: z.coerce.date({ error: 'Choose the day of travel.' }),
-});
-
-export const visaDocumentSchema = z.object({
-  visaReferenceNumber: z.preprocess(emptyToUndef, z.string().trim().max(100).optional()),
-});
-
 export const vacationTicketParamSchema = z.object({ id, fileId: id });
 export const eligibilityQuerySchema = z.object({ employee: z.preprocess(emptyToUndef, id.optional()) });
 

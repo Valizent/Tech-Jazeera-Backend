@@ -87,6 +87,54 @@ function describeStorage(version) {
   return { kind: 'local', diskName: value };
 }
 
+/**
+ * A restricted document is visible to its owning employee and Admin only (see the model). `actor` is a staff
+ * actor with `employee` (their linked employee id); a call with no actor is an internal / own-portal read.
+ */
+function canSeeRestricted(document, actor) {
+  if (!document.restricted || !actor || actor.role === 'Admin') return true;
+  const owner = String(document.owner?._id ?? document.owner);
+  return document.ownerType === 'Employee' && Boolean(actor.employee) && String(actor.employee) === owner;
+}
+
+/**
+ * Put files that already sit in storage (an annual vacation's attachments) into an employee's documents,
+ * restricted to that employee and Admin. Idempotent per (source, stored file): running it again adds nothing.
+ */
+export async function addRestrictedStoredDocument({ title, owner, stored, uploadedBy, source }) {
+  const already = await Document.exists({ 'source.kind': source.kind, 'source.ref': source.ref, 'versions.fileName': stored.fileName });
+  if (already) return null;
+  const document = await Document.create({
+    title,
+    category: 'Other',
+    ownerType: 'Employee',
+    owner,
+    restricted: true,
+    source,
+    versions: [
+      {
+        version: 1,
+        storage: 'cloudinary',
+        fileName: stored.fileName,
+        resourceType: stored.resourceType ?? DOCUMENT_RESOURCE_TYPE,
+        originalName: stored.originalName,
+        mimeType: stored.mimeType,
+        size: stored.size,
+        uploadedBy,
+        uploadedAt: stored.uploadedAt ?? new Date(),
+      },
+    ],
+  });
+  await logAudit({
+    user: uploadedBy,
+    action: 'document.create',
+    targetType: 'Document',
+    targetId: document._id,
+    meta: { title, category: 'Other', ownerType: 'Employee', source: source.kind },
+  });
+  return document.toObject();
+}
+
 /** Create a new document (version 1) from an uploaded file. */
 export async function createDocument({ title, category, ownerType, owner, expiryDate, file }, actor) {
   if (!file) throw new ApiError(400, 'A file is required.');
@@ -121,7 +169,7 @@ export async function createDocument({ title, category, ownerType, owner, expiry
 export async function addVersion(id, file, actor) {
   if (!file) throw new ApiError(400, 'A file is required.');
   const document = await Document.findById(id);
-  if (!document) throw new ApiError(404, 'Document not found.');
+  if (!document || !canSeeRestricted(document, actor)) throw new ApiError(404, 'Document not found.');
   // Fixed 2026-09-15, a real QA-audit-found gap — A1: same missing
   // team-ownership check as createDocument above.
   if (document.ownerType === 'Employee') await assertEmployeeVisibleToActor(document.owner, actor);
@@ -166,6 +214,12 @@ export async function listDocuments({ page, limit, ownerType, owner, category, s
     const teamIds = await Employee.find({ coordinator: actor.userId }).distinct('_id');
     conditions.push({ $or: [{ ownerType: { $in: ['Client', 'Subcontractor'] } }, { ownerType: 'Employee', owner: { $in: teamIds } }] });
   }
+  // Restricted documents (papers from an approved annual vacation) are listed for Admin and their own employee only.
+  if (actor && actor.role !== 'Admin') {
+    conditions.push({
+      $or: [{ restricted: { $ne: true } }, ...(actor.employee ? [{ ownerType: 'Employee', owner: actor.employee }] : [])],
+    });
+  }
   const filter = conditions.length > 0 ? { $and: conditions } : {};
 
   const [items, total] = await Promise.all([
@@ -185,7 +239,7 @@ export async function getDocument(id, actor) {
     .populate('owner', 'fullName employeeId companyName name')
     .populate('versions.uploadedBy', 'name')
     .lean();
-  if (!document) throw new ApiError(404, 'Document not found.');
+  if (!document || !canSeeRestricted(document, actor)) throw new ApiError(404, 'Document not found.');
   if (document.ownerType === 'Employee') {
     await assertEmployeeVisibleToActor(document.owner?._id, actor);
   }
@@ -203,7 +257,7 @@ export async function getDocument(id, actor) {
  */
 export async function resolveFile(id, versionNumber, actor) {
   const document = await Document.findById(id).lean();
-  if (!document) throw new ApiError(404, 'Document not found.');
+  if (!document || !canSeeRestricted(document, actor)) throw new ApiError(404, 'Document not found.');
   if (document.ownerType === 'Employee') {
     await assertEmployeeVisibleToActor(document.owner, actor);
   }
@@ -249,7 +303,7 @@ export async function resolveFile(id, versionNumber, actor) {
  */
 export async function deleteDocument(id, actor) {
   const document = await Document.findById(id);
-  if (!document) throw new ApiError(404, 'Document not found.');
+  if (!document || !canSeeRestricted(document, actor)) throw new ApiError(404, 'Document not found.');
   // Fixed 2026-09-15, a real QA-audit-found gap — A1: deleting had NO
   // team-ownership check at all — a Coordinator could permanently remove a
   // foreign employee's document AND its real stored file, even though

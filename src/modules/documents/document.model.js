@@ -74,6 +74,15 @@ const documentSchema = new mongoose.Schema(
     ownerType: { type: String, enum: DOCUMENT_OWNER_TYPES, required: true },
     owner: { type: mongoose.Schema.Types.ObjectId, required: true, refPath: 'ownerType' },
     expiryDate: { type: Date, default: null },
+    // 2026-10-14: a document only its owning employee and an Admin may open (papers that came with an approved
+    // annual vacation: air tickets and the like). Everyone else - including people with Documents access - gets
+    // a plain "not found". Default false: every existing document is unchanged.
+    restricted: { type: Boolean, default: false },
+    // Where it came from, when it was not uploaded here: { kind: 'AnnualVacation', ref: <request id> }.
+    source: {
+      type: new mongoose.Schema({ kind: String, ref: mongoose.Schema.Types.ObjectId }, { _id: false }),
+      default: undefined,
+    },
     versions: { type: [versionSchema], required: true },
   },
   { timestamps: true }

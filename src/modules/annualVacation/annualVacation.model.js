@@ -50,9 +50,9 @@ const annualVacationSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Travel documents, attached at the step that carries the 'TravelDocuments' duty (see
-    // approvalWorkflow.model.js): the day of travel, the air tickets, and the re-entry visa request that is
-    // raised from that day (its visa document is uploaded on that request).
+    // Documents attached while approving (air tickets and the like, any stage; `tickets` is the field's old name),
+    // copied into the employee's restricted documents once the vacation is finally approved. `travelDate` and
+    // `visaRequest` belong to the retired travel-documents step: kept only so requests that used it still show it.
     travelDate: { type: Date, default: null },
     tickets: {
       type: [
@@ -64,6 +64,9 @@ const annualVacationSchema = new mongoose.Schema(
           size: { type: Number, required: true },
           uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
           uploadedAt: { type: Date, default: Date.now },
+          // The stage it was attached at (index into `steps`) and that stage's label, for the list.
+          step: { type: Number, default: null },
+          stage: { type: String, default: null },
         },
       ],
       default: [],

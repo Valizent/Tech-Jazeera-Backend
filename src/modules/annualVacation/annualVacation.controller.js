@@ -47,8 +47,9 @@ export async function cancel(req, res) {
   res.json(new ApiResponse('Request cancelled.', request));
 }
 
+/** PATCH /api/annual-vacation/:id/decide — status, optional decisionNote, optional multipart `files` (when approving). */
 export async function decide(req, res) {
-  const request = await service.decideAnnualVacation(req.params.id, req.body, actor(req));
+  const request = await service.decideAnnualVacation(req.params.id, req.body, actor(req), req.files ?? []);
   res.json(new ApiResponse(`Request ${request.status.toLowerCase()}.`, request));
 }
 
@@ -56,24 +57,6 @@ export async function decide(req, res) {
 export async function changeDays(req, res) {
   const request = await service.changeVacationDays(req.params.id, req.body, actor(req));
   res.json(new ApiResponse('The days were changed.', request));
-}
-
-/** POST /api/annual-vacation/:id/tickets — multipart `files` + travelDate. */
-export async function attachTickets(req, res) {
-  const request = await service.attachTickets(req.params.id, req.files, req.body, actor(req));
-  res.json(new ApiResponse('Tickets attached.', request));
-}
-
-/** DELETE /api/annual-vacation/:id/tickets/:fileId */
-export async function removeTicket(req, res) {
-  const request = await service.removeTicket(req.params.id, req.params.fileId, actor(req));
-  res.json(new ApiResponse('Ticket removed.', request));
-}
-
-/** POST /api/annual-vacation/:id/visa — multipart `file` + optional visaReferenceNumber. */
-export async function uploadVisa(req, res) {
-  const request = await service.uploadVisa(req.params.id, req.file, req.body, actor(req));
-  res.json(new ApiResponse('Re-entry visa uploaded.', request));
 }
 
 /** GET /api/annual-vacation/eligibility[?employee=] */

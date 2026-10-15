@@ -1,7 +1,8 @@
 /**
- * annualVacation.travel.test.js - the annual vacation flow of 2026-10-14: the days come from the contract HR set,
- * HR may change them at the HR step, Accounts attach the air tickets (which raises the re-entry visa request) and
- * upload the visa, then FM approves; the roles the workflow lists are told at submission and at approval.
+ * annualVacation.travel.test.js - the annual vacation flow: the days come from the contract HR set, HR may change
+ * them at the HR step, any approver may attach documents and a remark while approving (they reach the next stage and,
+ * on final approval, become the employee's restricted documents); the roles the workflow lists are told at
+ * submission and at approval.
  */
 import User from '../auth/user.model.js';
 import Employee from '../employees/employee.model.js';
@@ -9,15 +10,14 @@ import ApprovalRole from '../approvals/approvalRole.model.js';
 import ApprovalWorkflow from '../approvals/approvalWorkflow.model.js';
 import SectionAccess from '../sectionAccess/sectionAccess.model.js';
 import Notification from '../notifications/notification.model.js';
-import ExitReentryRequest from '../exitDocuments/exitReentry.model.js';
-import LeaveRequest from '../leave/leaveRequest.model.js';
 import AnnualVacationRequest from './annualVacation.model.js';
+import { listDocuments, getDocument } from '../documents/document.service.js';
+import Document from '../documents/document.model.js';
 import {
   submitOwnAnnualVacation,
   changeVacationDays,
-  attachTickets,
-  uploadVisa,
   decideAnnualVacation,
+  listAnnualVacation,
   listOwnAnnualVacation,
 } from './annualVacation.service.js';
 
@@ -49,7 +49,7 @@ beforeEach(async () => {
     appliesTo: ['AnnualVacation'],
     steps: [
       { label: 'HR', roles: [hrRole._id], duty: 'HrReview' },
-      { label: 'Accounts', roles: [accountsRole._id], duty: 'TravelDocuments' },
+      { label: 'Accounts', roles: [accountsRole._id] },
       { label: 'FM', roles: [fmRole._id] },
     ],
     notifyRoles: [mmRole._id],
@@ -98,49 +98,70 @@ describe('the days and who is told', () => {
   });
 });
 
-describe('Accounts: tickets, re-entry visa, then FM', () => {
+describe('documents and remarks while approving', () => {
   async function atAccounts() {
     const request = await submit();
-    await decideAnnualVacation(request._id, { status: 'Approved' }, hr);
+    await decideAnnualVacation(request._id, { status: 'Approved', decisionNote: 'Days are right' }, hr);
     return request;
   }
 
-  it('raises a re-entry visa request from the travel day and waits for the visa document', async () => {
+  it('keeps the files and the remark with the stage, and hands them on to FM', async () => {
     const request = await atAccounts();
-    const travel = inDays(30);
 
-    await expect(attachTickets(request._id, [ticket()], { travelDate: travel }, outsider)).rejects.toMatchObject({ statusCode: 403 });
-    const after = await attachTickets(request._id, [ticket()], { travelDate: travel }, accounts);
+    const after = await decideAnnualVacation(
+      request._id,
+      { status: 'Approved', decisionNote: 'Tickets for 5 Dec attached' },
+      accounts,
+      [ticket('out.pdf'), ticket('back.pdf')]
+    );
 
-    const visa = await ExitReentryRequest.findById(after.visaRequest._id);
-    expect(visa).toMatchObject({ status: 'Approved', visaType: 'Single', reason: 'Annual vacation' });
-    expect(dateOnly(visa.departureDate)).toBe(dateOnly(travel));
-    expect(dateOnly(visa.expectedReturnDate)).toBe(dateOnly(new Date(new Date(travel).getTime() + 25 * DAY))); // 26 days counting the travel day
-    expect(after.tickets[0]).not.toHaveProperty('fileName');
-    // not ready: the Accounts step cannot be approved by hand, and the request is still with Accounts
-    await expect(decideAnnualVacation(request._id, { status: 'Approved' }, accounts)).rejects.toMatchObject({ statusCode: 400 });
-    expect((await AnnualVacationRequest.findById(request._id)).currentStep).toBe(1);
+    expect(after.currentStep).toBe(2);
+    const stored = await AnnualVacationRequest.findById(request._id).lean();
+    expect(stored.tickets.map((t) => t.originalName)).toEqual(['out.pdf', 'back.pdf']);
+    expect(stored.tickets[0]).toMatchObject({ step: 1, stage: 'Accounts' });
+    expect(stored.approvalTrail.map((e) => e.note)).toEqual(['Days are right', 'Tickets for 5 Dec attached']);
+
+    // FM sees them with who attached them, and the remarks in the trail
+    const { items } = await listAnnualVacation({ page: 1, limit: 10 }, fm);
+    expect(items[0].tickets[0]).toMatchObject({ originalName: 'out.pdf', stage: 'Accounts' });
+    expect(items[0].tickets[0].uploadedBy).toMatch(/^Accounts/);
+    expect(items[0].tickets[0]).not.toHaveProperty('fileName');
+    expect(items[0].canDecideCurrentStep).toBe(true);
   });
 
-  it('moves on to FM by itself once the visa is uploaded, and FM approval records the leave and tells the informed role', async () => {
+  it('refuses files with a rejection, and stores nothing for someone who may not decide the stage', async () => {
+    const request = await submit();
+    await expect(decideAnnualVacation(request._id, { status: 'Rejected' }, hr, [ticket()])).rejects.toMatchObject({ statusCode: 400 });
+    await expect(decideAnnualVacation(request._id, { status: 'Approved' }, outsider, [ticket()])).rejects.toMatchObject({ statusCode: 403 });
+    expect((await AnnualVacationRequest.findById(request._id).lean()).tickets).toHaveLength(0);
+  });
+
+  it('a failed decision takes the files off again', async () => {
     const request = await atAccounts();
-    await attachTickets(request._id, [ticket()], { travelDate: inDays(30) }, accounts);
-    await uploadVisa(request._id, ticket('visa.pdf'), { visaReferenceNumber: 'V-123' }, accounts);
+    // Accounts is the current stage; FM is not
+    await expect(decideAnnualVacation(request._id, { status: 'Approved' }, fm, [ticket()])).rejects.toMatchObject({ statusCode: 403 });
+    expect((await AnnualVacationRequest.findById(request._id).lean()).tickets).toHaveLength(0);
+  });
 
-    const atFm = await AnnualVacationRequest.findById(request._id);
-    expect(atFm.currentStep).toBe(2);
-    expect(atFm.status).toBe('PendingReview');
-    expect(await ExitReentryRequest.findById(atFm.visaRequest)).toMatchObject({ status: 'Issued', visaReferenceNumber: 'V-123' });
-
-    await decideAnnualVacation(request._id, { status: 'Approved' }, fm);
-
-    const done = await AnnualVacationRequest.findById(request._id);
+  it('on final approval the files become the employee restricted documents: only they and an Admin see them', async () => {
+    const request = await atAccounts();
+    await decideAnnualVacation(request._id, { status: 'Approved' }, accounts, [ticket('ticket.pdf')]);
+    const done = await decideAnnualVacation(request._id, { status: 'Approved', decisionNote: 'Enjoy' }, fm, [ticket('visa-copy.pdf')]);
     expect(done.status).toBe('Approved');
-    const leave = await LeaveRequest.findById(done.linkedLeaveRequest);
-    expect(leave.status).toBe('Approved');
-    expect(String((await ExitReentryRequest.findById(done.visaRequest)).linkedLeaveRequest)).toBe(String(leave._id));
-    const told = await Notification.find({ user: marketingManager.id });
-    expect(told.map((n) => n.title).join(' ')).toContain('is going on annual leave');
+
+    const documents = await Document.find({ owner: employee._id }).lean();
+    expect(documents).toHaveLength(2);
+    expect(documents.every((d) => d.restricted && d.ownerType === 'Employee' && d.source?.kind === 'AnnualVacation')).toBe(true);
+
+    const asEmployee = { userId: 'x', role: 'Staff', employee: String(employee._id) };
+    const asAdmin = { userId: 'a', role: 'Admin', employee: null };
+    const asHr = { userId: String(hr.id), role: 'HR', employee: null };
+    const query = { page: 1, limit: 20, ownerType: 'Employee', owner: String(employee._id) };
+    expect((await listDocuments(query, asEmployee)).items).toHaveLength(2);
+    expect((await listDocuments(query, asAdmin)).items).toHaveLength(2);
+    expect((await listDocuments(query, asHr)).items).toHaveLength(0);
+    await expect(getDocument(String(documents[0]._id), asHr)).rejects.toMatchObject({ statusCode: 404 });
+    expect((await getDocument(String(documents[0]._id), asAdmin))._id).toBeTruthy();
   });
 });
 
