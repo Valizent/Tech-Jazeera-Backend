@@ -7,6 +7,7 @@
  * lets the UI show *why* a request was auto-approved or sent for review.
  */
 import mongoose from 'mongoose';
+import { escalationLevelsField } from '../approvals/approvalFields.js';
 
 export const LEAVE_REQUEST_STATUSES = [
   'AutoApproved',
@@ -100,12 +101,15 @@ const leaveRequestSchema = new mongoose.Schema(
           label: String,
           roles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }],
           assignee: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+          escalation: escalationLevelsField(),
           _id: false,
         },
       ],
       default: undefined,
     },
     currentStep: { type: Number, default: 0 },
+    // When the request reached its current step: the clock the escalation levels count from.
+    currentStepEnteredAt: { type: Date, default: null },
     // Append-only — one entry per step decided, in order. Never mutated or
     // reordered after being pushed (see approvalEngine.service.js).
     approvalTrail: {

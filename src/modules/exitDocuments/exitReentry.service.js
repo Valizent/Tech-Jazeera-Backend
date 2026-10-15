@@ -45,7 +45,7 @@ export async function submitExitReentry(employeeId, data, actor) {
 
   const workflow = await resolveApprovalWorkflow(employee, 'ExitReentry');
   const workflowFields = workflow
-    ? { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0 }
+    ? { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0, currentStepEnteredAt: new Date() }
     : {};
 
   const request = await ExitReentryRequest.create({ employee: employeeId, ...data, ...workflowFields });

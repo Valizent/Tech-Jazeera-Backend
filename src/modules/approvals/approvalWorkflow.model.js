@@ -20,6 +20,7 @@
  * workflows' appliesTo collides even though the arrays themselves differ.
  */
 import mongoose from 'mongoose';
+import { escalationLevelsField } from './approvalFields.js';
 import { EMPLOYEE_DEPARTMENTS } from '../employees/departments.js';
 
 export const APPROVAL_REQUEST_TYPES = [
@@ -55,6 +56,8 @@ export const EMPLOYEE_APPROVAL_TYPES = [
 const workflowStepSchema = new mongoose.Schema(
   {
     label: { type: String, trim: true, maxlength: 60 },
+    // Up to MAX_ESCALATION_LEVELS reminders for a step nobody has decided: after N days tell the approver or a role.
+    escalation: { type: escalationLevelsField(), default: [] },
     roles: {
       type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }],
       validate: {

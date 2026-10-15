@@ -10,6 +10,23 @@
  */
 import mongoose from 'mongoose';
 
+/** One escalation level of a workflow step: after `afterDays` calendar days at the step, tell the step's approver
+ *  (`notify: 'approver'`) or the members of `role`. Inform only: it never changes who can decide. */
+export const ESCALATION_NOTIFY = ['approver', 'role'];
+export const MAX_ESCALATION_LEVELS = 3;
+
+/** A fresh copy per schema (mongoose schemas must not share one field-definition object). */
+export function escalationLevelsField() {
+  return [
+    {
+      afterDays: { type: Number, min: 1, max: 90 },
+      notify: { type: String, enum: ESCALATION_NOTIFY },
+      role: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole', default: null },
+      _id: false,
+    },
+  ];
+}
+
 /** A fresh copy per schema (mongoose schemas must not share one field-definition object). */
 export function approvalFields() {
   return {
@@ -21,12 +38,15 @@ export function approvalFields() {
           label: String,
           roles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }],
           assignee: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+          escalation: escalationLevelsField(),
           _id: false,
         },
       ],
       default: undefined,
     },
     currentStep: { type: Number, default: 0 },
+    // When the request reached its current step: the clock the escalation levels count from.
+    currentStepEnteredAt: { type: Date, default: null },
     approvalTrail: {
       type: [
         {

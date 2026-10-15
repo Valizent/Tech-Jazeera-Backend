@@ -30,9 +30,27 @@ export const specialRolesSchema = z.object({
   hr: z.preprocess(emptyToUndef, objectId('approval role').nullable().optional()),
 });
 
+/** One level: after N days tell the step's approver, or the members of a role. */
+const escalationLevelSchema = z
+  .object({
+    afterDays: z.coerce.number().int().min(1, 'Days must be at least 1.').max(90, 'Days cannot be more than 90.'),
+    notify: z.enum(['approver', 'role'], { error: 'Choose who is told.' }),
+    role: z.preprocess(emptyToUndef, objectId('approval role').nullable().optional()),
+  })
+  .superRefine((level, ctx) => {
+    if (level.notify === 'role' && !level.role) {
+      ctx.addIssue({ code: 'custom', path: ['role'], message: 'Choose the role to tell.' });
+    }
+  });
+
 const workflowStepSchema = z.object({
   label: z.preprocess(emptyToUndef, z.string().trim().max(60).optional()),
   roles: z.array(objectId('approval role')).min(1, 'Each step needs at least one role.'),
+  escalation: z
+    .array(escalationLevelSchema)
+    .max(3, 'A step can have up to 3 escalation levels.')
+    .refine((levels) => levels.every((l, i) => i === 0 || l.afterDays > levels[i - 1].afterDays), 'Each level must come after the one before it.')
+    .default([]),
 });
 
 const departmentRouteSchema = z.object({

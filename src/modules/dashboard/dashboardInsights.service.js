@@ -63,6 +63,7 @@ const APPROVAL_MODULES = [
  *  filed. A Mobilisation is created as a draft and submitted later, so its last update
  *  (`updatedAt`) stands in for "submitted"; every other type is filed on creation. */
 function waitingSince(item, sinceField = 'createdAt') {
+  if (item.currentStepEnteredAt) return item.currentStepEnteredAt;
   const trail = item.approvalTrail ?? [];
   const last = trail.length ? trail[trail.length - 1].decidedAt : null;
   return last ?? item[sinceField] ?? item.createdAt;

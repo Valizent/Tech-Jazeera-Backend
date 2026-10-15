@@ -161,6 +161,7 @@ async function createRequest(employeeId, { startDate, reason }, actor, onBehalf)
         workflowName: workflow.name,
         steps: await assignStepApprovers(workflow.steps),
         currentStep: 0,
+        currentStepEnteredAt: new Date(),
         informRoles: workflow.notifyRoles ?? [],
       }
     : {};

@@ -468,6 +468,7 @@ export async function submitLeaveRequest(employeeId, { leaveType: leaveTypeId, s
           workflowName: workflow.name,
           steps: await assignStepApprovers(workflow.steps),
           currentStep: 0,
+          currentStepEnteredAt: new Date(),
         };
       }
     }

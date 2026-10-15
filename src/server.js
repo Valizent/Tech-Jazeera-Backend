@@ -18,7 +18,7 @@ import { ensureSelfServiceRoles } from './modules/approvals/approvals.service.js
 import { retireLegacyWorkflowIndex } from './modules/approvals/approvalWorkflow.model.js';
 import { migrateLegacyEmployeeOverrides } from './modules/approvals/approvals.service.js';
 import { runExpiryAlertCheck } from './modules/notifications/expiryAlert.job.js';
-import { runMobilisationStaleCheck } from './modules/notifications/mobilisationStale.job.js';
+import { runApprovalEscalationCheck } from './modules/notifications/approvalEscalation.job.js';
 import { runDeploymentBillingCheck } from './modules/notifications/deploymentBilling.job.js';
 import { runCompanyDetailsCheck } from './modules/notifications/companyDetails.job.js';
 import { runContractEndCheck } from './modules/notifications/contractEnd.job.js';
@@ -76,10 +76,10 @@ const expiryAlertInterval = setInterval(
   ONE_DAY_MS
 );
 
-// Same pattern, offset by 15s so the two jobs' initial runs don't overlap.
-setTimeout(() => runMobilisationStaleCheck().catch((err) => logger.error(`[mobilisationStaleJob] failed: ${err.message}`)), 15_000);
-const mobilisationStaleInterval = setInterval(
-  () => runMobilisationStaleCheck().catch((err) => logger.error(`[mobilisationStaleJob] failed: ${err.message}`)),
+// Approval escalation reminders (the matrix set per workflow step), offset by 15s.
+setTimeout(() => runApprovalEscalationCheck().catch((err) => logger.error(`[approvalEscalationJob] failed: ${err.message}`)), 15_000);
+const approvalEscalationInterval = setInterval(
+  () => runApprovalEscalationCheck().catch((err) => logger.error(`[approvalEscalationJob] failed: ${err.message}`)),
   ONE_DAY_MS
 );
 
@@ -119,7 +119,7 @@ const outsourcedDocumentsInterval = setInterval(
 async function shutdown(signal) {
   logger.info(`${signal} received shutting down gracefully...`);
   clearInterval(expiryAlertInterval);
-  clearInterval(mobilisationStaleInterval);
+  clearInterval(approvalEscalationInterval);
   clearInterval(deploymentBillingInterval);
   clearInterval(companyDetailsInterval);
   clearInterval(contractEndInterval);

@@ -15,6 +15,7 @@
  * it does not create a new one.
  */
 import mongoose from 'mongoose';
+import { escalationLevelsField } from '../approvals/approvalFields.js';
 
 export const TIMESHEET_STATUSES = ['Submitted', 'Approved', 'Rejected'];
 
@@ -67,12 +68,15 @@ const timesheetSchema = new mongoose.Schema(
           label: String,
           roles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }],
           assignee: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+          escalation: escalationLevelsField(),
           _id: false,
         },
       ],
       default: undefined,
     },
     currentStep: { type: Number, default: 0 },
+    // When the request reached its current step: the clock the escalation levels count from.
+    currentStepEnteredAt: { type: Date, default: null },
     approvalTrail: {
       type: [
         {

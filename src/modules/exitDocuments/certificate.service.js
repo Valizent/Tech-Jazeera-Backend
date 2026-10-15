@@ -37,7 +37,7 @@ export async function submitCertificate(employeeId, data, actor) {
 
   const workflow = await resolveApprovalWorkflow(employee, 'Certificate');
   const workflowFields = workflow
-    ? { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0 }
+    ? { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0, currentStepEnteredAt: new Date() }
     : {};
 
   const request = await CertificateRequest.create({ employee: employeeId, ...data, ...workflowFields });

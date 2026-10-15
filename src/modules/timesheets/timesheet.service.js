@@ -124,7 +124,7 @@ export async function submitTimesheet(employeeId, data, actor) {
   let workflowFields = { workflow: null, workflowName: null, steps: undefined, currentStep: 0 };
   const workflow = await resolveApprovalWorkflow(employee, 'Timesheet');
   if (workflow) {
-    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0 };
+    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0, currentStepEnteredAt: new Date() };
   }
 
   let timesheet;

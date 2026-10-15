@@ -134,6 +134,7 @@ const PENDING_SOURCES = [
   { Model: ExitReentryRequest, statusField: 'status', pending: 'Pending' },
   { Model: CertificateRequest, statusField: 'status', pending: 'Pending' },
   { Model: Client, statusField: 'approvalStatus', pending: 'Pending' },
+  { Model: Subcontractor, statusField: 'approvalStatus', pending: 'Pending' },
   { Model: ClientPayment, statusField: 'decisionStatus', pending: 'Pending' },
   { Model: SubcontractorPayment, statusField: 'decisionStatus', pending: 'Pending' },
   { Model: SubcontractorTransfer, statusField: 'status', pending: 'Pending' },
@@ -187,6 +188,7 @@ export async function listApprovalWorkflows() {
   return ApprovalWorkflow.find()
     .sort({ name: 1 })
     .populate('steps.roles', 'name isActive')
+    .populate('steps.escalation.role', 'name isActive')
     .populate('notifyRoles', 'name isActive')
     .populate('departmentRoutes.workflow', 'name isActive')
     .lean();
@@ -194,7 +196,8 @@ export async function listApprovalWorkflows() {
 
 /** Every role referenced by a step must exist and be active. */
 async function assertValidSteps(steps, notifyRoles = []) {
-  const roleIds = [...new Set([...steps.flatMap((s) => s.roles.map(String)), ...notifyRoles.map(String)])];
+  const escalationRoleIds = steps.flatMap((s) => (s.escalation ?? []).filter((l) => l.role).map((l) => String(l.role)));
+  const roleIds = [...new Set([...steps.flatMap((s) => s.roles.map(String)), ...notifyRoles.map(String), ...escalationRoleIds])];
   if (roleIds.length === 0) return;
   const count = await ApprovalRole.countDocuments({ _id: { $in: roleIds }, isActive: true });
   if (count !== roleIds.length) {
@@ -324,6 +327,7 @@ export async function startApproval(requestType) {
     workflowName: workflow.name,
     steps: await assignStepApprovers(workflow.steps),
     currentStep: 0,
+    currentStepEnteredAt: new Date(),
     approvalTrail: [],
   };
 }

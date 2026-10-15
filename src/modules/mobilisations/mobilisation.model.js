@@ -59,6 +59,7 @@
  * stale-mobilisation warning job.
  */
 import mongoose from 'mongoose';
+import { escalationLevelsField } from '../approvals/approvalFields.js';
 
 
 // 'Completed' is the terminal "placement has ended" state — set automatically
@@ -332,6 +333,7 @@ const mobilisationSchema = new mongoose.Schema(
         {
           label: String,
           roles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }],
+          escalation: escalationLevelsField(),
           _id: false,
         },
       ],

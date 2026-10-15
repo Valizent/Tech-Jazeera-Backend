@@ -427,7 +427,11 @@ export async function decideApprovalStep({
   if (!isLastStep) {
     const updatedParent = await Model.findOneAndUpdate(
       atThisStep,
-      { $push: { [field('approvalTrail')]: trailEntry }, $inc: { [field('currentStep')]: 1 } },
+      {
+        $push: { [field('approvalTrail')]: trailEntry },
+        $inc: { [field('currentStep')]: 1 },
+        $set: { [field('currentStepEnteredAt')]: new Date() },
+      },
       { new: true }
     ).lean();
     const updated = pick(updatedParent);

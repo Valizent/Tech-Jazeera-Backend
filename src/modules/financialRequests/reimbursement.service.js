@@ -49,7 +49,7 @@ export async function submitReimbursement(employeeId, data, file, actor) {
   let workflowFields = {};
   const workflow = await resolveApprovalWorkflow(employee, 'Reimbursement');
   if (workflow) {
-    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0 };
+    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0, currentStepEnteredAt: new Date() };
   }
 
   const claim = await ReimbursementClaim.create({
