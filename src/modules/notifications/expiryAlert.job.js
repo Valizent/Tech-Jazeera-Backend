@@ -49,17 +49,28 @@ export function expiryStep(daysLeft) {
   return `m${Math.ceil(daysLeft / 30)}`;
 }
 
-const startsBy = (key) => {
+const startsBy = (months) => {
   const d = new Date();
-  d.setUTCMonth(d.getUTCMonth() + START_MONTHS[key]);
+  d.setUTCMonth(d.getUTCMonth() + months);
   return d;
 };
 
+/** An employee's documents worth reminding about: the five identity documents and any "additional" ones. */
+function employeeDocuments(employee) {
+  return [
+    ...IDENTITY_DOCS.map(([key, label]) => ({ key, label, expiry: employee[key]?.expiry, months: START_MONTHS[key] })),
+    ...(employee.additionalDocuments ?? []).map((doc, i) => ({ key: `extra${i}`, label: doc.name, expiry: doc.expiry, months: 3 })),
+  ];
+}
+
 async function runEmployeeDocuments() {
-  const identityExpiryOr = IDENTITY_DOCS.map(([key]) => ({ [`${key}.expiry`]: { $ne: null, $lte: startsBy(key) } }));
+  const identityExpiryOr = [
+    ...IDENTITY_DOCS.map(([key]) => ({ [`${key}.expiry`]: { $ne: null, $lte: startsBy(START_MONTHS[key]) } })),
+    { 'additionalDocuments.expiry': { $ne: null, $lte: startsBy(3) } },
+  ];
   const [employees, hr, seniorRoles, admins] = await Promise.all([
     Employee.find({ status: { $ne: 'Exited' }, $or: identityExpiryOr })
-      .select('fullName employeeId passport visa iqama medical drivingLicense coordinator manager')
+      .select('fullName employeeId passport visa iqama medical drivingLicense additionalDocuments coordinator manager')
       .lean(),
     User.find({ role: 'HR', isActive: true }).select('_id').lean(),
     ApprovalRole.find({ name: { $in: SENIOR_ROLE_NAMES }, isActive: true }).select('members').lean(),
@@ -72,9 +83,8 @@ async function runEmployeeDocuments() {
   let itemsFound = 0;
   let notificationsSent = 0;
   for (const e of employees) {
-    for (const [key, label] of IDENTITY_DOCS) {
-      const expiry = e[key]?.expiry;
-      if (!expiry || new Date(expiry) > startsBy(key)) continue;
+    for (const { key, label, expiry, months } of employeeDocuments(e)) {
+      if (!expiry || new Date(expiry) > startsBy(months)) continue;
       itemsFound += 1;
       const daysLeft = daysUntil(expiry);
       const step = expiryStep(daysLeft);

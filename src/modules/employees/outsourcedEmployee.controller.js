@@ -38,11 +38,16 @@ export async function remove(req, res) {
 
 // ---- documents ----
 
-/** POST /api/outsourced-employees/:id/documents — multipart, field `file` + `title`/`expiryDate` */
+/** POST /api/outsourced-employees/:id/documents — multipart: type, title (for Other), number, expiryDate, reminderDays, optional `file` */
 export async function addDocument(req, res) {
-  if (!req.file) throw new ApiError(400, 'Attach a file.');
-  const data = await service.addDocument(req.params.id, req.file, req.body, actor(req));
-  res.status(201).json(new ApiResponse('Document uploaded.', data));
+  const data = await service.addDocument(req.params.id, req.file ?? null, req.body, actor(req));
+  res.status(201).json(new ApiResponse('Document saved.', data));
+}
+
+/** PATCH /api/outsourced-employees/:id/documents/:fileId — multipart: any of the details, optional new `file` */
+export async function updateDocument(req, res) {
+  const data = await service.updateDocument(req.params.id, req.params.fileId, req.file ?? null, req.body, actor(req));
+  res.json(new ApiResponse('Document updated.', data));
 }
 
 /** DELETE /api/outsourced-employees/:id/documents/:fileId */

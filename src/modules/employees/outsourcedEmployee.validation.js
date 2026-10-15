@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 
+import { OUTSOURCED_DOCUMENT_TYPES } from './outsourcedEmployee.model.js';
 // Handles both an empty-string sentinel (mobilisation.validation.js's own
 // convention) AND an explicit `null` (this form's own payload builder sends
 // null for a cleared phone/email/iqamaNumber/subcontractor) — either way,
@@ -41,10 +42,6 @@ const baseFields = {
   nationality: optionalStr(80),
   phone: optionalSaudiPhone,
   email: z.preprocess(emptyToUndef, z.string().trim().email('Invalid email.').max(100).optional()),
-  agreedRate: z.preprocess(
-    (v) => (v === '' || v === null ? undefined : v),
-    z.number().min(0, 'Rate must be positive.').optional()
-  ),
   notes: optionalStr(1000),
 };
 
@@ -80,10 +77,30 @@ export const listOutsourcedEmployeesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(100),
 });
 
-export const outsourcedEmployeeDocumentBodySchema = z.object({
-  title: z.string().trim().min(2, 'Title is required.').max(150),
-  expiryDate: z.preprocess(emptyToUndef, z.coerce.date().optional()),
-});
+const documentFields = {
+  type: z.enum(OUTSOURCED_DOCUMENT_TYPES, { error: 'Choose the kind of document.' }),
+  // Only "Other" needs a name typed; the others are named by their type.
+  title: z.preprocess(emptyToUndef, z.string().trim().min(2, 'Give the document a name.').max(150).optional()),
+  number: z.preprocess(emptyToUndef, z.string().trim().max(80).optional()),
+  expiryDate: z.preprocess(emptyToUndef, z.coerce.date({ error: 'Enter a valid expiry date.' }).optional()),
+  reminderDays: z.preprocess(emptyToUndef, z.coerce.number().int().min(1, 'At least 1 day.').max(365, 'At most 365 days.').optional()),
+};
+
+const needsName = (val, ctx) => {
+  if (val.type === 'Other' && !val.title) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Give the document a name.', path: ['title'] });
+  }
+};
+
+export const outsourcedEmployeeDocumentBodySchema = z.object(documentFields).superRefine(needsName);
+
+/** Editing: any of the details (the file travels as multipart, optional). */
+export const outsourcedEmployeeDocumentUpdateSchema = z
+  .object({ ...documentFields, type: documentFields.type.optional(), clearExpiry: z.preprocess((v) => v === 'true' || v === true, z.boolean().optional()) })
+  .superRefine((val, ctx) => {
+    if (val.type === 'Other' && val.title === undefined) return; // keeps the name it already has
+    needsName(val, ctx);
+  });
 
 export const outsourcedEmployeeDocumentParamSchema = z.object({
   id: id('outsourced employee'),

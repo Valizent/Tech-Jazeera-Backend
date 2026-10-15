@@ -14,6 +14,7 @@ import ApiError from '../../utils/ApiError.js';
 import ApiResponse from '../../utils/ApiResponse.js';
 import { contentDisposition } from '../../utils/contentDisposition.js';
 import * as documentService from './document.service.js';
+import { listExpiryTracker } from './expiryTracker.service.js';
 
 const actor = (req) => ({ userId: req.user.id, role: req.user.role, employee: req.user.employee ?? null, ip: req.ip });
 
@@ -27,6 +28,12 @@ export async function create(req, res) {
 export async function addVersion(req, res) {
   const document = await documentService.addVersion(req.params.id, req.file, actor(req));
   res.json(new ApiResponse('New version uploaded.', document));
+}
+
+/** GET /api/documents/expiry-tracker — every document with an expiry date, where it stands. */
+export async function expiryTracker(req, res) {
+  const data = await listExpiryTracker(req.query, actor(req));
+  res.json(new ApiResponse('Expiry tracker.', data));
 }
 
 /** GET /api/documents — 200 → data: { items, total, page, pages } */

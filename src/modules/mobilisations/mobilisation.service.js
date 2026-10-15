@@ -553,7 +553,7 @@ export async function lookupWorkerByIqama(iqamaNumber) {
       subcontractor: listed.subcontractor?._id,
       subcontractorName: listed.subcontractor?.name,
       clientRate: null,
-      subcontractorRate: listed.agreedRate ?? null,
+      subcontractorRate: null,
     };
   }
   const registered = await knownSubcontractorFor(iqamaNumber);

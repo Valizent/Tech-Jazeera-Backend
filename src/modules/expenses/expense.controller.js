@@ -10,14 +10,15 @@ import { contentDisposition } from '../../utils/contentDisposition.js';
 import * as expenseService from './expense.service.js';
 
 const actor = (req) => ({ userId: req.user.id, ip: req.ip });
+const viewer = (req) => ({ userId: req.user.id, role: req.user.role });
 
 export async function list(req, res) {
-  const data = await expenseService.listExpenses(req.query);
+  const data = await expenseService.listExpenses(req.query, viewer(req));
   res.json(new ApiResponse('Expenses.', data));
 }
 
 export async function summary(req, res) {
-  const data = await expenseService.getSummary(req.query);
+  const data = await expenseService.getSummary(req.query, viewer(req));
   res.json(new ApiResponse('Expense summary.', data));
 }
 

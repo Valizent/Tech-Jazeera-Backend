@@ -7,6 +7,7 @@
  */
 import { z } from 'zod';
 import { EXPENSE_CATEGORIES } from './expense.model.js';
+import { DERIVED_EXPENSE_CATEGORIES } from './companyCosts.service.js';
 
 const id = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id.');
 const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
@@ -28,7 +29,7 @@ export const updateExpenseSchema = z.object(baseFields).partial();
 export const listExpensesSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  category: z.preprocess(emptyToUndef, z.enum(EXPENSE_CATEGORIES).optional()),
+  category: z.preprocess(emptyToUndef, z.enum([...EXPENSE_CATEGORIES, ...DERIVED_EXPENSE_CATEGORIES]).optional()),
   client: z.preprocess(emptyToUndef, id.optional()),
   // Added 2026-09-24 for the new per-Deployment expenses section — see
   // DeploymentDetailPage.jsx's own doc comment.

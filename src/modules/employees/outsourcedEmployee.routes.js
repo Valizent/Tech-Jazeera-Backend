@@ -13,6 +13,7 @@ import {
   listOutsourcedEmployeesSchema,
   outsourcedEmployeeIdParamSchema,
   outsourcedEmployeeDocumentBodySchema,
+  outsourcedEmployeeDocumentUpdateSchema,
   outsourcedEmployeeDocumentParamSchema,
 } from './outsourcedEmployee.validation.js';
 
@@ -64,6 +65,14 @@ router.post(
   uploadSingle,
   validate({ body: outsourcedEmployeeDocumentBodySchema }),
   asyncHandler(controller.addDocument)
+);
+router.patch(
+  '/:id/documents/:fileId',
+  canEdit,
+  validate({ params: outsourcedEmployeeDocumentParamSchema }),
+  uploadSingle,
+  validate({ body: outsourcedEmployeeDocumentUpdateSchema }),
+  asyncHandler(controller.updateDocument)
 );
 router.delete(
   '/:id/documents/:fileId',

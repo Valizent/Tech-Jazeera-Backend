@@ -23,6 +23,7 @@ import { uploadSingle, destroyDocumentFile } from '../../middleware/upload.js';
 import {
   createDocumentSchema,
   listDocumentsSchema,
+  expiryTrackerSchema,
   documentIdParamSchema,
   fileQuerySchema,
 } from './document.validation.js';
@@ -39,6 +40,8 @@ const canWrite = requireSectionAccess('documentsManage', 'write');
 const canDelete = requireRoles('Admin');
 
 router.get('/', canRead, validate({ query: listDocumentsSchema }), asyncHandler(documentController.list));
+// Before '/:id' so it is not read as a document id.
+router.get('/expiry-tracker', canRead, validate({ query: expiryTrackerSchema }), asyncHandler(documentController.expiryTracker));
 router.get(
   '/:id',
   canRead,

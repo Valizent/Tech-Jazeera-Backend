@@ -1,22 +1,34 @@
 import mongoose from 'mongoose';
 
-// Redesigned 2026-09-30 — this field existed since the module was first
-// built but had no route or UI ever wired to it (found during a live audit).
-// The original shape (`fileUrl`, no resourceType/mimeType/uploadedBy) assumed
-// a directly-fetchable public URL, which is exactly the "every upload sat on
-// a public CDN URL forever" problem middleware/upload.js's own doc comment
-// describes fixing app-wide — so this is rebuilt to match that same
-// established, secure pattern (private Cloudinary storage + a signed URL
-// minted per request) rather than carried forward as-is. Safe to redesign
-// outright: the collection has never had a real document on it.
+/** What an outsourced worker's papers are called in the picker; "Other" takes a name typed by the user. */
+export const OUTSOURCED_DOCUMENT_TYPES = [
+  'Ajeer',
+  'Muqeem',
+  'Passport',
+  'Iqama',
+  'Medical',
+  'Visa',
+  'Driving License',
+  'Insurance',
+  'Contract',
+  'Other',
+];
+
+// A document record (2026-10-15): what it is, its number and expiry, and how many days before the expiry
+// the reminders start; the scanned file is optional and can be attached later. The file fields follow the
+// app-wide private-storage pattern (private Cloudinary object + a signed URL minted per request).
 const outsourcedEmployeeDocumentSchema = new mongoose.Schema({
-  title: { type: String, required: true, trim: true, maxlength: 150 },
-  fileName: { type: String, required: true }, // Cloudinary public_id
-  resourceType: { type: String, required: true }, // 'raw', from the upload middleware
-  originalName: { type: String, required: true },
-  mimeType: { type: String, required: true },
-  size: { type: Number, required: true },
+  type: { type: String, enum: OUTSOURCED_DOCUMENT_TYPES, default: 'Other' },
+  title: { type: String, required: true, trim: true, maxlength: 150 }, // the type's name, or the custom name for 'Other'
+  number: { type: String, trim: true, maxlength: 80, default: null },
   expiryDate: { type: Date, default: null },
+  // Reminders begin this many days before the expiry date.
+  reminderDays: { type: Number, default: 30, min: 1, max: 365 },
+  fileName: { type: String, default: null }, // Cloudinary public_id
+  resourceType: { type: String, default: null }, // 'raw', from the upload middleware
+  originalName: { type: String, default: null },
+  mimeType: { type: String, default: null },
+  size: { type: Number, default: null },
   uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   uploadedAt: { type: Date, default: Date.now },
 });
@@ -34,8 +46,6 @@ const outsourcedEmployeeSchema = new mongoose.Schema(
     nationality: { type: String, trim: true, default: null },
     phone: { type: String, trim: true, default: null },
     email: { type: String, trim: true, default: null },
-    agreedRate: { type: Number, default: null, min: 0 },
-    currency: { type: String, default: 'SAR' },
     documents: { type: [outsourcedEmployeeDocumentSchema], default: [] },
     notes: { type: String, trim: true, maxlength: 1000, default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

@@ -26,6 +26,15 @@ export const listDocumentsSchema = z.object({
   expiring: z.preprocess(emptyToUndef, z.enum(['true', 'false']).optional()),
 });
 
+/** The expiry tracker: every document with an expiry date, filtered by where it stands and whose it is. */
+export const expiryTrackerSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  status: z.preprocess(emptyToUndef, z.enum(['Expired', 'Expiring', 'Valid']).optional()),
+  ownerType: z.preprocess(emptyToUndef, z.enum(['Employee', 'Client', 'Subcontractor', 'Outsourced']).optional()),
+  search: z.preprocess(emptyToUndef, z.string().trim().max(100).optional()),
+});
+
 export const documentIdParamSchema = z.object({ id });
 
 /** File streaming: which version to serve (defaults to current if omitted). */

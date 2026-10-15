@@ -9,6 +9,8 @@ import Deployment from '../deployments/deployment.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.js';
 import { logAudit } from '../audit/audit.service.js';
+import { getMySectionAccess } from '../sectionAccess/sectionAccess.service.js';
+import { DERIVED_EXPENSE_CATEGORIES, listDerivedCosts } from './companyCosts.service.js';
 
 function receiptFromFile(file) {
   return {
@@ -59,9 +61,20 @@ export async function createExpense(data, file, actor) {
   return expense.toObject();
 }
 
-export async function listExpenses({ page, limit, category, client, deployment, from, to, search }) {
+/**
+ * The ledger: typed-in expenses and paid reimbursements (stored), merged with the costs recorded elsewhere
+ * (mobilisation cost, approved subcontractor payments, end of service; see companyCosts.service.js) that this
+ * viewer may see. A per-deployment listing (`deployment`) stays the stored rows only. `viewer` is { userId, role }.
+ */
+export async function listExpenses({ page, limit, category, client, deployment, from, to, search }, viewer) {
+  const derivedOnly = DERIVED_EXPENSE_CATEGORIES.includes(category);
+  const derived =
+    deployment || !viewer
+      ? []
+      : await listDerivedCosts({ category, client, from, to, search }, (await getMySectionAccess(viewer)).read);
+
   const conditions = [];
-  if (category) conditions.push({ category });
+  if (category && !derivedOnly) conditions.push({ category });
   if (client) conditions.push({ client });
   // Added 2026-09-24 for the new per-Deployment expenses section on
   // DeploymentDetailPage.jsx — browsing one deployment's own expense history.
@@ -77,6 +90,12 @@ export async function listExpenses({ page, limit, category, client, deployment, 
     conditions.push({ $or: [{ vendor: rx }, { notes: rx }] });
   }
   const filter = conditions.length > 0 ? { $and: conditions } : {};
+
+  if (derived.length > 0 || derivedOnly) {
+    const stored = derivedOnly ? [] : await Expense.find(filter).populate('recordedBy', 'name').lean();
+    const rows = [...stored, ...derived].sort((a, b) => b.date - a.date);
+    return { items: rows.slice((page - 1) * limit, page * limit), total: rows.length, page, pages: Math.max(1, Math.ceil(rows.length / limit)) };
+  }
 
   const [items, total] = await Promise.all([
     Expense.find(filter)
@@ -188,7 +207,7 @@ export async function getReceiptFile(id) {
 }
 
 /** Defaults to the current calendar month when no range is given. */
-export async function getSummary({ from, to }) {
+export async function getSummary({ from, to }, viewer) {
   let start = from;
   let end = to;
   if (!start || !end) {
@@ -203,11 +222,16 @@ export async function getSummary({ from, to }) {
     { $sort: { total: -1 } },
   ]);
 
-  const total = byCategory.reduce((sum, c) => sum + c.total, 0);
+  const totals = new Map(byCategory.map((c) => [c._id, c.total]));
+  if (viewer) {
+    const derived = await listDerivedCosts({ from: start, to: end }, (await getMySectionAccess(viewer)).read);
+    for (const row of derived) totals.set(row.category, (totals.get(row.category) ?? 0) + row.amount);
+  }
+  const rows = [...totals].map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total);
   return {
     from: start,
     to: end,
-    total,
-    byCategory: byCategory.map((c) => ({ category: c._id, total: c.total })),
+    total: rows.reduce((sum, c) => sum + c.total, 0),
+    byCategory: rows,
   };
 }
