@@ -12,7 +12,7 @@ import { CERTIFICATE_TYPES_WITH_PDF } from './certificate.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
-import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail } from '../approvals/approvalEngine.service.js';
+import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail, assignStepApprovers } from '../approvals/approvalEngine.service.js';
 import { assertEmployeeVisibleToActor } from '../employees/employee.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
@@ -37,7 +37,7 @@ export async function submitCertificate(employeeId, data, actor) {
 
   const workflow = await resolveApprovalWorkflow(employee, 'Certificate');
   const workflowFields = workflow
-    ? { workflow: workflow._id, workflowName: workflow.name, steps: workflow.steps, currentStep: 0 }
+    ? { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0 }
     : {};
 
   const request = await CertificateRequest.create({ employee: employeeId, ...data, ...workflowFields });
@@ -108,6 +108,7 @@ export async function listCertificates({ page, limit, status, employee }, actor)
       .populate('employee', 'fullName employeeId')
       .populate('decidedBy', 'name')
       .populate('steps.roles', 'name')
+      .populate('steps.assignee', 'name')
       .populate('approvalTrail.approvalRole', 'name')
       .populate('approvalTrail.approvedBy', 'name role')
       .lean(),

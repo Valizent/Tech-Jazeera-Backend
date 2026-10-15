@@ -27,6 +27,7 @@ import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { SELF_SERVICE_ROLE_NAMES } from '../sectionAccess/selfService.constants.js';
 import { renameDesignation, syncDesignationsToRoleChange } from '../employees/designationSync.service.js';
+import { assignStepApprovers } from './approvalEngine.service.js';
 
 // Not STAFF_ROLES (rbac.js) — that constant also excludes Executive, who is
 // still a legitimate ApprovalRole member (in fact it's their ONLY route into
@@ -264,7 +265,7 @@ export async function startApproval(requestType) {
   return {
     workflow: workflow._id,
     workflowName: workflow.name,
-    steps: workflow.steps.map(({ label, roles }) => ({ label, roles })),
+    steps: await assignStepApprovers(workflow.steps),
     currentStep: 0,
     approvalTrail: [],
   };
@@ -520,6 +521,7 @@ export async function listApprovalLog({ type, status, employee, from, to, page, 
     const items = await query
       .populate('workflow', 'name')
       .populate('steps.roles', 'name')
+      .populate('steps.assignee', 'name')
       .populate('approvalTrail.approvalRole', 'name')
       .populate('approvalTrail.approvedBy', 'name role')
       .populate('decidedBy', 'name role')

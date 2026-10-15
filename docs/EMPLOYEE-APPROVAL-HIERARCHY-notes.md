@@ -18,3 +18,9 @@
 - Audit actions are now the engine's (`client.approved`, `clientPayment.approved`, `deployment.monthlyHours.step_approved`...), not the old `.decide` / `.approve` names.
 - "Waiting on you": payments, client approvals and hours count only requests on a hierarchy (nothing changes before one exists); transfers count per current step.
 - Approval Log: every item carries `subject` / `subjectRef` (employee name + ID, or client / worker / payment amount) and a normalised `status`.
+## 2026-10-14: each stage given to one person
+- `steps[].assignee` (User) on each request, set at submission by `assignStepApprovers(steps)` (approvalEngine.service.js): a random active member of the step's roles; no member = null (any member decides).
+- `resolveStepAuthority(actor, roleIds, step)`: a step with an assignee is that person's alone (Admin overrides). An assignee no longer an active member of the roles, or deactivated, no longer blocks the pool (`assigneeStillHolds`); `annotateCanDecide` applies the same rule so the buttons agree.
+- Notifications (`recipientsOfStep`): only the assignee, else the whole pool.
+- Lists populate `steps.assignee` (name); `ApprovalTrailView` shows stage label, then the decider's name or the assignee's.
+- Not covered: Mobilisation (its step checks and pending-on-me aggregate use role ids directly; left unchanged); there is no reassign button, an Admin steps in when the person is away.

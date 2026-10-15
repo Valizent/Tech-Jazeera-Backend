@@ -40,6 +40,7 @@ const certificateRequestSchema = new mongoose.Schema(
         {
           label: String,
           roles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }],
+          assignee: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
           _id: false,
         },
       ],

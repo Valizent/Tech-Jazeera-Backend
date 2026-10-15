@@ -10,7 +10,7 @@ import { signedDownloadUrl, destroyDocumentFile } from '../../middleware/upload.
 import { logAudit } from '../audit/audit.service.js';
 import { notifyEmployeeUser } from '../notifications/notification.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
-import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail } from '../approvals/approvalEngine.service.js';
+import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail, assignStepApprovers } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 /** The ORIGINAL decide-route role gate for a ReimbursementClaim — preserved
@@ -49,7 +49,7 @@ export async function submitReimbursement(employeeId, data, file, actor) {
   let workflowFields = {};
   const workflow = await resolveApprovalWorkflow(employee, 'Reimbursement');
   if (workflow) {
-    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: workflow.steps, currentStep: 0 };
+    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0 };
   }
 
   const claim = await ReimbursementClaim.create({
@@ -149,6 +149,7 @@ export async function listReimbursements({ page, limit, status, employee }, acto
       .limit(limit)
       .populate('employee', 'fullName employeeId')
       .populate('steps.roles', 'name')
+      .populate('steps.assignee', 'name')
       .populate('approvalTrail.approvalRole', 'name')
       .populate('approvalTrail.approvedBy', 'name role')
       .lean(),

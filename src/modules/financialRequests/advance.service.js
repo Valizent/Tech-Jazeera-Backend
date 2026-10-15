@@ -8,7 +8,7 @@ import SalaryAdvance from './advance.model.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
-import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail } from '../approvals/approvalEngine.service.js';
+import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail, assignStepApprovers } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -61,7 +61,7 @@ export async function submitAdvance(employeeId, data, actor) {
   let workflowFields = {};
   const workflow = await resolveApprovalWorkflow(employee, 'SalaryAdvance');
   if (workflow) {
-    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: workflow.steps, currentStep: 0 };
+    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0 };
   }
 
   const advance = await SalaryAdvance.create({ employee: employeeId, ...data, ...workflowFields });
@@ -134,6 +134,7 @@ export async function listAdvances({ page, limit, status, employee }, actor) {
       .limit(limit)
       .populate('employee', 'fullName employeeId')
       .populate('steps.roles', 'name')
+      .populate('steps.assignee', 'name')
       .populate('approvalTrail.approvalRole', 'name')
       .populate('approvalTrail.approvedBy', 'name role')
       .lean(),

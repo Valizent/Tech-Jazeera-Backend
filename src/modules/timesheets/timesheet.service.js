@@ -18,7 +18,7 @@ import { resolveWeeklyCap } from '../ramadan/ramadanPeriod.service.js';
 import ApiError from '../../utils/ApiError.js';
 import { logAudit } from '../audit/audit.service.js';
 import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
-import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail } from '../approvals/approvalEngine.service.js';
+import { decideApprovalStep, annotateCanDecide, notifySubmission, withApprovalTrail, assignStepApprovers } from '../approvals/approvalEngine.service.js';
 import { canAccessSection } from '../sectionAccess/sectionAccess.service.js';
 
 const money = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -124,7 +124,7 @@ export async function submitTimesheet(employeeId, data, actor) {
   let workflowFields = { workflow: null, workflowName: null, steps: undefined, currentStep: 0 };
   const workflow = await resolveApprovalWorkflow(employee, 'Timesheet');
   if (workflow) {
-    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: workflow.steps, currentStep: 0 };
+    workflowFields = { workflow: workflow._id, workflowName: workflow.name, steps: await assignStepApprovers(workflow.steps), currentStep: 0 };
   }
 
   let timesheet;
@@ -205,6 +205,7 @@ export async function listTimesheets({ page, limit, status, employee }, actor) {
       .limit(limit)
       .populate('employee', 'fullName employeeId')
       .populate('steps.roles', 'name')
+      .populate('steps.assignee', 'name')
       .populate('approvalTrail.approvalRole', 'name')
       .populate('approvalTrail.approvedBy', 'name role')
       .lean(),

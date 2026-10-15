@@ -55,15 +55,62 @@ async function notifyBestEffort(fn) {
 // references a role by id forever (roles are deactivated, never deleted),
 // but a DISABLED role must stop granting real decide authority the moment
 // it's disabled, not just stop appearing in new workflow configuration.
-export async function resolveStepAuthority(actor, stepRoleIds) {
+export async function resolveStepAuthority(actor, stepRoleIds, step = null) {
   if (stepRoleIds?.length) {
     const matchedRole = await ApprovalRole.findOne({ _id: { $in: stepRoleIds }, members: actor.userId, isActive: true })
       .select('_id')
       .lean();
-    if (matchedRole) return { authorized: true, roleId: matchedRole._id, viaAdminOverride: false };
+    // 2026-10-14: a step given to one person is theirs alone (Admin still overrides). An assignee who has since
+    // left the role or been deactivated no longer holds it for anyone (see assigneeStillHolds).
+    if (matchedRole && !(await assignedToSomeoneElse(actor, step, stepRoleIds))) {
+      return { authorized: true, roleId: matchedRole._id, viaAdminOverride: false };
+    }
   }
   if (actor.role === 'Admin') return { authorized: true, roleId: null, viaAdminOverride: true };
   return { authorized: false, roleId: null, viaAdminOverride: false };
+}
+
+/** Is the person this step was given to still an active member of one of its roles (and an active login)? */
+async function assigneeStillHolds(assigneeId, stepRoleIds) {
+  const [role, user] = await Promise.all([
+    ApprovalRole.exists({ _id: { $in: stepRoleIds }, members: assigneeId, isActive: true }),
+    User.exists({ _id: assigneeId, isActive: true }),
+  ]);
+  return Boolean(role && user);
+}
+
+async function assignedToSomeoneElse(actor, step, stepRoleIds) {
+  const assignee = step?.assignee ? String(step.assignee._id ?? step.assignee) : null;
+  if (!assignee || assignee === String(actor.userId)) return false;
+  return assigneeStillHolds(assignee, stepRoleIds);
+}
+
+/**
+ * The person each step of a freshly raised request is given to: one active member of the step's roles, picked
+ * at random (a role with a single member always gives that member; none gives null, and then any member of the
+ * role may decide it). Returns the steps ready to store, with `assignee` added.
+ */
+export async function assignStepApprovers(steps) {
+  const roleIds = [...new Set((steps ?? []).flatMap((s) => (s.roles ?? []).map((r) => String(r._id ?? r))))];
+  const roles = await ApprovalRole.find({ _id: { $in: roleIds }, isActive: true }).select('members').lean();
+  const memberIds = [...new Set(roles.flatMap((r) => r.members.map(String)))];
+  const active = new Set((await User.find({ _id: { $in: memberIds }, isActive: true }).select('_id').lean()).map((u) => String(u._id)));
+  const membersOfRole = new Map(roles.map((r) => [String(r._id), r.members.map(String).filter((id) => active.has(id))]));
+  return (steps ?? []).map((s) => {
+    const pool = [...new Set((s.roles ?? []).flatMap((r) => membersOfRole.get(String(r._id ?? r)) ?? []))];
+    const assignee = pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+    const plain = typeof s.toObject === 'function' ? s.toObject() : s;
+    return { ...plain, assignee };
+  });
+}
+
+/** Who to tell that a step is waiting: the person it was given to, else everyone who holds it. */
+export async function recipientsOfStep(step) {
+  if (step?.assignee) {
+    const assignee = String(step.assignee._id ?? step.assignee);
+    if (await assigneeStillHolds(assignee, step.roles ?? [])) return [assignee];
+  }
+  return membersOfRoles(step?.roles);
 }
 
 /** The role ids `annotateCanDecide` would need to check membership of for
@@ -112,6 +159,7 @@ export function roleIdsNeededAcross(items, pendingStatus, statusField = 'status'
 export function withApprovalTrail(query) {
   return query
     .populate('steps.roles', 'name')
+    .populate('steps.assignee', 'name')
     .populate('approvalTrail.approvalRole', 'name')
     .populate('approvalTrail.approvedBy', 'name role');
 }
@@ -130,6 +178,24 @@ export async function annotateCanDecide(
         .select('_id')
         .lean();
       memberRoleIds = new Set(roles.map((r) => r._id.toString()));
+    }
+  }
+
+  // Assignees (other than the viewer) who no longer sit in the step's roles: they stop blocking the rest of the pool.
+  const staleAssignees = new Set();
+  const others = items.filter(
+    (item) => item[statusField] === pendingStatus && item.workflow && item.steps?.[item.currentStep]?.assignee
+  );
+  if (others.length > 0) {
+    const roleIds = new Set();
+    for (const item of others) for (const r of item.steps[item.currentStep].roles ?? []) roleIds.add(String(r._id ?? r));
+    const roles = await ApprovalRole.find({ _id: { $in: [...roleIds] }, isActive: true }).select('members').lean();
+    const membersByRole = new Map(roles.map((r) => [String(r._id), new Set(r.members.map(String))]));
+    for (const item of others) {
+      const step = item.steps[item.currentStep];
+      const assignee = String(step.assignee._id ?? step.assignee);
+      const holds = (step.roles ?? []).some((r) => membersByRole.get(String(r._id ?? r))?.has(assignee));
+      if (!holds) staleAssignees.add(assignee);
     }
   }
 
@@ -156,7 +222,10 @@ export async function annotateCanDecide(
     const step = item.steps?.[item.currentStep];
     const stepRoleIds = (step?.roles ?? []).map((roleId) => (roleId._id ?? roleId).toString());
     const isMember = stepRoleIds.some((id) => memberRoleIds.has(id));
-    return { ...item, canDecideCurrentStep: isMember || actor.role === 'Admin' };
+    // A step given to one person is theirs alone (unless they no longer hold it).
+    const assignee = step?.assignee ? String(step.assignee._id ?? step.assignee) : null;
+    const givenToSomeoneElse = assignee && assignee !== String(actor.userId) && !staleAssignees.has(assignee);
+    return { ...item, canDecideCurrentStep: (isMember && !givenToSomeoneElse) || actor.role === 'Admin' };
   });
 }
 
@@ -194,7 +263,7 @@ export async function notifySubmission(doc, buildStepNotification, legacyAllowed
 
   let userIds;
   if (doc.workflow) {
-    userIds = await membersOfRoles(doc.steps?.[stepIndex]?.roles);
+    userIds = await recipientsOfStep(doc.steps?.[stepIndex]);
   } else {
     const roleUsers = legacyAllowedRoles?.length
       ? await User.find({ role: { $in: legacyAllowedRoles }, isActive: true }).select('_id').lean()
@@ -310,7 +379,7 @@ export async function decideApprovalStep({
   const stepIndex = doc.currentStep;
   const step = doc.steps[stepIndex];
   const stepRoleIds = step?.roles ?? [];
-  const { authorized, roleId, viaAdminOverride } = await resolveStepAuthority(actor, stepRoleIds);
+  const { authorized, roleId, viaAdminOverride } = await resolveStepAuthority(actor, stepRoleIds, step);
   if (!authorized) {
     throw new ApiError(403, 'You are not an approver for the current step of this request.');
   }
@@ -374,7 +443,7 @@ export async function decideApprovalStep({
     });
     if (buildStepNotification) {
       const nextStep = updated.steps[updated.currentStep];
-      const memberIds = await membersOfRoles(nextStep?.roles);
+      const memberIds = await recipientsOfStep(nextStep);
       const notification = buildStepNotification(updated, updated.currentStep, updatedParent);
       await notifyBestEffort(() => Promise.all(memberIds.map((userId) => notifyUser(userId, notification))));
     }

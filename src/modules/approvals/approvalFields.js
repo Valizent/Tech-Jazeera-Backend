@@ -20,6 +20,7 @@ export function approvalFields() {
         {
           label: String,
           roles: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole' }],
+          assignee: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
           _id: false,
         },
       ],
@@ -49,6 +50,7 @@ export function populateTrail(path = '') {
   const p = path ? `${path}.` : '';
   return [
     { path: `${p}steps.roles`, select: 'name' },
+    { path: `${p}steps.assignee`, select: 'name' },
     { path: `${p}approvalTrail.approvalRole`, select: 'name' },
     { path: `${p}approvalTrail.approvedBy`, select: 'name role' },
   ];

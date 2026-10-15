@@ -27,6 +27,7 @@ import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
 import {
   decideApprovalStep,
   annotateCanDecide,
+  assignStepApprovers,
   withApprovalTrail,
   notifySubmission,
   resolveStepAuthority,
@@ -158,7 +159,7 @@ async function createRequest(employeeId, { startDate, reason }, actor, onBehalf)
     ? {
         workflow: workflow._id,
         workflowName: workflow.name,
-        steps: workflow.steps,
+        steps: await assignStepApprovers(workflow.steps),
         currentStep: 0,
         informRoles: workflow.notifyRoles ?? [],
       }
@@ -299,6 +300,7 @@ export async function listAnnualVacation({ page, limit, status, employee }, acto
       .populate('employee', 'fullName employeeId')
       .populate('decidedBy', 'name')
       .populate('steps.roles', 'name')
+      .populate('steps.assignee', 'name')
       .populate('approvalTrail.approvalRole', 'name')
       .populate('approvalTrail.approvedBy', 'name role')
       .populate('visaRequest', VISA_SUMMARY_FIELDS)
@@ -463,7 +465,7 @@ async function loadAtDutyStep(id, duty, actor) {
   if (step?.duty !== duty) {
     throw new ApiError(409, duty === 'HrReview' ? 'The days can only be changed at the HR step.' : 'Tickets and the re-entry visa belong to the Accounts step.');
   }
-  const { authorized } = await resolveStepAuthority(actor, step.roles);
+  const { authorized } = await resolveStepAuthority(actor, step.roles, step);
   if (!authorized) throw new ApiError(403, 'You are not an approver for the current step of this request.');
   await assertEmployeeVisibleToActor(doc.employee, actor);
   return doc;
