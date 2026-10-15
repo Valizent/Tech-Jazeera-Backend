@@ -37,6 +37,16 @@ export async function updateWorkflow(req, res) {
   res.json(new ApiResponse('Approval workflow updated.', workflow));
 }
 
+export async function getSpecialRoles(req, res) {
+  const data = await approvalsService.getSpecialRoles();
+  res.json(new ApiResponse('Special approval roles.', data));
+}
+
+export async function setSpecialRoles(req, res) {
+  const data = await approvalsService.setSpecialRoles(req.body, actor(req));
+  res.json(new ApiResponse('Special approval roles updated.', data));
+}
+
 export async function listEmployeeApprovals(req, res) {
   const data = await approvalsService.listEmployeeApprovals(req.query);
   res.json(new ApiResponse('Employees approval hierarchy.', data));

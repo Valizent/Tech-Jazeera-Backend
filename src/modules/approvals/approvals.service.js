@@ -7,6 +7,7 @@
  */
 import ApprovalRole from './approvalRole.model.js';
 import ApprovalWorkflow, { EMPLOYEE_APPROVAL_TYPES } from './approvalWorkflow.model.js';
+import CompanySettings from '../companySettings/companySettings.model.js';
 import Employee from '../employees/employee.model.js';
 import { escapeRegex } from '../../utils/escapeRegex.js';
 import { normalizeDepartment } from '../employees/departments.js';
@@ -20,6 +21,7 @@ import SalaryAdvance from '../financialRequests/advance.model.js';
 import ReimbursementClaim from '../financialRequests/reimbursement.model.js';
 import Client from '../clients/client.model.js';
 import ClientPayment from '../deployments/clientPayment.model.js';
+import Subcontractor from '../subcontractors/subcontractor.model.js';
 import SubcontractorPayment from '../deployments/subcontractorPayment.model.js';
 import Deployment from '../deployments/deployment.model.js';
 import SubcontractorTransfer from '../subcontractorTransfers/subcontractorTransfer.model.js';
@@ -192,10 +194,6 @@ export async function listApprovalWorkflows() {
 
 /** Every role referenced by a step must exist and be active. */
 async function assertValidSteps(steps, notifyRoles = []) {
-  const duties = steps.map((s) => s.duty).filter(Boolean);
-  if (new Set(duties).size !== duties.length) {
-    throw new ApiError(400, 'Each special step duty can be given to only one step of a workflow.');
-  }
   const roleIds = [...new Set([...steps.flatMap((s) => s.roles.map(String)), ...notifyRoles.map(String)])];
   if (roleIds.length === 0) return;
   const count = await ApprovalRole.countDocuments({ _id: { $in: roleIds }, isActive: true });
@@ -331,6 +329,51 @@ export async function startApproval(requestType) {
 }
 
 // ---------------------------------------------------------------------------
+// The HR role (2026-10-15)
+// ---------------------------------------------------------------------------
+
+/** The role whose workflow step may change an annual vacation's days: the one chosen in settings, else the role
+ *  named HR, else null. Only active roles count. */
+export async function resolveHrRole(select = '_id name') {
+  const settings = await CompanySettings.findOne().select('hrApprovalRole').lean();
+  if (settings?.hrApprovalRole) {
+    const chosen = await ApprovalRole.findOne({ _id: settings.hrApprovalRole, isActive: true }).select(select).lean();
+    if (chosen) return chosen;
+  }
+  return ApprovalRole.findOne({ name: /^hr$/i, isActive: true }).select(select).lean();
+}
+
+/** What is chosen and what is in effect, for the settings card. */
+export async function getSpecialRoles() {
+  const settings = await CompanySettings.findOne().select('hrApprovalRole').lean();
+  return {
+    hr: {
+      chosen: settings?.hrApprovalRole ? String(settings.hrApprovalRole) : null,
+      effective: await resolveHrRole('_id name'),
+      fallbackName: 'HR',
+    },
+  };
+}
+
+/** `hr`: an approval role id, or null to go back to finding it by its usual name. */
+export async function setSpecialRoles(data, actor) {
+  const id = data.hr ?? null;
+  if (id) {
+    const role = await ApprovalRole.findOne({ _id: id, isActive: true }).select('_id').lean();
+    if (!role) throw new ApiError(400, 'Choose an active approval role.');
+  }
+  await CompanySettings.findOneAndUpdate({}, { hrApprovalRole: id }, { upsert: true, setDefaultsOnInsert: true });
+  await logAudit({
+    user: actor.userId,
+    action: 'approvals.specialRoles',
+    targetType: 'CompanySettings',
+    meta: { hrApprovalRole: id },
+    ip: actor.ip,
+  });
+  return getSpecialRoles();
+}
+
+// ---------------------------------------------------------------------------
 // Employees' approval hierarchy: who uses the default chain for which module, and who has their own.
 // ---------------------------------------------------------------------------
 
@@ -461,6 +504,13 @@ const LOG_SOURCES = {
     pendingStatus: 'Pending',
     statusField: 'approvalStatus',
     subject: (i) => ({ subject: i.companyName, subjectRef: null }),
+  },
+  SubcontractorApproval: {
+    Model: Subcontractor,
+    typeNameField: null,
+    pendingStatus: 'Pending',
+    statusField: 'approvalStatus',
+    subject: (i) => ({ subject: i.name, subjectRef: null }),
   },
   ClientPayment: {
     Model: ClientPayment,

@@ -230,6 +230,7 @@ const PENDING_ACTION_MODULES = [
   // 2026-10-14: the decisions brought onto the hierarchy. `workflowOnly`: before one is set up for the type they
   // were never listed here (a single Section Access holder decides them), so only requests on a hierarchy count.
   { label: 'Client approvals', url: '/clients', Model: Client, statusField: 'approvalStatus', pendingStatus: 'Pending', legacyAllowedRoles: [], sectionKey: 'clientsManage', workflowOnly: true },
+  { label: 'Subcontractor approvals', url: '/subcontractors', Model: Subcontractor, statusField: 'approvalStatus', pendingStatus: 'Pending', legacyAllowedRoles: [], sectionKey: 'subcontractorsManage', workflowOnly: true },
   { label: 'Client payments', url: '/financial/payments-review', Model: ClientPayment, statusField: 'decisionStatus', pendingStatus: 'Pending', legacyAllowedRoles: [], sectionKey: 'deploymentsPaymentDecide', workflowOnly: true },
   { label: 'Subcontractor payments', url: '/financial/sub-payments-review', Model: SubcontractorPayment, statusField: 'decisionStatus', pendingStatus: 'Pending', legacyAllowedRoles: [], sectionKey: 'deploymentsPaymentDecide', workflowOnly: true },
   // Months inside deployments: flattened to one item per pending month that sits on a hierarchy.

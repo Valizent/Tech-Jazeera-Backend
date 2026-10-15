@@ -39,6 +39,7 @@ import {
   employeeApprovalsQuerySchema,
   employeeIdParamSchema,
   setEmployeeOverrideSchema,
+  specialRolesSchema,
 } from './approvals.validation.js';
 import * as approvalsController from './approvals.controller.js';
 
@@ -75,6 +76,15 @@ router.patch(
   canManageApprovalHierarchy,
   validate({ params: approvalWorkflowIdParamSchema, body: updateApprovalWorkflowSchema }),
   asyncHandler(approvalsController.updateWorkflow)
+);
+
+// The role the system treats as HR (its step on an annual vacation may change the days).
+router.get('/special-roles', requireStaffOrExecutive, canReadApprovalHierarchy, asyncHandler(approvalsController.getSpecialRoles));
+router.put(
+  '/special-roles',
+  canManageApprovalHierarchy,
+  validate({ body: specialRolesSchema }),
+  asyncHandler(approvalsController.setSpecialRoles)
 );
 
 // Each employee's own hierarchy per module (the default unless changed here).

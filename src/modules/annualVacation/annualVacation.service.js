@@ -23,7 +23,7 @@ import ApiError from '../../utils/ApiError.js';
 import logger from '../../config/logger.js';
 import { logAudit } from '../audit/audit.service.js';
 import ExitReentryRequest from '../exitDocuments/exitReentry.model.js';
-import { resolveApprovalWorkflow } from '../approvals/approvals.service.js';
+import { resolveApprovalWorkflow, resolveHrRole } from '../approvals/approvals.service.js';
 import {
   decideApprovalStep,
   annotateCanDecide,
@@ -325,7 +325,10 @@ export async function listAnnualVacation({ page, limit, status, employee }, acto
   // The route already requires Read; deciding additionally needs Write, so a
   // read-only viewer in a workflow step never sees Approve/Reject buttons.
   const hasWrite = await canAccessSection('annualVacation', actor, 'write');
-  const items = annotated.map((item) => publicVacation({ ...item, canDecideCurrentStep: item.canDecideCurrentStep && hasWrite }));
+  const hrId = await hrRoleId();
+  const items = annotated.map((item) =>
+    publicVacation({ ...item, canDecideCurrentStep: item.canDecideCurrentStep && hasWrite, canChangeDays: atHrStep(item, hrId) })
+  );
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
@@ -529,15 +532,29 @@ function runDecision(id, status, decisionNote, actor) {
 // HR's days (2026-10-14)
 // ---------------------------------------------------------------------------
 
-/** The request at the step that carries `duty`, and the actor really holds that step (or is Admin). */
-async function loadAtDutyStep(id, duty, actor) {
+/** The HR approval role (the step that holds it is the one that may change the days): the one chosen on the
+ *  Approval Hierarchy page, else the role named HR; null when there is neither. */
+async function hrRoleId() {
+  const role = await resolveHrRole('_id');
+  return role?._id ?? null;
+}
+
+/** Is the request's current step one the HR role sits in? Steps may be populated (`{ _id, name }`) or plain ids. */
+function atHrStep(item, hrId) {
+  if (!hrId || item.status !== 'PendingReview') return false;
+  const step = item.workflow ? item.steps?.[item.currentStep] : null;
+  return Boolean(step?.roles?.some((r) => String(r?._id ?? r) === String(hrId)));
+}
+
+/** The request at the HR step, and the actor really holds that step (or is Admin). */
+async function loadAtHrStep(id, actor) {
   const doc = await AnnualVacationRequest.findById(id);
   if (!doc) throw new ApiError(404, 'Annual vacation request not found.');
   if (doc.status !== 'PendingReview') throw new ApiError(409, 'This request is no longer waiting for review.');
-  const step = doc.workflow ? doc.steps?.[doc.currentStep] : null;
-  if (step?.duty !== duty) {
+  if (!atHrStep(doc, await hrRoleId())) {
     throw new ApiError(409, 'The days can only be changed at the HR step.');
   }
+  const step = doc.steps[doc.currentStep];
   const { authorized } = await resolveStepAuthority(actor, step.roles, step);
   if (!authorized) throw new ApiError(403, 'You are not an approver for the current step of this request.');
   await assertEmployeeVisibleToActor(doc.employee, actor);
@@ -546,7 +563,7 @@ async function loadAtDutyStep(id, duty, actor) {
 
 /** HR changing the number of days for this one request, with the reason (usually what the employee asked in the notes). */
 export async function changeVacationDays(id, { requestedDays, note }, actor) {
-  const doc = await loadAtDutyStep(id, 'HrReview', actor);
+  const doc = await loadAtHrStep(id, actor);
   if (requestedDays === doc.requestedDays) throw new ApiError(400, 'The request already has that number of days.');
   const start = utcDay(doc.startDate);
   const end = new Date(start.getTime() + (requestedDays - 1) * MS_PER_DAY);

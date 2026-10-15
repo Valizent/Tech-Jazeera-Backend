@@ -3,7 +3,7 @@
  * configuration (Admin-only — see approvals.routes.js).
  */
 import { z } from 'zod';
-import { APPROVAL_REQUEST_TYPES, EMPLOYEE_APPROVAL_TYPES, STEP_DUTIES } from './approvalWorkflow.model.js';
+import { APPROVAL_REQUEST_TYPES, EMPLOYEE_APPROVAL_TYPES } from './approvalWorkflow.model.js';
 import { EMPLOYEE_DEPARTMENTS } from '../employees/departments.js';
 
 const emptyToUndef = (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
@@ -25,10 +25,14 @@ export const updateApprovalRoleSchema = z.object({
 
 export const approvalRoleIdParamSchema = z.object({ id: objectId('approval role') });
 
+/** The HR role: an approval role id, or null for "find the role named HR". */
+export const specialRolesSchema = z.object({
+  hr: z.preprocess(emptyToUndef, objectId('approval role').nullable().optional()),
+});
+
 const workflowStepSchema = z.object({
   label: z.preprocess(emptyToUndef, z.string().trim().max(60).optional()),
   roles: z.array(objectId('approval role')).min(1, 'Each step needs at least one role.'),
-  duty: z.preprocess(emptyToUndef, z.enum(STEP_DUTIES, { error: 'Unknown step duty.' }).nullable().optional()),
 });
 
 const departmentRouteSchema = z.object({

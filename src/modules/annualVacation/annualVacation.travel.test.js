@@ -42,13 +42,13 @@ let outsider;
 
 beforeEach(async () => {
   [hr, accounts, fm, marketingManager, outsider] = await Promise.all([login('HR'), login('Accounts'), login('Manager'), login('Executive'), login('Accounts')]);
-  const role = (name, member) => ApprovalRole.create({ name: `${name} ${unique()}`, members: [member.id] });
+  const role = (name, member) => ApprovalRole.create({ name, members: [member.id] });
   const [hrRole, accountsRole, fmRole, mmRole] = await Promise.all([role('HR', hr), role('Accounts', accounts), role('FM', fm), role('MM', marketingManager)]);
   await ApprovalWorkflow.create({
     name: `Annual vacation ${unique()}`,
     appliesTo: ['AnnualVacation'],
     steps: [
-      { label: 'HR', roles: [hrRole._id], duty: 'HrReview' },
+      { label: 'HR', roles: [hrRole._id] },
       { label: 'Accounts', roles: [accountsRole._id] },
       { label: 'FM', roles: [fmRole._id] },
     ],
@@ -173,7 +173,7 @@ describe('own request list shows the approval stages', () => {
     const { items } = await listOwnAnnualVacation(employee._id, { page: 1, limit: 10 });
 
     expect(items[0].steps.map((s) => s.label)).toEqual(['HR', 'Accounts', 'FM']);
-    expect(items[0].steps[0].roles[0].name).toMatch(/^HR /);
+    expect(items[0].steps[0].roles[0].name).toBe('HR');
     expect(items[0].approvalTrail[0].approvedBy.name).toBe(hr.userId ? (await User.findById(hr.userId)).name : '');
   });
 });

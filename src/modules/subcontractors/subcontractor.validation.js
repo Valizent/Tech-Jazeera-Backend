@@ -4,7 +4,7 @@
  * undefined, transforms double as sanitization.
  */
 import { z } from 'zod';
-import { SUBCONTRACTOR_STATUSES } from './subcontractor.model.js';
+import { SUBCONTRACTOR_STATUSES, SUBCONTRACTOR_APPROVAL_STATUSES } from './subcontractor.model.js';
 import { companyProfileShape } from '../companyProfile/companyProfile.validation.js';
 
 const emptyToUndef = (value) =>
@@ -53,6 +53,7 @@ export const listSubcontractorsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: optionalStr(100),
   status: z.preprocess(emptyToUndef, z.enum(SUBCONTRACTOR_STATUSES).optional()),
+  approvalStatus: z.preprocess(emptyToUndef, z.enum(SUBCONTRACTOR_APPROVAL_STATUSES).optional()),
   sortBy: z.enum(['name', 'createdAt']).default('name'),
   sortOrder: z.enum(['asc', 'desc']).default('asc'),
 });
@@ -60,3 +61,15 @@ export const listSubcontractorsSchema = z.object({
 export const subcontractorIdParamSchema = z.object({
   id: z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid subcontractor id.'),
 });
+
+/** Deciding a Pending subcontractor. Rejecting needs a note so the submitter knows what to fix. */
+export const decideSubcontractorSchema = z
+  .object({
+    status: z.enum(['Approved', 'Rejected'], { error: 'Decision must be Approved or Rejected.' }),
+    decisionNote: optionalStr(500),
+  })
+  .superRefine((data, ctx) => {
+    if (data.status === 'Rejected' && !data.decisionNote) {
+      ctx.addIssue({ code: 'custom', path: ['decisionNote'], message: 'Explain what needs fixing before rejecting.' });
+    }
+  });

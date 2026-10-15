@@ -75,7 +75,7 @@ export function dueReminders({ since, now, reminders = {} }) {
 
 const KINDS = [
   { Model: Client, ownerType: 'Client', nameOf: (c) => c.companyName, path: 'clients', filter: { status: 'Active', approvalStatus: 'Approved' } },
-  { Model: Subcontractor, ownerType: 'Subcontractor', nameOf: (c) => c.name, path: 'subcontractors', filter: { status: 'Active' } },
+  { Model: Subcontractor, ownerType: 'Subcontractor', nameOf: (c) => c.name, path: 'subcontractors', filter: { status: 'Active', approvalStatus: { $ne: 'Pending' } } },
 ];
 
 async function recipientsFor(sectionKey) {

@@ -427,13 +427,16 @@ async function resolveWorkerSnapshot(workerType, data) {
 
 /** Subcontractor snapshot — only ever resolved for a SupplierEmployee
  *  mobilisation; Employee/Freelancer types always clear it. */
-async function resolveSubcontractorSnapshot(workerType, subcontractorId) {
+export async function resolveSubcontractorSnapshot(workerType, subcontractorId) {
   if (workerType !== 'SupplierEmployee') {
     return { hasSubcontractor: false, subcontractor: null, subcontractorName: null };
   }
   if (!subcontractorId) throw new ApiError(400, 'Select a subcontractor.');
   const subcontractorDoc = await Subcontractor.findById(subcontractorId).lean();
   if (!subcontractorDoc) throw new ApiError(404, 'Subcontractor not found.');
+  if (subcontractorDoc.approvalStatus && subcontractorDoc.approvalStatus !== 'Approved') {
+    throw new ApiError(409, 'This subcontractor is not approved yet, so it cannot be used on a mobilisation.');
+  }
   return { hasSubcontractor: true, subcontractor: subcontractorId, subcontractorName: subcontractorDoc.name };
 }
 

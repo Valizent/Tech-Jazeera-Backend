@@ -18,6 +18,7 @@ import { requireSectionAccess } from '../sectionAccess/sectionAccess.middleware.
 import { validate } from '../../middleware/validate.js';
 import {
   createSubcontractorSchema,
+  decideSubcontractorSchema,
   updateSubcontractorSchema,
   listSubcontractorsSchema,
   subcontractorIdParamSchema,
@@ -46,6 +47,13 @@ router.patch(
   canWrite,
   validate({ params: subcontractorIdParamSchema, body: updateSubcontractorSchema }),
   asyncHandler(subcontractorController.update)
+);
+// 2026-10-13 (Section Access redesign): deleting a record is Admin only in every module.
+router.patch(
+  '/:id/decide',
+  canWrite,
+  validate({ params: subcontractorIdParamSchema, body: decideSubcontractorSchema }),
+  asyncHandler(subcontractorController.decide)
 );
 // 2026-10-13 (Section Access redesign): deleting a record is Admin only in every module.
 router.delete(

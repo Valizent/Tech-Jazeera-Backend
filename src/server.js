@@ -15,7 +15,7 @@ import { connectDb } from './config/db.js';
 import { startPeriodicMonitoring } from './config/monitoring.js';
 import app from './app.js';
 import { ensureSelfServiceRoles } from './modules/approvals/approvals.service.js';
-import { retireLegacyWorkflowIndex, retireTravelDocumentsDuty } from './modules/approvals/approvalWorkflow.model.js';
+import { retireLegacyWorkflowIndex } from './modules/approvals/approvalWorkflow.model.js';
 import { migrateLegacyEmployeeOverrides } from './modules/approvals/approvals.service.js';
 import { runExpiryAlertCheck } from './modules/notifications/expiryAlert.job.js';
 import { runMobilisationStaleCheck } from './modules/notifications/mobilisationStale.job.js';
@@ -54,7 +54,6 @@ try {
 // Section Access page (2026-10-10). Idempotent; a failure here must not stop the API.
 await ensureSelfServiceRoles().catch((err) => logger.error(`ensureSelfServiceRoles failed: ${err.message}`));
 await retireLegacyWorkflowIndex().catch((err) => logger.error(`retireLegacyWorkflowIndex failed: ${err.message}`));
-await retireTravelDocumentsDuty().catch((err) => logger.error(`retireTravelDocumentsDuty failed: ${err.message}`));
 await migrateLegacyEmployeeOverrides().catch((err) => logger.error(`migrateLegacyEmployeeOverrides failed: ${err.message}`));
 
 const server = app.listen(env.port, () => {

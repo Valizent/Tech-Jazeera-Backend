@@ -42,6 +42,10 @@ const companySettingsSchema = new mongoose.Schema(
     // Authorized signatory — printed on certificates/official letters.
     signatoryName: { type: String, trim: true, default: null },
     signatoryTitle: { type: String, trim: true, default: null },
+
+    // The approval role whose workflow step may change an annual vacation's days (set on the Approval Hierarchy
+    // page); null = find the role named HR. See approvals.service.js resolveHrRole.
+    hrApprovalRole: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRole', default: null },
   },
   { timestamps: true }
 );
