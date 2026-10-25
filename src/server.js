@@ -24,6 +24,7 @@ import { runCompanyDetailsCheck } from './modules/notifications/companyDetails.j
 import { runContractEndCheck } from './modules/notifications/contractEnd.job.js';
 import { runOutsourcedDocumentCheck } from './modules/notifications/outsourcedDocuments.job.js';
 import { runChatRetentionCheck } from './modules/chat/chatRetention.job.js';
+import { attachChatSocket } from './modules/chat/chat.socket.js';
 
 // Without these, a stray unhandled promise rejection or thrown error outside
 // Express's own request handling (e.g. inside a setInterval job's own bug,
@@ -60,6 +61,9 @@ await migrateLegacyEmployeeOverrides().catch((err) => logger.error(`migrateLegac
 const server = app.listen(env.port, () => {
   logger.info(`API listening on http://localhost:${env.port} (${env.nodeEnv})`);
 });
+
+// Chat real-time socket (/ws): signals "conversation X changed", carries no content.
+const chatSocket = attachChatSocket(server);
 
 // 2026-09-22, a real QA-audit finding — the "monitoring baseline"
 // recommendation: event-loop delay + an aggregate Mongo operation count,
@@ -134,6 +138,7 @@ async function shutdown(signal) {
   clearInterval(outsourcedDocumentsInterval);
   clearInterval(chatRetentionInterval);
   clearInterval(monitoringInterval);
+  chatSocket.close(); // open sockets would otherwise keep server.close() waiting forever
   server.close(async () => {
     const { default: mongoose } = await import('mongoose');
     await mongoose.connection.close();
