@@ -52,6 +52,17 @@ function requiredEnum(name, allowed) {
   return value;
 }
 
+/** Optional whole number with a fallback; a value below `min` or not a number is reported at boot. */
+function optionalInt(name, fallback, min) {
+  const raw = optional(name, String(fallback));
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min) {
+    problems.push(`${name} must be a whole number of at least ${min} (got "${raw}").`);
+    return fallback;
+  }
+  return value;
+}
+
 /** Require a variable to be a valid TCP port number. */
 function requiredPort(name) {
   const value = required(name);
@@ -110,6 +121,9 @@ const env = Object.freeze({
   // Error tracking (self-hosted GlitchTip) — optional, same posture as VAPID
   // above: an existing deployment without this set shouldn't fail to boot.
   sentryDsn: optional('SENTRY_DSN', null),
+  // In-app chat: messages (and their attachments) older than this are purged by the
+  // daily retention job. Optional, same posture as the keys above.
+  chatRetentionDays: optionalInt('CHAT_RETENTION_DAYS', 365, 30),
   isProduction: process.env.NODE_ENV === 'production',
 });
 

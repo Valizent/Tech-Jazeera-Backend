@@ -143,6 +143,20 @@ const SPECIFIC = {
     ...(m.mobilisationCount != null ? [`${plural(m.mobilisationCount, 'mobilisation')} back in the lists.`] : []),
   ],
 
+  'chat.conversation.create': (m) => [
+    m.type === 'group' ? `Started the chat group “${m.name ?? 'unnamed'}” with ${plural(m.memberCount ?? 0, 'member')}.` : 'Started a direct chat.',
+  ],
+  'chat.conversation.update': (m) => [
+    `Changed the chat group${m.name ? ` “${m.name}”` : ''}.`,
+    ...(m.renamed ? ['The group was renamed.'] : []),
+    ...(m.added ? [`${plural(m.added, 'member')} added.`] : []),
+    ...(m.removed ? [`${plural(m.removed, 'member')} removed.`] : []),
+  ],
+  'chat.conversation.leave': (m) => [`Left the chat group${m.name ? ` “${m.name}”` : ''}.`],
+  'chat.message.delete': () => ['Deleted their own chat message.'],
+  'chat.message.report': (m) => [`Reported a chat message${m.reason ? `: ${m.reason}` : '.'}`],
+  'chat.report.decide': (m) => [m.action === 'remove' ? 'Removed a reported chat message.' : 'Dismissed a report on a chat message.'],
+
   'sectionAccess.update': (m) => {
     const name = SECTION_LABELS[m.sectionKey] ?? cap(words(m.sectionKey ?? 'a section'));
     return [

@@ -144,6 +144,11 @@ export const SECTION_KEYS = [
   //                  everyone's). Until configured it follows `timesheetRequests`.
   'leaveApply',
   'timesheetOwn',
+  // Added 2026-10-24 - in-app chat moderation. Chat itself needs no grant (every office
+  // staff login and Executive can chat); this single-tier key (Write) chooses who may
+  // review messages that members reported and remove them. Nobody reads conversations
+  // through it. Admin only until granted.
+  'chatModeration',
 ];
 
 const sectionAccessSchema = new mongoose.Schema(

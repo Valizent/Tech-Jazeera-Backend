@@ -54,6 +54,7 @@ import financialRequestsRoutes from './modules/financialRequests/financialReques
 import assetRoutes from './modules/assets/asset.routes.js';
 import exitDocumentsRoutes from './modules/exitDocuments/exitDocuments.routes.js';
 import annualVacationRoutes from './modules/annualVacation/annualVacation.routes.js';
+import chatRoutes from './modules/chat/chat.routes.js';
 import timesheetRoutes from './modules/timesheets/timesheet.routes.js';
 
 import expenseRoutes from './modules/expenses/expense.routes.js';
@@ -139,6 +140,7 @@ app.use('/api/financial-requests', financialRequestsRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/exit-documents', exitDocumentsRoutes);
 app.use('/api/annual-vacation', annualVacationRoutes);
+app.use('/api/chat', chatRoutes);
 app.use('/api/timesheets', timesheetRoutes);
 
 app.use('/api/expenses', expenseRoutes);

@@ -61,6 +61,7 @@ export const SECTION_LABELS = {
   employeeFinancial: 'Employees salary & pay',
   leaveApply: 'Leave apply for yourself',
   timesheetOwn: 'Timesheets see your own',
+  chatModeration: 'Chat reported messages',
 };
 
 /** What each section IS FOR, in plain English — not what Read/Write
@@ -121,6 +122,7 @@ const SECTION_DESCRIPTIONS = {
   leaveApply: 'Chooses who may file a leave request for themselves (they then see only their own requests). Tick under Write; Read is not used. Until you set it here, it follows whoever holds Write on Leave requests. Seeing and deciding everyone\'s requests stays with "Leave requests".',
   timesheetOwn: 'Chooses who may open their own monthly timesheet without seeing everyone\'s. Tick under Read; Write is not used. Until you set it here, it follows whoever may read Timesheet requests. Seeing everyone\'s stays with "Timesheet requests".',
   employeeFinancial: 'Chooses who may see the salary and pay breakdown (Basic, Housing, Transport). Tick under Read; Write is not used. Everyone else never receives these figures, on the web or the phone. Admin only until you grant it. Each person always sees their own pay in their own portal.',
+  chatModeration: 'Chooses who may review chat messages that someone reported and remove them. Tick under Write; Read is not used. Admin only until you grant it. Everyone on the office staff can use chat without a grant, and nobody can read other people\'s conversations through this: only reported messages are shown.',
 };
 
 function defaultFor(sectionKey) {
@@ -148,7 +150,7 @@ const FALLBACK_KEY = {
 
 /** Sections that are a single yes/no permission: only this tier means anything,
  *  so the admin page shows just that one list instead of Read and Write. */
-const ONLY_TIER = { employeeEdit: 'write', employeeDelete: 'write', employeeFinancial: 'read', leaveApply: 'write', timesheetOwn: 'read' };
+const ONLY_TIER = { employeeEdit: 'write', employeeDelete: 'write', employeeFinancial: 'read', leaveApply: 'write', timesheetOwn: 'read', chatModeration: 'write' };
 
 /** The settings that apply to `key`: its own document, else the borrowed
  *  circle, else nobody (Admin only). `bySectionKey` holds already-loaded docs. */

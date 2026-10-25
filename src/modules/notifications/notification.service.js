@@ -161,6 +161,15 @@ export async function notifyUser(userId, { type, title, body, url, dedupeKey }) 
 }
 
 /**
+ * Push with no stored Notification behind it, for traffic that has its own unread
+ * state and would only flood the bell (chat). Same bounded queue and channels as
+ * notifyUser; `{ title, body, url }` only.
+ */
+export function pushOnly(userId, payload) {
+  enqueuePush(userId, payload);
+}
+
+/**
  * notifyUser, but a failure only logs a warning and returns null — for the
  * many callers where a notification is a courtesy on top of a real action
  * (assigning a task, moving a requirement) and must never fail that action.

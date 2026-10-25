@@ -226,6 +226,18 @@ const multerUpload = multer({
   limits: { fileSize: MAX_FILE_BYTES, files: 1 },
 }).single('file');
 
+const CHAT_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+const multerChatUpload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter(req, file, cb) {
+    if (!CHAT_TYPES.has(file.mimetype)) {
+      return cb(new ApiError(400, 'Only images (JPG, PNG, WEBP) and PDF files can be sent in chat.'));
+    }
+    cb(null, true);
+  },
+  limits: { fileSize: MAX_FILE_BYTES, files: 1 },
+}).single('file');
+
 const MAX_MOBILISATION_FILES = 10;
 const multerUploadMany = multer({
   storage: multer.memoryStorage(),
@@ -241,8 +253,20 @@ const multerUploadMany = multer({
  * The raw buffer is dropped once stored so it does not sit in memory for the
  * remainder of the request.
  */
-export function uploadSingle(req, res, next) {
-  multerUpload(req, res, async (err) => {
+export const uploadSingle = singleUploader(multerUpload);
+
+/**
+ * Chat attachments: images and PDFs only, same verification and storage as every
+ * other upload. Field name `file`.
+ */
+export const uploadChatAttachment = singleUploader(multerChatUpload);
+
+function singleUploader(parse) {
+  return (req, res, next) => storeSingle(parse, req, res, next);
+}
+
+function storeSingle(parse, req, res, next) {
+  parse(req, res, async (err) => {
     if (err) {
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {

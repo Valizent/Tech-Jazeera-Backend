@@ -28,7 +28,8 @@ export async function sendExpoPush(userId, notification) {
     to: device.token,
     title: notification.title,
     ...(notification.body ? { body: notification.body } : {}),
-    data: { url: notification.url ?? null, notificationId: String(notification._id) },
+    // A push with no stored Notification (chat) carries no id for the app to mark read.
+    data: { url: notification.url ?? null, notificationId: notification._id ? String(notification._id) : null },
     sound: 'default',
     priority: 'high',
     // The app creates this Android channel before registering (src/lib/push.js).
